@@ -23,6 +23,7 @@ from evroute.algorithms.labels import (
     LabelAStarPlanner,
     LabelSettingPlanner,
     charging_targets,
+    completion_energy,
     fastest_feasible_tree,
 )
 from evroute.evaluate import check_objective, evaluate
@@ -92,7 +93,7 @@ def _scenario(cfg):
 
 
 def test_bls_and_astar_agree_on_random_grids():
-    feasible = with_stops = 0
+    feasible = with_stops = bounded = 0
     for cfg in RANDOM_CONFIGS:
         P = _scenario(cfg).prepare()
         plans = [
@@ -107,6 +108,7 @@ def test_bls_and_astar_agree_on_random_grids():
             continue
         feasible += 1
         with_stops += plans[0].num_stops > 0
+        bounded += plans[1].stats.extra["pruned_by_bound"]
         ref = plans[0].internal_objective
         for p in plans:
             _assert_consistent(P, p)
@@ -116,6 +118,7 @@ def test_bls_and_astar_agree_on_random_grids():
                 assert any(abs(st.energy_out_kwh - y) < 1e-9 for y in charging_targets(P, st.station))
     assert feasible >= 15
     assert with_stops >= 8
+    assert bounded > 0  # the upper-bound push pruning was exercised
 
 
 def test_grid_breaks_never_worse_than_grid():
@@ -288,7 +291,7 @@ def test_potentials_are_admissible_and_consistent():
                            time_dependent_waits=td, speed_factors=(1.0, 0.85))
         P = sc.prepare()
         basic, tight = AStarPotential.basic(P), AStarPotential.tight(P)
-        ref = _run(P, "bls")
+        ref = _run(P, "bls-astar")
         assert ref.feasible
         for h in (basic, tight):
             # admissible at the root
@@ -475,12 +478,57 @@ def test_fastest_feasible_tree_options():
     ch = fastest_feasible_tree(P, P.origin, P.e_init, allow_charging=True)
     assert set(full) <= set(ch)
     for v in list(ch)[-3:]:
-        t, e, edges, levels, charges = ch[v]
+        t, _, edges, levels, charges = ch[v]
         P2 = sc.with_query(destination=v).prepare()
         rp = evaluate(P2, PlanDecision(edges, levels, charges))
         assert rp.feasible and rp.total_time_s == pytest.approx(t, rel=1e-12)
         best = plan(P2, "bls")
         assert best.internal_objective == pytest.approx(t, rel=1e-12)
+
+
+def test_completion_energy_suffices_on_the_bound_tree():
+    from evroute.search import dijkstra, min_level_weights
+
+    sc = grid_scenario(8, 8, seed=12, initial_soc=0.5)
+    P = sc.prepare()
+    pot = AStarPotential.tight(P)
+    need = completion_energy(P, pot.base)
+    assert need[P.destination] == P.e_dest_min
+    _, pred = dijkstra(P.net, P.destination, min_level_weights(P, "time"), reverse=True)
+    checked = 0
+    for v in range(0, P.net.num_nodes, 5):
+        if v == P.destination or need[v] == math.inf:
+            continue
+        path = []
+        u = v
+        while u != P.destination:
+            path.append(pred[u])
+            u = P.net.head[pred[u]]
+        levels = [min(P.edge_options[a], key=lambda o: (o[1], o[2]))[0] for a in path]
+        for e0, ok in ((need[v], True), (need[v] - 0.01, False)):
+            P2 = sc.with_query(origin=v, initial_soc=e0 / P.capacity).prepare()
+            rp = evaluate(P2, PlanDecision(path, levels))
+            assert rp.feasible == ok
+            if ok:
+                assert rp.total_time_s == pytest.approx(pot.base[v], rel=1e-12)
+        checked += 1
+    assert checked >= 5
+
+
+def test_charging_targets():
+    sc = grid_scenario(5, 5, seed=1, max_charge_soc=0.8, charge_step_soc=0.05)
+    P = sc.prepare()
+    for s in range(len(P.stations)):
+        grid = charging_targets(P, s, "grid")
+        both = charging_targets(P, s, "grid+breaks")
+        assert grid == sorted(grid) and both == sorted(both)
+        assert max(both) == pytest.approx(P.e_charge_cap) and max(both) <= P.e_charge_cap
+        assert set(grid) <= set(both)
+        assert all(b - a > 1e-9 for a, b in zip(both, both[1:]))
+        inner = [b for b in P.cf[s].e_breaks[1:-1] if b <= P.e_charge_cap]
+        assert all(any(abs(b - y) <= 1e-9 for y in both) for b in inner)
+    with pytest.raises(ValueError):
+        charging_targets(P, 0, "continuous")
 
 
 # ----------------------------------------------------------------------------
