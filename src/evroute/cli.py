@@ -98,11 +98,15 @@ def _algorithms(spec: str | None) -> list[str]:
     return [a.strip() for a in spec.split(",") if a.strip()]
 
 
-def _table(rows: list[list[str]], header: list[str]) -> str:
+def _table(rows: list[list[str]], header: list[str], left: int = 1) -> str:
+    """Plain-text table; the first ``left`` columns are left-aligned."""
     widths = [max(len(str(x)) for x in col) for col in zip(header, *rows)]
     line = "  ".join(h.ljust(w) for h, w in zip(header, widths))
     sep = "  ".join("-" * w for w in widths)
-    body = ["  ".join(str(x).rjust(w) if i else str(x).ljust(w) for i, (x, w) in enumerate(zip(r, widths))) for r in rows]
+    body = [
+        "  ".join(str(x).ljust(w) if i < left else str(x).rjust(w) for i, (x, w) in enumerate(zip(r, widths)))
+        for r in rows
+    ]
     return "\n".join([line, sep, *body])
 
 
@@ -127,7 +131,7 @@ def _print_plan(plan, sc) -> None:
             ]
         )
     if rows:
-        print(_table(rows, ["#", "station", "charger", "arrive", "queue", "charge", "SoC", "cost"]))
+        print(_table(rows, ["#", "station", "charger", "arrive", "queue", "charge", "SoC", "cost"], left=3))
     print(
         f"arrival {format_clock(dep + plan.total_time_s)} | drive {format_duration(plan.drive_time_s)}"
         f" | charge {format_duration(plan.charge_time_s)} | queue+setup "
@@ -160,7 +164,7 @@ def cmd_scenarios(args: argparse.Namespace) -> int:
     from .generators.presets import list_scenarios
 
     rows = [[s["name"], s.get("description", "")] for s in list_scenarios()]
-    print(_table(rows, ["name", "description"]))
+    print(_table(rows, ["name", "description"], left=2))
     return 0
 
 
@@ -168,7 +172,7 @@ def cmd_algorithms(args: argparse.Namespace) -> int:
     from .algorithms import describe
 
     rows = [[d["name"], d.get("title", ""), d.get("exact", d.get("error", ""))] for d in describe()]
-    print(_table(rows, ["name", "title", "guarantee"]))
+    print(_table(rows, ["name", "title", "guarantee"], left=3))
     return 0
 
 

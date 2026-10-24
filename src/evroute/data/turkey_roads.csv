@@ -1,0 +1,147 @@
+id,from,to,class,ref,terrain,traffic,via
+1,edirne,luleburgaz,motorway,O-3,flat,2,
+2,luleburgaz,kinali,motorway,O-3,rolling,2,
+3,kinali,istanbul,motorway,O-3,rolling,3,41.060/28.600/120
+4,istanbul,gebze,motorway,O-4,rolling,3,fsm_bridge 40.930/29.300/120
+5,gebze,kocaeli,motorway,O-4,rolling,3,
+6,kocaeli,sakarya,motorway,O-4,flat,3,40.700/30.220/60
+7,sakarya,duzce,motorway,O-4,rolling,3,40.690/30.620/60
+8,duzce,bolu,motorway,O-4,mountain,3,bolu_dagi
+9,bolu,gerede,motorway,O-4,hilly,3,40.760/31.900/1000
+10,gerede,ankara,motorway,O-4,hilly,3,40.620/32.450/1450 kizilcahamam 40.200/32.720/1150
+11,gebze,bursa,motorway,O-5,rolling,3,osmangazi_bridge 40.550/29.300/120
+12,bursa,susurluk,motorway,O-5,rolling,2,40.170/28.600/60
+13,susurluk,balikesir,motorway,O-5,rolling,2,
+14,balikesir,akhisar,motorway,O-5,hilly,2,39.190/27.610/250
+15,akhisar,manisa,motorway,O-5,flat,2,
+16,manisa,izmir,motorway,O-5,hilly,3,38.530/27.280/450
+17,kinali,malkara,motorway,O-6,rolling,1,41.040/27.550/160
+18,malkara,lapseki,motorway,O-6,rolling,1,40.500/26.680/150 canakkale_bridge
+19,kinali,sakarya,motorway,O-7,rolling,2,41.220/28.720/100 yss_bridge 41.100/29.400/150 40.930/29.800/200 40.800/30.150/100
+20,ankara,aksaray,motorway,O-21,rolling,2,39.450/33.300/1050 38.900/33.800/1000
+21,aksaray,nigde,motorway,O-21,rolling,2,38.150/34.400/1200
+22,nigde,ulukisla,motorway,O-21,hilly,2,
+23,ulukisla,pozanti,motorway,O-21,mountain,2,
+24,pozanti,tarsus,motorway,O-21,mountain,2,gulek 37.100/34.850/500
+25,mersin,tarsus,motorway,O-51,flat,2,
+26,tarsus,adana,motorway,O-51,flat,3,
+27,adana,ceyhan,motorway,O-52,flat,3,
+28,ceyhan,toprakkale,motorway,O-52,flat,3,
+29,toprakkale,gaziantep,motorway,O-52,mountain,2,37.170/36.480/900 37.120/36.900/1050
+30,gaziantep,birecik,motorway,O-52,hilly,2,
+31,birecik,sanliurfa,motorway,O-52,hilly,2,37.100/38.400/600
+32,toprakkale,iskenderun,motorway,O-53,rolling,2,36.850/36.180/60
+33,izmir,aydin,motorway,O-31,rolling,2,torbali 37.970/27.550/250
+34,izmir,cesme,motorway,O-32,rolling,1,38.330/26.800/120
+35,tekirdag,kinali,primary,D-110,rolling,1,41.010/27.950/40
+36,tekirdag,malkara,primary,D-110,rolling,1,
+37,bandirma,lapseki,trunk,D-200,rolling,1,biga
+38,lapseki,canakkale,trunk,D-200,flat,1,
+39,bursa,bandirma,trunk,D-200,flat,1,40.210/28.360/30
+40,bursa,inegol,trunk,D-200,rolling,2,
+41,inegol,bozuyuk,trunk,D-200,hilly,2,40.000/29.800/850
+42,bozuyuk,eskisehir,trunk,D-200,rolling,2,
+43,eskisehir,sivrihisar,trunk,D-200,flat,2,
+44,sivrihisar,polatli,trunk,D-200,flat,2,
+45,polatli,ankara,trunk,D-200,flat,2,
+46,susurluk,bandirma,primary,,rolling,1,
+47,canakkale,edremit,primary,D-550,hilly,1,ezine ayvacik
+48,edremit,izmir,trunk,D-550,rolling,1,ayvalik bergama 38.620/27.050/30
+49,edremit,balikesir,primary,,hilly,1,39.620/27.450/500
+50,izmir,salihli,trunk,D-300,flat,2,belkahve turgutlu
+51,salihli,usak,trunk,D-300,hilly,1,kula
+52,usak,afyonkarahisar,trunk,D-300,hilly,1,38.700/29.950/1200
+53,afyonkarahisar,aksehir,trunk,D-300,rolling,2,cay
+54,aksehir,ilgin,trunk,D-300,rolling,1,
+55,ilgin,konya,trunk,D-300,rolling,2,kadinhani
+56,konya,aksaray,trunk,D-300,flat,2,sultanhani
+57,aksaray,nevsehir,trunk,,rolling,1,
+58,nevsehir,kayseri,trunk,,rolling,1,
+59,aydin,nazilli,trunk,,flat,1,
+60,nazilli,denizli,trunk,,rolling,1,
+61,aydin,mugla,trunk,D-550,hilly,1,cine yatagan
+62,mugla,fethiye,primary,D-400,hilly,1,koycegiz dalaman
+63,fethiye,antalya,primary,D-400,mountain,1,kas demre finike kumluca kemer
+64,antalya,manavgat,trunk,D-400,flat,2,
+65,manavgat,alanya,trunk,D-400,flat,2,
+66,alanya,anamur,primary,D-400,mountain,1,gazipasa 36.180/32.550/350
+67,anamur,silifke,primary,D-400,mountain,1,36.100/33.080/400 aydincik 36.250/33.620/300
+68,silifke,mersin,trunk,D-400,flat,2,erdemli
+69,denizli,burdur,primary,,hilly,1,37.800/29.700/1050
+70,isparta,burdur,trunk,,rolling,1,
+71,sakarya,bilecik,trunk,D-650,hilly,2,40.450/30.200/150
+72,bilecik,bozuyuk,trunk,D-650,hilly,2,
+73,bozuyuk,kutahya,trunk,D-650,rolling,2,
+74,kutahya,afyonkarahisar,trunk,D-650,rolling,2,
+75,afyonkarahisar,burdur,trunk,D-650,rolling,2,dinar
+76,burdur,antalya,trunk,D-650,mountain,2,bucak cubuk_beli
+77,afyonkarahisar,emirdag,trunk,,rolling,2,
+78,emirdag,polatli,trunk,,flat,2,
+79,afyonkarahisar,eskisehir,primary,,rolling,1,39.400/30.450/1150
+80,kutahya,eskisehir,primary,,hilly,1,39.600/30.250/1100
+81,ankara,kulu,trunk,D-715,flat,2,39.600/32.900/1000
+82,kulu,cihanbeyli,trunk,D-715,flat,2,
+83,cihanbeyli,konya,trunk,D-715,flat,2,
+84,konya,karaman,trunk,D-715,flat,2,
+85,karaman,mut,primary,D-715,mountain,1,sertavul
+86,mut,silifke,primary,D-715,hilly,1,
+87,konya,seydisehir,primary,,hilly,1,37.620/32.150/1350
+88,seydisehir,akseki,primary,,mountain,1,alacabel
+89,akseki,manavgat,primary,,mountain,1,36.930/31.620/600
+90,konya,eregli_konya,trunk,,flat,1,karapinar
+91,karaman,eregli_konya,primary,,flat,1,37.350/33.650/1050
+92,eregli_konya,ulukisla,trunk,,rolling,1,
+93,kirikkale,kirsehir,primary,,rolling,1,kaman
+94,kirsehir,nevsehir,primary,,rolling,1,
+95,nigde,nevsehir,primary,,rolling,1,
+96,kayseri,nigde,primary,,hilly,1,38.300/35.000/1300
+97,ankara,kirikkale,trunk,,rolling,2,
+98,kirikkale,yozgat,trunk,,hilly,1,
+99,yozgat,sivas,trunk,,hilly,1,sorgun 39.700/36.200/1500
+100,yozgat,kayseri,primary,,hilly,1,39.300/35.200/1350
+101,kayseri,sivas,trunk,,rolling,1,sarkisla
+102,kirikkale,corum,trunk,,rolling,1,sungurlu
+103,corum,merzifon,trunk,,rolling,1,
+104,merzifon,samsun,trunk,,hilly,1,havza 41.100/35.950/950
+105,merzifon,amasya,trunk,,rolling,1,
+106,amasya,tokat,trunk,,hilly,1,40.400/36.150/800
+107,tokat,sivas,trunk,,mountain,1,camlibel
+108,ankara,cankiri,trunk,,hilly,1,40.300/33.200/1400
+109,cankiri,ilgaz,trunk,,hilly,1,
+110,gerede,ilgaz,trunk,D-100,hilly,1,40.850/32.700/1200
+111,ilgaz,tosya,trunk,D-100,hilly,1,
+112,tosya,merzifon,trunk,D-100,hilly,1,osmancik
+113,samsun,unye,trunk,D-010,rolling,1,
+114,unye,ordu,trunk,D-010,rolling,1,
+115,ordu,giresun,trunk,D-010,rolling,1,
+116,giresun,trabzon,trunk,D-010,rolling,1,
+117,trabzon,rize,trunk,D-010,rolling,1,
+118,trabzon,gumushane,trunk,,mountain,1,40.810/39.610/300 zigana
+119,gumushane,bayburt,primary,,mountain,1,40.380/39.900/1900
+120,bayburt,askale,primary,,mountain,1,kop
+121,sivas,erzincan,trunk,,mountain,1,zara 39.930/37.950/2000 imranli refahiye
+122,erzincan,askale,trunk,D-100,mountain,1,tercan
+123,askale,erzurum,trunk,D-100,rolling,1,
+124,erzurum,agri,trunk,D-100,mountain,1,horasan 39.950/42.450/2100 eleskirt
+125,agri,van,primary,,hilly,1,patnos ercis
+126,malatya,elazig,trunk,,rolling,1,
+127,elazig,diyarbakir,trunk,,mountain,1,maden 38.330/39.730/1350 ergani
+128,diyarbakir,sanliurfa,trunk,,rolling,1,siverek
+129,diyarbakir,mardin,trunk,,rolling,1,37.600/40.500/950
+130,sanliurfa,mardin,trunk,D-400,rolling,1,kiziltepe
+131,diyarbakir,batman,trunk,,flat,1,
+132,batman,bitlis,primary,,mountain,1,kozluk 38.300/41.900/1500
+133,bitlis,tatvan,trunk,,hilly,1,
+134,tatvan,van,primary,,rolling,1,38.330/42.700/1750 gevas
+135,tatvan,mus,primary,,hilly,1,38.620/41.950/1650
+136,mus,bingol,primary,,mountain,1,38.850/41.000/1700
+137,bingol,elazig,primary,,mountain,1,38.750/39.950/1300
+138,malatya,kahramanmaras,trunk,,mountain,1,dogansehir 37.850/37.450/1450
+139,kahramanmaras,gaziantep,trunk,,rolling,2,37.300/37.150/700
+140,kahramanmaras,osmaniye,trunk,,hilly,1,37.300/36.550/500
+141,osmaniye,toprakkale,trunk,,flat,1,
+142,iskenderun,hatay,trunk,,mountain,1,belen
+143,sanliurfa,adiyaman,primary,,rolling,1,37.450/38.550/700
+144,adiyaman,malatya,primary,,mountain,1,38.050/38.400/1400
+145,malatya,sivas,trunk,,mountain,1,38.800/37.950/1250 39.200/37.400/1650
+146,kirsehir,kayseri,trunk,,rolling,1,39.050/34.800/1150
