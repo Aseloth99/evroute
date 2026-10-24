@@ -308,7 +308,7 @@ def test_potentials_are_admissible_and_consistent():
             assert tight(u, x + rng.uniform(0, 5)) <= ht_u + 1e-9
             for a in P.net.out_edges[u]:
                 w = P.net.head[a]
-                for k, tau, c, dc in P.edge_options[a]:
+                for _k, tau, c, dc in P.edge_options[a]:
                     x2 = min(x - c, P.capacity)
                     cost = tau if objective == "time" else dc
                     for h in (basic, tight):
@@ -422,7 +422,7 @@ def test_trace_records_settled_nodes_and_keys():
         assert tr.nodes[-1] == sc.query.destination
         assert len(set(tr.nodes)) == len(tr.nodes)
         # consistent keys are popped in non-decreasing order
-        assert all(b >= a - 1e-6 for a, b in zip(tr.keys, tr.keys[1:]))
+        assert all(b >= a - 1e-6 for a, b in zip(tr.keys, tr.keys[1:], strict=False))
         assert tr.keys[-1] == pytest.approx(p.internal_objective)
         assert p.to_dict()["trace"]["nodes"][0] == sc.query.origin
     assert plan(sc, "bls").trace is None
@@ -515,6 +515,31 @@ def test_completion_energy_suffices_on_the_bound_tree():
     assert checked >= 5
 
 
+@pytest.mark.parametrize("only_non_dominated", [True, False])
+def test_3d_pareto_set_matches_naive_scan(monkeypatch, only_non_dominated):
+    """The binned/Fenwick 3-D dominance structure answers exactly like a scan."""
+    import evroute.algorithms.labels as labels
+
+    monkeypatch.setattr(labels, "_P3_BUILD", 8)  # exercise the tree early
+    rng = random.Random(5 if only_non_dominated else 9)
+    for _ in range(120):
+        cap = rng.choice((10.0, 49.0, 80.0))
+        s3 = labels._Pareto3(labels._NB3 / cap)
+        Pv, Ev, Iv, pts = [], [], [], []
+        targets = [round(rng.uniform(0, cap), 1) for _ in range(5)]
+        for it in range(rng.randint(1, 250)):
+            p = round(rng.uniform(0, 100), rng.choice((0, 1, 3)))
+            q = round(rng.uniform(0, 100), rng.choice((0, 1, 3)))
+            e = rng.choice(targets) if rng.random() < 0.3 else (cap if rng.random() < 0.05 else rng.uniform(0, cap))
+            naive = any(p2 <= p and q2 <= q and e2 >= e for p2, q2, e2 in pts)
+            got = s3.dominated(Pv, Ev, p, q, e)
+            assert got == naive
+            if (not got or not only_non_dominated) and rng.random() < 0.7:
+                s3.add(p, q, e)
+                labels._stair_add(Pv, Ev, Iv, p, e, it)
+                pts.append((p, q, e))
+
+
 def test_charging_targets():
     sc = grid_scenario(5, 5, seed=1, max_charge_soc=0.8, charge_step_soc=0.05)
     P = sc.prepare()
@@ -524,7 +549,7 @@ def test_charging_targets():
         assert grid == sorted(grid) and both == sorted(both)
         assert max(both) == pytest.approx(P.e_charge_cap) and max(both) <= P.e_charge_cap
         assert set(grid) <= set(both)
-        assert all(b - a > 1e-9 for a, b in zip(both, both[1:]))
+        assert all(b - a > 1e-9 for a, b in zip(both, both[1:], strict=False))
         inner = [b for b in P.cf[s].e_breaks[1:-1] if b <= P.e_charge_cap]
         assert all(any(abs(b - y) <= 1e-9 for y in both) for b in inner)
     with pytest.raises(ValueError):

@@ -350,7 +350,7 @@ class AStarPotential:
         else:
             # the engine evaluates the stop term only where the linear term is
             # active, which needs e_stop <= e_lin
-            self.e_stop = [min(a, b) for a, b in zip(e_stop, self.e_lin)]
+            self.e_stop = [min(a, b) for a, b in zip(e_stop, self.e_lin, strict=True)]
         self.name = name
         #: ``need[v]``: energy that suffices to finish along the reverse
         #: shortest-``B`` tree without charging (``inf`` if none); a label with
@@ -404,7 +404,7 @@ class AStarPotential:
             idx = 1 if P.objective == "time" else 3
             w = [min(o[idx] + rate * o[2] for o in opts) for opts in P.edge_options]
             W = bellman_ford(P.net, lb.target, w, reverse=True)
-            for v, (bv, wv) in enumerate(zip(base, W)):
+            for v, (bv, wv) in enumerate(zip(base, W, strict=True)):
                 if bv < INF and wv < INF:
                     e_lin[v] = max(e_basic[v], g + (wv - bv) / rate)
         overhead = min_stop_overhead_s(P)
@@ -503,7 +503,7 @@ def _bound_and_rate(P: PreparedScenario, lb: LowerBounds) -> tuple[list[float], 
 #: Number of energy bins of the 3-D Pareto sets (a power of two).
 _NB3 = 512
 #: Size from which a 3-D Pareto set switches from a scan to the binned tree.
-_P3_BUILD = 512
+_P3_BUILD = 1024
 
 
 def _stair_add_min(Pv: list[float], Qv: list[float], p: float, q: float) -> bool:
@@ -543,9 +543,10 @@ class _Pareto3:
        over the bins (in decreasing energy order) stores, per tree node, the
        minimum (primary, secondary) staircase of all labels in its range, so
        the bins strictly above the query's bin cost ``log2(_NB3)``
-       bisections; inside the query's own (narrow) bin, labels are kept in
-       decreasing energy order and only those with ``e' >= e`` are
-       scanned.
+       bisections; inside the query's own (narrow) bin, labels are grouped by
+       exact energy (charging targets create large groups), each group a
+       (primary, secondary) staircase, and only groups with ``e' >= e`` are
+       inspected.
     """
 
     __slots__ = ("groups", "inv_w", "qe", "qs", "rows", "tree")
@@ -555,7 +556,8 @@ class _Pareto3:
         self.qe: list[float] = []
         self.rows: list[tuple[float, float, float]] = []
         self.tree: list[list[list[float]] | None] | None = None
-        # bin -> [negative energies (ascending), matching (p, q) rows]
+        # bin -> [distinct negative energies (ascending), one minimum
+        #         (primary, secondary) staircase per energy]
         self.groups: dict[int, list] = {}
         self.inv_w = inv_w
 
@@ -585,10 +587,11 @@ class _Pareto3:
             k &= k - 1
         grp = self.groups.get(b)
         if grp is not None:
-            rows = grp[1]
+            stairs = grp[1]
             for k in range(bisect_right(grp[0], -e)):
-                p2, q2 = rows[k]
-                if p2 <= p and q2 <= q:
+                Ps, Qs = stairs[k]
+                j = bisect_right(Ps, p)
+                if j and Qs[j - 1] <= q:
                     return True
         return False
 
@@ -611,11 +614,16 @@ class _Pareto3:
             b = _NB3 - 1
         grp = self.groups.get(b)
         if grp is None:
-            self.groups[b] = [[-e], [(p, q)]]
+            self.groups[b] = [[-e], [([p], [q])]]
         else:
-            k = bisect_right(grp[0], -e)
-            grp[0].insert(k, -e)
-            grp[1].insert(k, (p, q))
+            keys = grp[0]
+            k = bisect_left(keys, -e)
+            if k < len(keys) and keys[k] == -e:
+                Ps, Qs = grp[1][k]
+                _stair_add_min(Ps, Qs, p, q)
+            else:
+                keys.insert(k, -e)
+                grp[1].insert(k, ([p], [q]))
         tree = self.tree
         assert tree is not None
         k = _NB3 - b  # 1-based Fenwick position of bin b
