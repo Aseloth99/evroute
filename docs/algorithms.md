@@ -1,0 +1,203 @@
+# Algorithms and correctness arguments
+
+Notation follows [`model.md`](model.md).  Energies are in kWh, times in
+seconds.  $\underline e$ is the reserve, $\bar e$ the charging cap, $Q$ the
+capacity, $e_d$ the destination requirement and $P_{\max}$ the highest
+effective charging power of any station.
+
+## 1. The battery-expanded state space
+
+A *state* is a pair $(v, x)$ of a node and the energy in the battery.  Driving
+edge $e = (v, w)$ at speed level $k$ moves $(v, x) \to (w, \delta_{e,k}(x))$
+in $t_{e,k}$ seconds, provided $x \ge \underline e$ and
+$\delta_{e,k}(x) \ge \underline e$.  Charging at station $j$ located at $v$
+moves $(v, x) \to (v, y)$, $y > x$, in $W_j(t) + \sigma_j + F_j(y) - F_j(x)$
+seconds where $t$ is the arrival time.  A route is a path in this (infinite)
+state graph from $(o, x_0)$ to some $(d, x)$ with $x \ge e_d$.
+
+**Lemma 1 (monotonicity).** Let two partial routes reach the same node $v$
+with $(t_1, x_1)$ and $(t_2, x_2)$, $t_1 \le t_2$ and $x_1 \ge x_2$.  Any
+completion of the second is feasible for the first and arrives no later.
+
+*Proof.* $\delta_{e,k}$ is non-decreasing in $x$, so energies stay ordered
+along any common continuation and the reserve constraints hold for the first
+whenever they hold for the second.  Charging to a target $y$ from $x_1 \ge
+x_2$ takes no longer ($F_j$ is increasing).  Driving times do not depend on
+the clock, and waiting satisfies FIFO ($t + W_j(t)$ non-decreasing), so the
+first route is never behind at any later event.  $\square$
+
+For the generalised-cost objective the same argument holds for
+$(g, x)$ when waits are static; with time-dependent waits the label must also
+carry $t$ (cost of later waits depends on the clock), giving 3-D dominance.
+
+## 2. BLS — battery-constrained label setting
+
+BLS restricts charging targets to a finite set $\mathcal Y_j$ (the
+`charge_step_soc` grid united with the breakpoints of $F_j$ below $\bar e$) and
+runs a multi-criteria Dijkstra over labels $(t, x)$ per node, pruning by
+Lemma 1.  Energies are kept *continuous* — consumption is never rounded, so
+there is no accumulated discretisation error along long paths (a classic
+problem of SoC-bucket formulations).
+
+**Theorem 1.** BLS returns a route of minimum trip time among all routes whose
+charging targets lie in $\mathcal Y$.
+
+*Proof sketch.* Every transition has non-negative duration, so labels are
+settled in non-decreasing time.  By Lemma 1 a label dominated by a settled
+label at the same node can be discarded without losing any optimal
+completion.  The first settled label at $d$ with $x \ge e_d$ therefore has
+minimum time.  Termination: the number of non-dominated labels per node is
+finite because energies reachable with finitely many targets on simple
+segments form a finite set; dominated cycles are pruned.  $\square$
+
+As the grid is refined, the BLS optimum converges to the continuous optimum
+computed by CFP (experiment `grid-resolution`).
+
+## 3. A consistent heuristic for the battery state space
+
+Let $T_{lb}(v)$ be the minimum driving time from $v$ to $d$ (reverse Dijkstra
+on $\min_k t_{e,k}$) and $E_{lb}(v)$ the minimum energy (reverse Bellman-Ford
+on $\min_k c_{e,k}$; negative weights occur, negative cycles cannot).  Define
+
+$$ h(v, x) = T_{lb}(v) + \frac{3600}{P_{\max}}\,\big(E_{lb}(v) + e_d - x\big)^+ . $$
+
+**Theorem 2.** $h$ is admissible and consistent on the battery state graph,
+and non-increasing in $x$.
+
+*Proof.* *Drive transition* $(v, x)\to(w, x')$ with $x' = \delta_{e,k}(x) \le x - c_{e,k}$:
+the first term satisfies $T_{lb}(v) \le t_{e,k} + T_{lb}(w)$.  For the second,
+$E_{lb}(v) \le c_{e,k} + E_{lb}(w)$, hence
+$E_{lb}(v) + e_d - x \le E_{lb}(w) + e_d - (x - c_{e,k}) \le E_{lb}(w) + e_d - x'$;
+the deficit cannot shrink along a drive edge.  Summing,
+$h(v, x) \le t_{e,k} + h(w, x')$.
+*Charge transition* $(v, x)\to(v, y)$ of duration $\tau \ge 3600 (y - x)/P_{\max}$:
+the first term is unchanged and the second decreases by at most
+$3600 (y - x) / P_{\max} \le \tau$.
+*Goal:* at $(d, x)$ with $x \ge e_d$, $h = 0$.  Consistency with $h = 0$ at goal
+states implies admissibility.  Monotonicity in $x$ is immediate.  $\square$
+
+The same construction with $C_{lb}(v)$ (generalised driving cost) and the
+cheapest possible cost per charged kWh,
+$\mathrm{VoT}\cdot 3600/P_{\max} + w_m \min \pi/\eta_c + w_w \min\omega$,
+gives a consistent heuristic for the generalised cost.
+
+**Lemma 2 (A\* with dominance).** If $h$ is consistent and non-increasing in
+$x$, a label that dominates another at the same node has a key that is not
+larger.  Hence, when labels are expanded in key order, a dominated label is
+never expanded before its dominator, and pruning popped labels against the
+settled set is exact.  *Proof:* $t_1 \le t_2$, $x_1 \ge x_2$ ⇒
+$t_1 + h(v, x_1) \le t_2 + h(v, x_2)$.  $\square$
+
+**Corollary.** BLS-A\* returns the same objective value as BLS (verified on
+random instances by `tests/test_labels.py`) while settling fewer labels.
+
+## 4. CFP — charging function propagation (continuous charging)
+
+BLS fixes charging amounts to a grid.  CFP (Baum et al. 2015, 2020) instead
+*defers* the decision of how long to charge at the last station until it is
+known what the rest of the route needs.
+
+**Consumption profiles.** For a path segment starting at a station with
+departure energy $x$, the arrival energy is
+$f(x) = \min(x - \mathrm{cost},\ \mathrm{out})$ for $x \ge \mathrm{in}$
+(infeasible otherwise).  Profiles compose in closed form:
+appending an edge with consumption $c$ gives
+$\mathrm{in}' = \max(\mathrm{in}, \underline e + \mathrm{cost} + c)$,
+$\mathrm{cost}' = \mathrm{cost} + c$,
+$\mathrm{out}' = \min(\mathrm{out} - c, Q)$.
+
+**Labels as functions.** A label at node $v$ stores the last station $j$,
+the base time $t_0$ (arrival at $v$ without extra charging at $j$), the energy
+$b$ at which charging at $j$ began and the profile from $j$ to $v$.  Spending
+$t - t_0$ extra seconds at $j$ yields
+
+$$ B(t) = f\big(\min(F_j^{-1}(F_j(b) + t - t_0),\ \bar e)\big), $$
+
+a piecewise-linear, concave, non-decreasing function of the arrival time.
+
+**Lemma 3 (switching at breakpoints).** With static waits, when arriving at a
+new station $j'$ the best moment to stop charging at $j$ and start charging at
+$j'$ lies at a breakpoint of $B$.
+
+*Proof.* For a fixed final time $t$, switching at $t'$ gives
+$\Phi(t') = F_{j'}^{-1}\big(F_{j'}(B(t')) + t - t' - W_{j'} - \sigma_{j'}\big)$.
+On a linear piece of $B$ with slope $\beta$,
+$\mathrm{sign}\,\Phi'(t') = \mathrm{sign}\big(\beta - p_{j'}(B(t'))\big)$
+where $p_{j'}(B(t'))$ is the charging rate at $j'$ at the current energy.
+Concavity of $F_{j'}^{-1}$ makes $p_{j'}$ non-increasing in energy while
+$B(t')$ increases, so $\Phi'$ changes sign at most once, from negative to
+positive: $\Phi$ is quasi-convex on the piece and attains its maximum at an
+endpoint.  $\square$
+
+**Key.** Let $t_{feas}$ be the earliest time at which $B$ is defined.  The
+queue key is $t_{feas}$ (CFP) or $t_{feas} + h(v, B(t_{feas}))$ (CFP-A\*).
+Because $B'(t) \le P_{\max}/3600$ and $h$ falls by at most $3600/P_{\max}$ per
+kWh, $t + h(v, B(t))$ is non-decreasing in $t$; the minimum over the whole
+label is attained at $t_{feas}$, so the key is a valid lower bound.
+
+**Dominance.** Label 1 dominates label 2 at the same node if
+$B_1(t) \ge B_2(t)$ for all $t$ — checked exactly on the union of their
+breakpoints and at $t\to\infty$ (both are linear in between).
+
+**Theorem 3.** With static waits, CFP returns a fastest feasible route with
+arbitrary (continuous) charging amounts.  *Sketch:* every label operation is
+monotone and distributes over pointwise maxima, so pruning dominated labels is
+safe; by Lemma 3 creating station labels at breakpoints loses nothing; keys
+are lower bounds that never decrease along label extensions; the first final
+entry popped at $d$ is therefore optimal.  $\square$
+
+With time-dependent waits CFP evaluates $W_{j'}$ at each concrete switch time;
+plans remain consistent with the evaluator but optimality is no longer
+guaranteed (Lemma 3's derivative gains a $-W'$ term).
+
+## 5. Multi-criteria search
+
+`pareto` runs Martins' label-setting algorithm (Martins, 1984) over
+$(t, \mathcal M, \mathcal W)$ with energy as an additional maximised resource,
+and prunes labels whose optimistic completion vector (current values plus
+consistent lower bounds) is dominated by the destination front, as in NAMOA\*
+(Mandow & Pérez de la Cruz, 2010).  The fastest front member equals BLS with
+objective time and the cheapest equals BLS with objective cost — both
+equalities are asserted in the test-suite.
+
+## 6. Baselines
+
+* `naive` — fastest path, no charging; shows *where* the battery runs out.
+* `greedy` — drive the fastest path; when it is infeasible, detour to the
+  reachable station minimising time-to-station + lower bound to the goal,
+  charge to 80 % (DC) / 100 % (AC), repeat.  Typical of in-car navigation.
+* `station-graph` — two-level search on a meta-graph of stations with a
+  fixed charge target (Storandt & Funke, 2012).
+* `genetic` — a GA over ordered station sequences and target SoCs; a
+  representative of the metaheuristics that dominate applied EV-routing
+  papers.
+
+## 7. How correctness is verified
+
+1. An **independent evaluator** (`evaluate.py`) replays every plan from first
+   principles; the objective an algorithm claims must match it.
+2. **Cross-validation** on hundreds of random instances: BLS = BLS-A\*;
+   CFP = CFP-A\*; CFP ≤ BLS; Pareto extremes = BLS (time / cost).
+3. **Brute force** on tiny instances: enumeration of walks and targets
+   reproduces the BLS optimum.
+4. **Analytic oracles**: hand-built lines where the optimal continuous split
+   between a slow and a fast charger can be found by dense scanning.
+
+## References
+
+* Artmeier, Haselmayr, Leucker, Sachenbacher (2010). *The shortest path
+  problem revisited: optimal routing for electric vehicles.* KI 2010, LNCS 6359.
+* Baum, Dibbelt, Gemsa, Wagner, Zündorf (2015). *Shortest feasible paths with
+  charging stops.* ACM SIGSPATIAL 2015.
+* Baum, Dibbelt, Wagner, Zündorf (2020). *Modeling and engineering
+  constrained shortest path algorithms for battery electric vehicles.*
+  Transportation Science 54(6).
+* Hart, Nilsson, Raphael (1968). *A formal basis for the heuristic
+  determination of minimum cost paths.* IEEE Trans. SSC 4(2).
+* Mandow, Pérez de la Cruz (2010). *Multiobjective A\* search with consistent
+  heuristics.* Journal of the ACM 57(5).
+* Martins (1984). *On a multicriteria shortest path problem.* EJOR 16(2).
+* Montoya, Guéret, Mendoza, Villegas (2017). *The electric vehicle routing
+  problem with nonlinear charging function.* Transportation Research Part B 103.
+* Storandt, Funke (2012). *Cruising with a battery-powered vehicle and not
+  getting stranded.* AAAI 2012.

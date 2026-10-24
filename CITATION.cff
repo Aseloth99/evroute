@@ -1,0 +1,17 @@
+cff-version: 1.2.0
+message: "If you use EVRoute in your research, please cite it as below."
+title: "EVRoute: exact, battery-, queue- and degradation-aware route planning for electric vehicles with charging stations"
+version: 1.0.0
+date-released: 2026-10-24
+license: MIT
+authors:
+  - family-names: "Açık"
+    given-names: "Mustafa"
+    affiliation: "Karamanoğlu Mehmetbey University, Department of Computer Engineering"
+keywords:
+  - electric vehicles
+  - route planning
+  - charging stations
+  - label setting
+  - A* search
+  - battery degradation
