@@ -31,9 +31,8 @@ katarak listendeki 1. konu (LSTM ile SoC/SoH tahmini) ile köprü kurmak.
 |---|---|---|
 | Çekirdek model + algoritmalar | **Python 3.10+ (saf, bağımlılıksız)** | akademide ortak dil; okunabilir; her yerde çalışır; hakemler kodu kolayca doğrular |
 | Etkileşimli görselleştirme + animasyon | **HTML + CSS + saf JavaScript (Canvas)** | tarayıcıda çalışır, internet/kütüphane gerektirmez, GitHub Pages'te yayınlanabilir |
-| Makale figürleri + GIF/MP4 animasyon | **Python + matplotlib** | yayın kalitesinde PDF/PNG ve GIF |
+| Statik grafikler (README, deney raporları) | **Python + seaborn** (isteğe bağlı) | şık, tutarlı tema; çekirdek kod bağımlılıksız kalır |
 | Canlı mod sunucusu | Python standart kütüphanesi (`http.server`) | ek bağımlılık yok |
-| Makale | LaTeX | dergi formatı |
 
 ## 3. Matematiksel model (özet)
 
@@ -83,10 +82,11 @@ ile optimallik kontrol edilir.
   mobil uyum.
 * **Canlı mod**: `evroute serve` → haritaya tıklayıp başlangıç/varış seç,
   parametreleri değiştir, "Planla"ya bas.
-* **matplotlib**: makale figürleri (PDF/PNG) ve GIF/MP4 animasyonları
-  (`--animate / --no-animate`).
+* **Etkileşimli sonuç paneli**: tüm deneylerin grafikleri tarayıcıda
+  (üzerine gelince değer, filtre, algoritma seçimi).
+* **seaborn** (isteğe bağlı): README ve raporlar için statik grafikler.
 
-## 6. Deneyler (makale için)
+## 6. Deneyler
 
 1. Vaka çalışması: Karaman → İstanbul, Antalya → Ankara, İzmir → Erzurum (dağlık).
 2. Ölçeklenebilirlik: düğüm sayısına göre çalışma süresi / yerleşen etiket.
@@ -112,7 +112,6 @@ evroute/
 │   └── cli.py            # komut satırı
 ├── tests/                # pytest
 ├── docs/                 # model, algoritmalar, ispatlar, ekran görüntüleri
-├── paper/                # LaTeX makale taslağı
 └── examples/
 ```
 
@@ -122,6 +121,6 @@ evroute/
 2. ⏳ Algoritmalar (BLS, BLS-A*, CFP, Pareto, sezgiseller) + çapraz doğrulama
 3. ⏳ Türkiye veri seti + sentetik benchmark üreteçleri
 4. ⏳ Web görüntüleyici + animasyonlar + matplotlib figürleri
-5. ⏳ Deneyler, makale taslağı, dokümantasyon
+5. ⏳ Deneyler, etkileşimli sonuç paneli, seaborn grafikleri, dokümantasyon
 6. ⏳ Bağımsız inceleme turu (doğruluk, performans, tasarım), düzeltmeler
 7. 🔔 **En son: GitHub'da paylaşım** (ayrı depo önerisi, README, lisans, DOI)
