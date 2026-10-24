@@ -31,7 +31,10 @@ Network construction
   D-300, D-400, D-550, D-650, D-715 and further unnumbered trunk/primary
   roads).  A link lists the places and inline ``lat/lon/elevation``
   waypoints the real road passes through, its class, terrain type
-  (``flat``, ``rolling``, ``hilly``, ``mountain``) and a traffic level 1-3.
+  (``flat``, ``rolling``, ``hilly``, ``mountain``), a traffic level 1-3 and an
+  optional winding factor ``detour`` (1.0 everywhere except Mut-Silifke, a
+  road in the Göksu canyon that is far more sinuous than its terrain class
+  suggests: 1.3).
 * **Geometry**: every leg between consecutive waypoints becomes a polyline
   with a node every ~8-12 km of road (``ceil(road km / 12)`` segments).  A
   small seeded lateral offset that vanishes at the waypoints makes drawings
@@ -41,7 +44,8 @@ Network construction
 * **Length** of a link = great-circle length along its waypoints times a
   curvature factor that depends on road class and terrain
   (:data:`CURVATURE`: motorways 1.06-1.18, trunk roads 1.08-1.24, primary
-  roads 1.10-1.34 from flat to mountain), distributed over the segments
+  roads 1.10-1.34 from flat to mountain) times the link's ``detour``
+  (normally 1.0), distributed over the segments
   proportionally to their chords.  Because the waypoints already follow the
   real corridor, the resulting ratio road length / straight line between the
   end points of a link is 1.1-1.5 (median ~1.2).  Every segment is at least
@@ -106,7 +110,11 @@ Data provenance and accuracy
 * Road lengths are modelled (great-circle x curvature) and typically within
   +-10 % of official distance tables (the test-suite checks
   Ankara-İstanbul 420-480 km, Karaman-Konya 100-130 km and
-  İzmir-Ankara 540-620 km on the shortest route).
+  İzmir-Ankara 540-620 km on the shortest route).  Known weak spots: a few
+  hilly trunk/primary links (for example Akseki-Manavgat, Merzifon-Samsun,
+  Çorum-Merzifon) are probably 10-25 % shorter than the real road; use the
+  ``detour`` column of the road table to calibrate them against your own
+  distance data.
 * Speeds are legal-limit level free-flow speeds with a crude congestion
   factor; travel times are therefore optimistic in rush hours.
 * Station locations, powers, plugs, prices and queue demand are synthetic
@@ -258,6 +266,10 @@ class Link:
     traffic: int
     #: Place keys or ``(lat, lon, elevation)`` tuples between ``a`` and ``b``.
     via: tuple[Any, ...]
+    #: Extra winding factor (>= 1) on top of the class/terrain curvature for
+    #: roads much more sinuous than their terrain class implies (canyons,
+    #: serpentines); 1.0 for almost every road.
+    detour: float = 1.0
 
     @property
     def label(self) -> str:
@@ -314,11 +326,14 @@ def _links() -> tuple[Link, ...]:
             terrain=row["terrain"].strip(),
             traffic=int(row["traffic"]),
             via=tuple(via),
+            detour=float(row["detour"]) if (row.get("detour") or "").strip() else 1.0,
         )
         if link.a not in known or link.b not in known:
             raise ValueError(f"road {link.id}: unknown end point")
         if link.road_class not in CURVATURE or link.terrain not in TERRAIN:
             raise ValueError(f"road {link.id}: bad class or terrain")
+        if not 1.0 <= link.detour <= 2.0:
+            raise ValueError(f"road {link.id}: detour must lie in [1, 2], got {link.detour}")
         out.append(link)
     return tuple(out)
 
@@ -441,7 +456,7 @@ def _build(seed: int) -> _TurkeyData:
         # polyline: (lat, lon, z, node or -1 for a new node)
         poly: list[tuple[float, float, float, int]] = [pts[0]]
         gc_total = 0.0
-        curvature = CURVATURE[link.road_class][link.terrain]
+        curvature = CURVATURE[link.road_class][link.terrain] * link.detour
         for leg, ((la1, lo1, z1, _), (la2, lo2, z2, n2)) in enumerate(zip(pts, pts[1:])):
             # a named pass is the high point of the road: undulation never exceeds it
             z_cap = min([pts[j][2] - 1.0 for j in (leg, leg + 1) if j in passes], default=math.inf)

@@ -5,7 +5,8 @@
     study (approximate WGS84 coordinates and elevations).
 ``turkey_roads.csv``
     The main intercity road skeleton between those places (road class,
-    indicative road number, terrain, traffic level and waypoints).
+    indicative road number, terrain, traffic level, an optional ``detour``
+    winding factor and waypoints).
 
 Both files are read by :mod:`evroute.generators.turkey`, whose module
 docstring documents provenance, accuracy and every modelling assumption.

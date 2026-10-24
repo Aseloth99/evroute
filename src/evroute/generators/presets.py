@@ -13,7 +13,9 @@ Every preset is a builder plus default arguments.  ``get_scenario(name,
 * :class:`~evroute.scenario.Conditions` fields (``wind_speed_ms``,
   ``traffic_factor``, ...);
 * :class:`~evroute.scenario.Preferences` fields (``objective``,
-  ``reserve_soc``, ``speed_factors``, ...).
+  ``reserve_soc``, ``speed_factors``, ...);
+* ``name``, which renames the resulting scenario (the preset name itself is
+  positional-only, so this never collides).
 
 Networks are cached by the generators, so building a preset twice costs
 almost nothing; stations are fresh copies every time.  Register your own
@@ -48,11 +50,15 @@ class Preset:
     tags: tuple[str, ...] = ()
     #: Rough network size, for listings and experiment planning.
     approx_nodes: int | None = None
+    #: Longer explanation (what the instance is meant to show); ``description``
+    #: stays a one-line summary so that listings remain readable.
+    notes: str = ""
 
     def info(self) -> dict[str, Any]:
         return {
             "name": self.name,
             "description": self.description,
+            "notes": self.notes,
             "family": self.family,
             "tags": list(self.tags),
             "approx_nodes": self.approx_nodes,
@@ -60,10 +66,14 @@ class Preset:
         }
 
     def build(self, **overrides: Any) -> Scenario:
+        """Instantiate the preset; ``name=`` renames the scenario (every builder, not only some)."""
         params = _builder_params(self.builder)
         kwargs = dict(self.defaults)
+        scenario_name = overrides.get("name")
         extra: dict[str, Any] = {}
         for k, v in overrides.items():
+            if k == "name":
+                continue  # handled below: not every builder takes a name
             if k in params:
                 kwargs[k] = v
             else:
@@ -78,7 +88,7 @@ class Preset:
         meta["preset"] = self.name
         if overrides:
             meta["overrides"] = {k: (list(v) if isinstance(v, tuple) else v) for k, v in overrides.items()}
-        return replace(sc, name=overrides.get("name") or self.name, meta=meta)
+        return replace(sc, name=scenario_name or self.name, meta=meta)
 
 
 def _builder_params(fn: Callable[..., Any]) -> set[str]:
@@ -102,12 +112,13 @@ def register_scenario(
     family: str = "custom",
     tags: tuple[str, ...] = (),
     approx_nodes: int | None = None,
+    notes: str = "",
     replace_existing: bool = False,
 ) -> Preset:
     """Add a preset to the registry (``KeyError`` on duplicates unless replacing)."""
     if name in PRESETS and not replace_existing:
         raise KeyError(f"preset {name!r} already exists")
-    preset = Preset(name, description, builder, dict(defaults or {}), family, tuple(tags), approx_nodes)
+    preset = Preset(name, description, builder, dict(defaults or {}), family, tuple(tags), approx_nodes, notes)
     PRESETS[name] = preset
     return preset
 
@@ -117,8 +128,12 @@ def list_scenarios(family: str | None = None) -> list[dict[str, Any]]:
     return [p.info() for p in PRESETS.values() if family is None or p.family == family]
 
 
-def get_scenario(name: str, **overrides: Any) -> Scenario:
-    """Build the preset ``name`` (see the module docstring for overrides)."""
+def get_scenario(name: str, /, **overrides: Any) -> Scenario:
+    """Build the preset ``name`` (see the module docstring for overrides).
+
+    ``name`` is positional-only so that ``name="my-run"`` can be passed as an
+    override to give the resulting scenario its own name.
+    """
     try:
         preset = PRESETS[name]
     except KeyError:
@@ -134,69 +149,89 @@ def _register_builtins() -> None:
     reg(
         "turkey-karaman-istanbul",
         turkey_scenario,
-        "Karaman -> İstanbul (~750 km): Konya plateau, Afyon/Eskişehir or Ankara corridors, "
-        "busy Marmara motorways. The case study's flagship trip.",
+        "Karaman -> İstanbul (~750 km), the flagship case study: Konya plateau, Afyon/Eskişehir corridors, Marmara motorways.",
         defaults={"origin": "Karaman", "destination": "İstanbul", "initial_soc": 0.8, "temperature_c": 18.0,
                   "departure": "08:00"},
         family="turkey", tags=("case-study", "intercity", "TRY"), approx_nodes=1300,
+        notes="Starts in Karaman (1030 m), crosses the Konya plateau and the Afyon/Kütahya uplands and ends at "
+              "the Marmara coast; with the default C-SUV two charging stops are needed.",
     )
     reg(
         "turkey-antalya-ankara",
         turkey_scenario,
-        "Antalya -> Ankara (~530 km): climb from the Mediterranean coast over the Taurus "
-        "(Çubuk Beli or Alacabel) to the 900-1000 m Anatolian plateau.",
+        "Antalya -> Ankara (~530 km): from the Mediterranean over the Taurus to the Anatolian plateau.",
         defaults={"origin": "Antalya", "destination": "Ankara", "initial_soc": 0.8, "temperature_c": 22.0,
                   "departure": "09:00"},
         family="turkey", tags=("case-study", "intercity", "mountain", "TRY"), approx_nodes=1300,
+        notes="Climbs from sea level over Çubuk Beli (1000 m) or Alacabel (1825 m) to the 900-1000 m plateau; "
+              "the climb is expensive in energy, the return trip regenerates.",
     )
     reg(
         "turkey-izmir-erzurum",
         turkey_scenario,
-        "İzmir -> Erzurum (~1470 km): the long west-east crossing over the plateau and the "
-        "eastern mountains (Sivas-Erzincan, 2000 m summits, Erzurum at 1890 m). Several stops.",
+        "İzmir -> Erzurum (~1470 km): the long west-east crossing of the plateau and the eastern mountains.",
         defaults={"origin": "İzmir", "destination": "Erzurum", "initial_soc": 0.9, "temperature_c": 12.0,
                   "departure": "06:00"},
         family="turkey", tags=("case-study", "long", "mountain", "TRY"), approx_nodes=1300,
+        notes="Long and mountainous (Sivas-Erzincan section with 2000 m summits, Erzurum at 1890 m); "
+              "four to five charging stops and a trip time that spans more than half a day.",
     )
     reg(
         "turkey-istanbul-antalya-winter",
         turkey_scenario,
-        "İstanbul -> Antalya (~680 km) at -5 °C: smaller usable capacity and heating load "
-        "(battery pre-conditioned; pass preconditioning=False for cold-charging derating).",
+        "İstanbul -> Antalya (~680 km) at -5 °C: smaller usable capacity, heating load, cold charging.",
         defaults={"origin": "İstanbul", "destination": "Antalya", "initial_soc": 0.9, "temperature_c": -5.0,
                   "departure": "07:00"},
         family="turkey", tags=("case-study", "winter", "TRY"), approx_nodes=1300,
+        notes="The battery is pre-conditioned before fast charging; pass preconditioning=False to see the "
+              "cold-charging derating as well.",
     )
     reg(
         "turkey-karaman-mersin",
         turkey_scenario,
-        "Karaman -> Mersin: the fastest road (Ereğli-Pozantı motorway, ~275 km) versus the shorter "
-        "Sertavul pass road (1610 m, ~235 km) whose long descent to the sea regenerates energy; "
-        "with 50 % charge only the pass road avoids a charging stop.",
+        "Karaman -> Mersin: motorway (273 km) versus the Sertavul pass road (254 km); the best route depends on the objective.",
         defaults={"origin": "Karaman", "destination": "Mersin", "initial_soc": 0.5, "temperature_c": 20.0,
                   "departure": "10:00"},
         family="turkey", tags=("case-study", "regeneration", "mountain", "TRY"), approx_nodes=1300,
+        notes="The fastest road is the Ereğli-Pozantı motorway (273 km, about 3 h). The Sertavul pass road via "
+              "Mut and Silifke (1610 m, 254 km) is slower but its long descent to the sea regenerates energy. "
+              "At 50 % charge the time-optimal plan takes the motorway with one charging stop; with "
+              "objective='cost' the planner takes the pass road and hardly charges.",
+    )
+    reg(
+        "turkey-istanbul-ankara-rush",
+        turkey_scenario,
+        "İstanbul -> Ankara (~450 km) leaving at 14:30 into the afternoon queues of the O-4 service areas.",
+        defaults={"origin": "İstanbul", "destination": "Ankara", "initial_soc": 0.55, "temperature_c": 20.0,
+                  "departure": "14:30"},
+        family="turkey", tags=("case-study", "queues", "TRY"), approx_nodes=1300,
+        notes="The busiest corridor: its motorway service areas reach 30+ minute queues around 17:30. A "
+              "planner that ignores queues walks into about 50 minutes of waiting; the queue-aware plan "
+              "waits less than 10 minutes by choosing other sites and charge levels (about 40 minutes saved).",
     )
     reg(
         "turkey-ankara-adana-evening",
         turkey_scenario,
-        "Ankara -> Adana (~510 km) leaving at 15:00 so that charging falls into the "
-        "afternoon queue peak of the O-21 corridor: shows the value of queue awareness.",
+        "Ankara -> Adana (~510 km) leaving at 15:00 along the O-21 corridor.",
         defaults={"origin": "Ankara", "destination": "Adana", "initial_soc": 0.6, "temperature_c": 25.0,
                   "departure": "15:00"},
-        family="turkey", tags=("case-study", "queues", "TRY"), approx_nodes=1300,
+        family="turkey", tags=("case-study", "intercity", "TRY"), approx_nodes=1300,
+        notes="Central Anatolia to the Cilician plain over the Taurus (Gülek); queues are moderate on this "
+              "corridor, so queue awareness changes little here (compare turkey-istanbul-ankara-rush).",
     )
     reg(
         "corridor",
         corridor_scenario,
-        "600 km motorway with eight side stations (22-350 kW, 0.35-0.79 EUR/kWh), a 1500 m pass "
-        "and a valley bypass: the didactic partial-charging instance.",
+        "600 km motorway, eight side stations (22-350 kW), a 1500 m pass and a valley bypass: the partial-charging instance.",
         family="synthetic", tags=("didactic", "partial-charging"), approx_nodes=170,
+        notes="Stations differ in power (22-350 kW), price (0.35-0.79 EUR/kWh) and afternoon queues, and the "
+              "pass makes the energy needed before the climb larger than after it: the optimal plan charges "
+              "different amounts at different stops, so how much to charge matters, not only where.",
     )
     reg(
         "corridor-winter",
         corridor_scenario,
-        "The corridor at -5 °C (smaller usable battery, heating, colder charging).",
+        "The corridor at -5 °C: smaller usable battery, heating, colder charging.",
         defaults={"temperature_c": -5.0, "initial_soc": 1.0},
         family="synthetic", tags=("didactic", "winter"), approx_nodes=170,
     )

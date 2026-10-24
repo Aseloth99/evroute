@@ -26,6 +26,7 @@ from evroute.generators.synthetic import (
     subnetwork,
 )
 from evroute.generators.turkey import find_place, road_distance_km, turkey_network, turkey_scenario, turkey_stations
+from evroute.data import read_text
 from evroute.queueing import station_wait_profile
 from evroute.search import dijkstra, min_level_weights, path_from_pred
 from evroute.units import haversine_m
@@ -88,6 +89,25 @@ def test_grid_index_matches_brute_force():
         assert idx.nearest(x, y) == brute[0][1]
         r = rng.uniform(10, 150)
         assert sorted(idx.within(x, y, r)) == sorted(i for d, i in brute if d < r * r)
+
+
+def test_grid_index_degenerate_inputs_do_not_crawl():
+    """One point, coincident points and collinear points once made far queries scan ~10^5 empty rings."""
+    t0 = time.perf_counter()
+    one = GridIndex([231_656.0], [87_461.0])
+    got = one.k_nearest(10_000.0, 10_000.0, 3)  # 220 km from the only point
+    assert len(got) == 1 and got[0][1] == 0
+    assert one.nearest(231_656.0, 87_461.0) == 0
+    same = GridIndex([5.0] * 10, [7.0] * 10)
+    assert len(same.k_nearest(0.0, 0.0, 3)) == 3 and same.nearest(5.0, 7.0) in range(10)
+    xs = [i * 1000.0 for i in range(500)]
+    line = GridIndex(xs, [0.0] * 500)  # collinear: the area-based cell size would be zero
+    rng = random.Random(3)
+    for _ in range(40):
+        x, y = rng.uniform(-5e4, 5.5e5), rng.choice((0.0, 1e3, 1e6, -2e5))
+        brute = sorted(((xs[i] - x) ** 2 + y * y, i) for i in range(500))[:4]
+        assert [round(d, 3) for d, _ in line.k_nearest(x, y, 4)] == [round(d, 3) for d, _ in brute]
+    assert time.perf_counter() - t0 < 2.0
 
 
 def test_terrain_is_smooth_and_non_negative():
@@ -287,6 +307,102 @@ def test_turkey_trips_need_charging():
         assert 12.0 < energy / road_distance_km(o, d) * 100 < 30.0  # kWh/100 km of a C-SUV
 
 
+def test_turkey_road_table_detour_column():
+    links = turkey.turkey_links()
+    assert all(1.0 <= lk.detour <= 2.0 for lk in links)
+    winding = {(lk.a, lk.b): lk.detour for lk in links if lk.detour != 1.0}
+    assert winding == {("mut", "silifke"): 1.3}
+    # the Goksu canyon road is ~85 km (a plain 'hilly' primary road would be only ~64 km)
+    assert 75.0 <= road_distance_km("Mut", "Silifke") <= 95.0
+    assert 235.0 <= road_distance_km("Karaman", "Mersin") <= 290.0
+    header = read_text("turkey_roads.csv").splitlines()[0]
+    assert header == "id,from,to,class,ref,terrain,traffic,detour,via"
+
+
+def test_turkey_stations_cover_the_whole_network():
+    """No point of the network is farther than 80 km (by road) from a charging site."""
+    import heapq
+
+    net = turkey_network()
+    dist = [math.inf] * net.num_nodes
+    heap = []
+    for s in turkey_stations():
+        if dist[s.node] > 0.0:
+            dist[s.node] = 0.0
+            heap.append((0.0, s.node))
+    heapq.heapify(heap)
+    while heap:
+        d, u = heapq.heappop(heap)
+        if d > dist[u]:
+            continue
+        for e in net.out_edges[u]:
+            w, nd = net.head[e], d + net.length[e]
+            if nd < dist[w]:
+                dist[w] = nd
+                heapq.heappush(heap, (nd, w))
+    assert max(dist) < 80_000.0
+
+
+def _bls_astar_or_skip():
+    try:
+        from evroute.algorithms import planner_class
+
+        planner_class("bls-astar")
+    except ImportError:
+        pytest.skip("bls-astar not available")
+
+
+def test_turkey_random_city_pairs_are_plannable():
+    _bls_astar_or_skip()
+    from evroute import plan
+    from evroute.evaluate import check_objective
+
+    cities = [p for p in turkey.turkey_places() if p.is_settlement]
+    rng = random.Random(2024)
+    for _ in range(8):
+        a, b = rng.sample(cities, 2)
+        sc = turkey_scenario(a.key, b.key)
+        route = plan(sc, "bls-astar")
+        assert route.feasible, (a.name, b.name, route.message)
+        assert check_objective(route)
+        assert route.distance_m >= 0.95 * haversine_m(*_latlon(a), *_latlon(b))  # never shorter than the crow flies
+
+
+def _latlon(p):
+    return p.lat, p.lon
+
+
+def test_karaman_mersin_route_depends_on_the_objective():
+    """The preset's story: the time-optimal plan takes the motorway, the cost-optimal one the Sertavul pass road."""
+    _bls_astar_or_skip()
+    from evroute import plan
+
+    def uses_pass_road(sc, route):
+        return any(sc.network.edge_name.get(e) == "D-715" for e in route.edges)
+
+    fast = get_scenario("turkey-karaman-mersin")
+    cheap = get_scenario("turkey-karaman-mersin", objective="cost")
+    r_fast, r_cheap = plan(fast, "bls-astar"), plan(cheap, "bls-astar")
+    assert r_fast.feasible and r_cheap.feasible
+    assert not uses_pass_road(fast, r_fast) and uses_pass_road(cheap, r_cheap)
+    assert r_cheap.distance_m < r_fast.distance_m and r_cheap.total_time_s > r_fast.total_time_s
+    assert r_cheap.generalized_cost < r_fast.generalized_cost  # and it really is cheaper in the model
+
+
+def test_istanbul_ankara_rush_shows_the_value_of_queue_awareness():
+    """A plan made without queues, evaluated with the real afternoon queues, loses a lot of time."""
+    _bls_astar_or_skip()
+    from evroute import evaluate, plan
+
+    sc = get_scenario("turkey-istanbul-ankara-rush")
+    aware = plan(sc, "bls-astar")
+    blind = plan(sc.with_preferences(queue_aware=False), "bls-astar")
+    real = evaluate(sc.prepare(), blind.decision, algorithm="queue-blind")
+    assert aware.feasible and blind.feasible and real.feasible
+    assert real.wait_time_s >= aware.wait_time_s + 15 * 60  # measured: ~50 min versus ~9 min
+    assert real.total_time_s >= aware.total_time_s + 15 * 60
+
+
 def test_plan_turkey_karaman_istanbul_with_bls_astar():
     try:
         from evroute.algorithms import planner_class
@@ -356,6 +472,54 @@ def test_country_default_needs_one_to_three_stops():
         country_scenario(**kw, origin="Atlantis")
 
 
+def _reach(net, source: int, forward: bool) -> set[int]:
+    adj, other = (net.out_edges, net.head) if forward else (net.in_edges, net.tail)
+    seen, stack = {source}, [source]
+    while stack:
+        u = stack.pop()
+        for e in adj[u]:
+            if other[e] not in seen:
+                seen.add(other[e])
+                stack.append(other[e])
+    return seen
+
+
+def test_city_grid_gates_are_strongly_connected_to_the_centre():
+    """Highways attach at gates; even when every residential street is one-way a gate must stay in the core."""
+    from evroute.network import NetworkBuilder
+
+    for seed in range(6):
+        for oneway in (0.0, 0.5, 1.0):
+            b = NetworkBuilder()
+            ids, gates = synthetic._city_grid(b, Terrain(60e3, 60e3, seed), 30e3, 30e3, 13, 300.0,
+                                              random.Random(seed), oneway)
+            net = b.build()
+            centre = ids[6][6]
+            assert len(gates) >= 4
+            out, back = _reach(net, centre, True), _reach(net, centre, False)
+            for g in gates:
+                assert g in out and g in back, (seed, oneway, g)
+
+
+def test_country_with_two_cities_is_connected():
+    """Regression: with few cities the single highway used to attach at a one-way boundary node."""
+    for kw in ({"region_km": 200, "nodes_target": 3000, "seed": 0}, {"region_km": 60, "nodes_target": 3000, "seed": 0},
+               {"region_km": 60, "nodes_target": 50, "seed": 2}):
+        sc = country_scenario(n_cities=2, **kw)
+        assert sc.network.is_strongly_connected()
+        assert len({c["node"] for c in sc.meta["cities"]}) == 2
+        assert sc.query.origin != sc.query.destination
+    synthetic._country_cached.cache_clear()
+
+
+def test_random_geometric_collapse_is_reported():
+    """Too sparse/one-way a graph used to leave a single node (and a hung nearest-neighbour query)."""
+    with pytest.raises(ValueError, match="strongly connected component"):
+        random_geometric_scenario(4, seed=0, k=2, oneway_fraction=0.3)
+    with pytest.raises(ValueError, match="at least 4"):
+        random_geometric_scenario(3)
+
+
 def test_random_geometric_scenario():
     a = random_geometric_scenario(1500, seed=4)
     synthetic._rgg_cached.cache_clear()
@@ -411,11 +575,11 @@ def test_corridor_partial_charging_matters():
 class FakeGraph:
     """Minimal stand-in for a networkx (Multi)DiGraph."""
 
-    def __init__(self, directed: bool = True, multi: bool = True) -> None:
+    def __init__(self, directed: bool = True, multi: bool = True, crs: str | None = "epsg:4326") -> None:
         self._nodes: dict = {}
         self._edges: list = []
         self._directed, self._multi = directed, multi
-        self.graph = {"crs": "epsg:4326"}
+        self.graph = {"crs": crs} if crs else {}
 
     def add_node(self, n, **d):
         self._nodes[n] = d
@@ -511,7 +675,7 @@ def test_from_networkx_fake_multidigraph():
 
 
 def test_from_networkx_undirected_projected():
-    G = FakeGraph(directed=False, multi=False)
+    G = FakeGraph(directed=False, multi=False, crs="EPSG:32636")
     for n, (x, y) in enumerate([(0.0, 0.0), (5000.0, 0.0), (5000.0, 4000.0)]):
         G.add_node(n, x=x, y=y)
     G.add_edge(0, 1, length=5200.0, highway="primary")
@@ -522,6 +686,45 @@ def test_from_networkx_undirected_projected():
     assert net.length[e] == pytest.approx(4000.0)
     with pytest.raises(ValueError):
         from_networkx(FakeGraph())
+
+
+def _tiny_metric_graph(crs: str | None) -> FakeGraph:
+    """Three nodes whose metric x/y happen to lie inside the lon/lat range."""
+    G = FakeGraph(directed=False, multi=False, crs=crs)
+    for n, (x, y) in enumerate([(10.0, 10.0), (60.0, 10.0), (60.0, 50.0)]):
+        G.add_node(n, x=x, y=y)
+    G.add_edge(0, 1, highway="secondary")
+    G.add_edge(1, 2, highway="secondary")
+    return G
+
+
+def test_from_networkx_uses_the_declared_crs():
+    # a projected CRS wins over the numeric-range guess ...
+    net = from_networkx(_tiny_metric_graph("EPSG:32636"))
+    assert net.lat is None
+    e = next(e for e in net.edges() if net.tail[e] == 1 and net.head[e] == 2)
+    assert net.length[e] == pytest.approx(40.0)  # metres, not degrees
+    # ... a geographic CRS (OSMnx style, also the old dict form) means lon/lat ...
+    for crs in ("epsg:4326", "EPSG:4326", "{'init': 'epsg:4326'}"):
+        geo = from_networkx(_tiny_metric_graph(crs))
+        assert geo.lat is not None and geo.num_nodes == 3
+        assert geo.length[next(iter(geo.edges()))] > 1000.0  # degrees converted to metres
+    # ... without CRS information the numeric range decides (legacy behaviour)
+    assert from_networkx(_tiny_metric_graph(None)).lat is not None
+    # a geographic CRS with impossible coordinates is an error, not a silent misreading
+    bad = FakeGraph(directed=False, multi=False, crs="epsg:4326")
+    bad.add_node(0, x=500000.0, y=4000000.0)
+    bad.add_node(1, x=500100.0, y=4000000.0)
+    bad.add_edge(0, 1, highway="primary")
+    with pytest.raises(ValueError, match="geographic CRS"):
+        from_networkx(bad)
+    # lat/lon node attributes (projected OSMnx graphs keep them) always win
+    G = FakeGraph(directed=False, multi=False, crs="EPSG:32636")
+    for n, (x, y, la, lo) in enumerate([(5e5, 4.1e6, 37.0, 33.0), (5.01e5, 4.1e6, 37.0, 33.01)]):
+        G.add_node(n, x=x, y=y, lat=la, lon=lo)
+    G.add_edge(0, 1, highway="primary")
+    net = from_networkx(G)
+    assert net.lat is not None and net.lat[0] == pytest.approx(37.0)
 
 
 def test_load_osm_without_osmnx_is_helpful():
@@ -573,9 +776,13 @@ def test_preset_registry():
     names = [p["name"] for p in infos]
     for n in REQUIRED_PRESETS:
         assert n in names
+    assert len(set(names)) == len(names)
     for p in infos:
         assert p["description"] and p["family"]
+        assert len(p["description"]) <= 140 and "\n" not in p["description"]  # one readable line in listings
+        assert isinstance(p["notes"], str)
         json.dumps(p)
+    assert "turkey-istanbul-ankara-rush" in names and PRESETS["corridor"].notes
     assert all(p["family"] == "turkey" for p in list_scenarios("turkey"))
     with pytest.raises(KeyError, match="did you mean"):
         get_scenario("turkey-karaman-istanbull")
@@ -597,6 +804,34 @@ def test_preset_overrides_are_routed():
     w = get_scenario("turkey-istanbul-antalya-winter")
     assert w.conditions.temperature_c == -5.0
     assert w.preferences.value_of_time_per_h == 250.0
+
+
+@pytest.mark.parametrize("preset", ["grid-small", "corridor", "turkey-karaman-istanbul", "country-small",
+                                    "random-geometric"])
+def test_preset_name_override_works_for_every_builder(preset):
+    """Regression: ``name=`` collided with the positional ``name`` and was forwarded to builders without one."""
+    sc = get_scenario(preset, name="my-run")
+    assert sc.name == "my-run" and sc.meta["preset"] == preset and sc.meta["overrides"]["name"] == "my-run"
+    assert get_scenario(preset).name == preset
+
+
+def test_presets_do_not_share_mutable_state():
+    a = get_scenario("turkey-karaman-istanbul")
+    n = len(a.stations)
+    a.stations[0].price_per_kwh = 999.0
+    a.stations.pop()
+    a.conditions.temperature_c = -40.0
+    b = get_scenario("turkey-karaman-istanbul")
+    assert len(b.stations) == n and b.stations[0].price_per_kwh != 999.0 and b.conditions.temperature_c == 18.0
+    assert b.network is a.network  # the (immutable) network is cached and shared
+    c1, c2 = get_scenario("country-small"), get_scenario("country-small")
+    assert c1.stations[0] is not c2.stations[0] and c1.network is c2.network
+
+
+@pytest.mark.parametrize("name", ["corridor", "corridor-winter", "grid-small", "turkey-izmir-erzurum",
+                                  "turkey-karaman-mersin"])
+def test_presets_are_deterministic(name):
+    assert get_scenario(name).to_dict() == get_scenario(name).to_dict()
 
 
 @pytest.mark.parametrize("name", sorted(PRESETS))

@@ -24,7 +24,9 @@ Attribute mapping (OSMnx conventions)
 * node ``x``/``y`` are longitude/latitude for an unprojected graph; if
   ``lat``/``lon`` attributes exist (projected OSMnx graphs keep them), the
   node is projected locally and ``x``/``y`` are ignored; projected graphs
-  without ``lat``/``lon`` are used in their own metric coordinates;
+  without ``lat``/``lon`` are used in their own metric coordinates.  The
+  coordinate system is read from ``G.graph["crs"]`` when present (OSMnx sets
+  it) and otherwise guessed from the numeric range of ``x``/``y``;
 * node ``elevation`` [m] (``ox.elevation.add_node_elevations_*``), default 0;
 * edge ``length`` [m] (else the straight 3-D distance);
 * edge speed: numeric ``speed_kph`` (``ox.add_edge_speeds``) if present,
@@ -186,6 +188,18 @@ def _edges(G: Any) -> Iterable[tuple[Any, Any, Any, dict[str, Any]]]:
             yield u, v, 0, d
 
 
+def _crs_kind(G: Any) -> str | None:
+    """``"geographic"`` or ``"projected"`` from OSMnx's ``G.graph["crs"]``; ``None`` if unknown."""
+    attrs = getattr(G, "graph", None)
+    crs = attrs.get("crs") if isinstance(attrs, dict) else None
+    text = str(crs).strip().lower() if crs is not None else ""
+    if not text:
+        return None
+    if "4326" in text or text in ("wgs84", "wgs 84") or "longlat" in text or "latlong" in text:
+        return "geographic"
+    return "projected"
+
+
 def from_networkx(
     G: Any,
     *,
@@ -217,21 +231,26 @@ def from_networkx(
         raise ValueError("graph has no nodes")
 
     # ------------------------------------------------- coordinates
+    crs = _crs_kind(G)
+
     def latlon(d: dict[str, Any]) -> tuple[float, float] | None:
         if "lat" in d and "lon" in d:
             return float(d["lat"]), float(d["lon"])
         x, y = d.get("x"), d.get("y")
         if x is None or y is None:
             raise ValueError("every node needs x/y (or lat/lon) attributes")
-        if -180.0 <= float(x) <= 180.0 and -90.0 <= float(y) <= 90.0:
-            return float(y), float(x)
-        return None
+        in_range = -180.0 <= float(x) <= 180.0 and -90.0 <= float(y) <= 90.0
+        if crs == "geographic" and not in_range:
+            raise ValueError("the graph declares a geographic CRS but node x/y are outside lon/lat range")
+        if crs == "projected" or not in_range:
+            return None  # metric coordinates are used as they are
+        return float(y), float(x)
 
     geo = [latlon(d) for _, d in nodes]
-    use_geo = all(g is not None for g in geo)
-    if use_geo:
-        lat0 = sum(g[0] for g in geo) / len(geo)  # type: ignore[index]
-        lon0 = sum(g[1] for g in geo) / len(geo)  # type: ignore[index]
+    known = [g for g in geo if g is not None]
+    use_geo = len(known) == len(geo)
+    lat0 = sum(g[0] for g in known) / len(known) if use_geo else 0.0
+    lon0 = sum(g[1] for g in known) / len(known) if use_geo else 0.0
     b = NetworkBuilder()
     index: dict[Any, int] = {}
     for (key, d), g in zip(nodes, geo):

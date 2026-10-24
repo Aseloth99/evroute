@@ -235,6 +235,11 @@ class GridIndex:
     unseen cell can hold a closer point (every point in ring ``r + 1`` is at
     least ``r * cell`` away).  With roughly one point per cell, ``nearest``
     and ``k_nearest`` run in expected constant time.
+
+    The default cell size also copes with coincident and (nearly) collinear
+    point sets.  Rings that cannot contain any point are skipped and every
+    scanned ring is clipped to the bounding box of the occupied cells, so a
+    query far outside the data costs no more than one inside it.
     """
 
     def __init__(self, xs: Sequence[float], ys: Sequence[float], cell: float | None = None) -> None:
@@ -244,9 +249,12 @@ class GridIndex:
         if n == 0:
             raise ValueError("GridIndex needs at least one point")
         if cell is None:
-            w = (max(xs) - min(xs)) or 1.0
-            h = (max(ys) - min(ys)) or 1.0
-            cell = max(math.sqrt(w * h / n), 1e-6)
+            w = max(xs) - min(xs)
+            h = max(ys) - min(ys)
+            span = max(w, h)
+            # ~one point per cell for planar spreads (sqrt(area / n)); the span / n
+            # term keeps the cells sensible when the points are almost collinear
+            cell = max(math.sqrt(w * h / n), span / n, 1e-6) if span > 0.0 else 1.0
         self.cell = float(cell)
         inv = 1.0 / self.cell
         buckets: dict[tuple[int, int], list[int]] = {}
@@ -270,25 +278,32 @@ class GridIndex:
         x0, x1, y0, y1 = self._bounds
         return max(abs(cx - x0), abs(x1 - cx), abs(cy - y0), abs(y1 - cy))
 
-    @staticmethod
-    def _ring(cx: int, cy: int, r: int):
+    def _ring(self, cx: int, cy: int, r: int):
+        """Cells at Chebyshev distance ``r`` from ``(cx, cy)``, clipped to the occupied bounding box."""
         if r == 0:
             yield cx, cy
             return
-        for dx in range(-r, r + 1):
-            yield cx + dx, cy - r
-            yield cx + dx, cy + r
-        for dy in range(-r + 1, r):
-            yield cx - r, cy + dy
-            yield cx + r, cy + dy
+        x0, x1, y0, y1 = self._bounds
+        xlo, xhi = max(cx - r, x0), min(cx + r, x1)
+        for y in (cy - r, cy + r):
+            if y0 <= y <= y1:
+                for x in range(xlo, xhi + 1):
+                    yield x, y
+        ylo, yhi = max(cy - r + 1, y0), min(cy + r - 1, y1)
+        for x in (cx - r, cx + r):
+            if x0 <= x <= x1:
+                for y in range(ylo, yhi + 1):
+                    yield x, y
 
     def k_nearest(self, x: float, y: float, k: int, exclude: int = -1) -> list[tuple[float, int]]:
         """Up to ``k`` nearest points as ``(squared distance, index)``, closest first."""
         xs, ys, buckets = self.xs, self.ys, self.buckets
         cx, cy = self._cell_of(x, y)
         r_max = self._max_ring(cx, cy)
+        x0, x1, y0, y1 = self._bounds
         found: list[tuple[float, int]] = []
-        r = 0
+        # rings closer than the occupied bounding box hold no points: skip them
+        r = max(0, x0 - cx, cx - x1, y0 - cy, cy - y1)
         while r <= r_max:
             for key in self._ring(cx, cy, r):
                 b = buckets.get(key)
@@ -435,7 +450,7 @@ def subnetwork(net: RoadNetwork, keep: Iterable[int]) -> tuple[RoadNetwork, list
         old_to_new[v] = i
     e_map = [-1] * net.num_edges
     tail, head = net.tail, net.head
-    kept_edges = []
+    kept_edges: list[int] = []
     for e in range(net.num_edges):
         if old_to_new[tail[e]] >= 0 and old_to_new[head[e]] >= 0:
             e_map[e] = len(kept_edges)
@@ -739,13 +754,12 @@ def _build_country(
             c.node = add_node(c.x, c.y, c.elevation, name=c.name)
             continue
         spacing = grid_spacing_m * (1.0 + 0.1 * (c.tier - 1))
-        ids = _city_grid(b, terrain, c.x, c.y, m, spacing, grng, oneway_fraction)
+        ids, gates = _city_grid(b, terrain, c.x, c.y, m, spacing, grng, oneway_fraction)
         mid = m // 2
         c.node = ids[mid][mid]
         b.node_name[c.node] = c.name
         c.grid_nodes = m * m
-        bnd = sorted({*ids[0], *ids[-1], *(row[0] for row in ids), *(row[-1] for row in ids)})
-        boundary[c.index] = bnd
+        boundary[c.index] = gates
         grid_members[c.index] = [v for row in ids for v in row]
 
     hrng = random.Random(f"evroute-country-{seed}-highways")
@@ -797,13 +811,18 @@ def _city_grid(
     spacing: float,
     rng: random.Random,
     oneway_fraction: float,
-) -> list[list[int]]:
+) -> tuple[list[list[int]], list[int]]:
     """``m x m`` jittered street grid centred on ``(cx, cy)``.
 
     The middle row and column are ``secondary`` avenues, every fourth line an
     ``urban`` arterial, the rest ``residential``; a fraction of residential
     lines are one-way with alternating directions (Manhattan style) and ~2 %
-    of residential links are missing.  Returns node ids as ``ids[row][col]``.
+    of residential links are missing.  Returns the node ids as
+    ``ids[row][col]`` and the *gates*: the end nodes of the arterial lines.
+    Arterials are always complete and two-way and all cross the centre, so a
+    gate is strongly connected to the centre by construction -- highways
+    attach there (an arbitrary boundary node could sit on a one-way street
+    and cut a whole grid off the strongly connected core).
     """
     half = (m - 1) / 2.0
     add_node, add_edge, add_road = b.add_node, b.add_edge, b.add_road
@@ -853,7 +872,10 @@ def _city_grid(
             if res and rng.random() < 0.02:
                 continue
             link(ids[r][c], ids[r + 1][c], cls, res and oneway_cols[c], c % 2 == 1)
-    return ids
+    arterial = [k for k in range(m) if line_class(k) != "residential"]
+    gates = sorted({ids[k][0] for k in arterial} | {ids[k][-1] for k in arterial}
+                   | {ids[0][k] for k in arterial} | {ids[-1][k] for k in arterial})
+    return ids, gates
 
 
 def _attach(b: NetworkBuilder, city: City, other: City, boundary: list[int] | None) -> int:
@@ -1097,7 +1119,9 @@ def random_geometric_network(
     the drawing planar and road-like.  A fraction ``oneway_fraction`` of the
     links is one-way in a random direction; the result is restricted to the
     largest strongly connected component.  The longest 20 % of the links
-    (rural connections) are ``primary``, the rest ``secondary``.
+    (rural connections) are ``primary``, the rest ``secondary``.  A
+    ``ValueError`` is raised when that component keeps fewer than 20 % of the
+    points (too few points, ``k`` too small or too many one-way links).
     """
     if n_nodes < 4:
         raise ValueError("need at least 4 nodes")
@@ -1138,6 +1162,11 @@ def random_geometric_network(
         else:
             b.add_road(i, j, length=L, speed_kmh=v, road_class=cls)
     net, _ = _restrict_to_lscc(b.build())
+    if net.num_nodes < max(2, int(0.2 * n_nodes)):
+        raise ValueError(
+            f"the largest strongly connected component keeps only {net.num_nodes} of {n_nodes} points; "
+            "use more points, a larger k or a smaller oneway_fraction"
+        )
     return net
 
 
@@ -1150,7 +1179,7 @@ def _scatter_stations(net: RoadNetwork, count: int, seed: str, exclude: set[int]
     rng = random.Random(seed)
     cand = [v for v in range(net.num_nodes) if v not in exclude]
     rng.shuffle(cand)
-    out = []
+    out: list[Station] = []
     for v in cand[:count]:
         u = rng.random()
         if u < 0.25:
@@ -1193,6 +1222,8 @@ def random_geometric_scenario(
     index = GridIndex(net.x, net.y)
     o = index.nearest(0.04 * W, 0.04 * W)
     d = index.nearest(0.96 * W, 0.96 * W)
+    if o == d:
+        raise ValueError("origin and destination snap to the same node; use more points or a larger region")
     count = n_stations if n_stations is not None else max(8, net.num_nodes // 60)
     stations = _scatter_stations(net, count, f"evroute-rgg-{seed}-stations", {o, d})
     cond, pref = split_overrides(overrides)
