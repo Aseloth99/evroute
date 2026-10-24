@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "evroute"
+version = "1.0.0"
+description = "Exact, battery-, queue- and degradation-aware route planning for electric vehicles with charging stations"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Mustafa Açık" }]
+keywords = [
+  "electric vehicles", "route planning", "charging stations", "shortest path",
+  "label setting", "A*", "battery degradation", "operations research",
+]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: OS Independent",
+  "Intended Audience :: Science/Research",
+  "Topic :: Scientific/Engineering",
+]
+# The core is pure Python on purpose: no dependency is needed to plan routes.
+dependencies = []
+
+[project.optional-dependencies]
+plot = ["matplotlib>=3.7"]
+dev = ["pytest>=7", "matplotlib>=3.7"]
+
+[project.scripts]
+evroute = "evroute.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+evroute = ["viz/web/*", "viz/web/**/*", "data/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+markers = ["slow: long-running cross-validation tests"]
