@@ -56,9 +56,10 @@ Label ``A`` *dominates* ``B`` at the same node if ``A`` is no worse in every
 criterion that can influence the future:
 
 * objective ``"time"``: ``t_A <= t_B`` and ``e_A >= e_B``;
-* objective ``"cost"``: ``g_A <= g_B`` and ``e_A >= e_B``, plus
-  ``t_A <= t_B`` when waits are time dependent (``P.time_dependent``),
-  because then the cost of a later stop depends on the arrival time.
+* objective ``"cost"`` with static waits: ``g_A <= g_B`` and ``e_A >= e_B``;
+* objective ``"cost"`` with time-dependent waits (``P.time_dependent``):
+  ``m_A <= m_B``, ``t_A <= t_B`` and ``e_A >= e_B``, where
+  ``m = g - vot * t`` is the money and battery wear spent so far.
 
 This is sound because every transition is monotone: driving maps a larger
 energy to a larger (or equal) energy, ``F_s(y) - F_s(e)`` decreases in
@@ -66,7 +67,14 @@ energy to a larger (or equal) energy, ``F_s(y) - F_s(e)`` decreases in
 non-decreasing (Orda & Rom 1990; guaranteed by
 :class:`~evroute.queueing.WaitProfile`), so starting a stop earlier never
 makes it end later.  With static waits the cost objective is independent of
-the clock, hence the 2-D rule.
+the clock, hence the 2-D rule.  With time-dependent waits FIFO only says
+that ``A`` leaves a queue *no later* than ``B``: if the queue shrinks, ``A``
+may lose its whole head start ``t_B - t_A`` there, and its final cost is
+``m_A + vot * T_A + (future money and wear)`` with ``T_A <= T_B`` -- no
+larger than ``B``'s only if ``m_A <= m_B``.  (Comparing ``g`` instead of
+``m``, as earlier versions did, prunes routes that are cheaper in such
+cases: an earlier label that paid more money can be overtaken in a falling
+queue.)
 
 *One stop per visit.*  A label ``A`` created by charging at ``v`` may
 dominate a label ``B`` that is still allowed to charge at ``v``.  If ``v``
@@ -102,15 +110,25 @@ the destination once the arrival requirement is met.  Consequently
 3. the first popped label at the destination that meets the arrival
    requirement is optimal.
 
-Labels dominated by a settled label are also discarded *before* they are
-pushed (same argument, fewer heap operations).  Nodes from which the
-destination cannot be reached at all are never entered.  BLS-A* moreover
-keeps an *upper bound*: a label whose energy suffices to finish along the
-shortest-driving tree of the potential without charging
-(:func:`completion_energy`) has a key equal to the value of a complete
-route, and labels whose key exceeds the best such value are never pushed.
-They could only be popped after the optimum anyway, so this saves memory and
-heap work without changing the search order or the result.
+Nodes from which the destination cannot be reached at all are never
+entered.  Four devices avoid work without changing the sequence of settled
+labels -- hence neither the route nor the objective value (details and
+proofs in :func:`_label_search`):
+
+* a new label dominated by any label *pushed* earlier at its node is
+  discarded before it is pushed (the dominator is popped first by item 2
+  and then settled, or discarded because of a settled label that dominates
+  both);
+* an *upper bound* -- the value of a complete route -- stops the search
+  from pushing labels with a larger key, which could only be popped after
+  the optimum.  It comes from labels whose energy suffices to finish along
+  the shortest-driving tree of the potential without charging
+  (:func:`completion_energy`; their key *is* the value of such a route) and,
+  with several speed levels, from a quick search restricted to one level
+  per edge (:func:`single_level_options`);
+* a charging parent whose every charged label would be dominated by the
+  same-station labels of an earlier parent is skipped as a whole;
+* heap entries carry the label data; only settled labels are stored.
 
 The potential matters a lot: BLS-A* defaults to the ``"tight"`` potential
 of :class:`AStarPotential`, which couples time (or cost) and energy on the
@@ -132,18 +150,20 @@ piecewise-linear charging model follows Montoya et al. (2017).
 Data layout
 ===========
 
-Labels live in flat parallel lists (``primary``, ``secondary``, ``energy``,
-``node``, ``parent``, ``how``) indexed by a label id; the heap holds only
-``(key, -energy, label_id)``.  ``how`` packs the transition that created a
+Heap entries are ``(key, -energy, number, primary, secondary, node,
+parent, how)``; settled labels are copied into flat parallel lists
+(``primary``, ``secondary``, ``energy``, ``node``, ``parent``, ``how``)
+indexed by a settled-label id.  ``how`` packs the transition that created a
 label: ``edge * n_levels + level`` for a drive, ``-2 - station`` for a
 charging stop (the *charged-here* flag is ``how <= -2``) and ``-1`` for the
 root.  The secondary criterion is the generalised cost for the time
 objective and the trip time for the cost objective.  Per node, the settled
-2-D Pareto set is a *staircase*: sorted lists (primary ascending, energy
-strictly ascending, label id), queried and updated with :mod:`bisect` in
-``O(log n)``.  The 3-D sets (:class:`_Pareto3`) combine projection
-staircases with energy bins holding (primary, secondary) staircases, so a
-query costs a few bisections instead of a scan of thousands of labels.
+and the pushed 2-D Pareto sets are *staircases*: sorted lists (primary
+ascending, energy strictly ascending), queried and updated with
+:mod:`bisect` in ``O(log n)``.  The 3-D sets (:class:`_Pareto3`, over
+money + wear, time and energy) combine projection staircases with energy
+bins holding 2-D staircases, so a query costs a few bisections instead of a
+scan of thousands of labels.
 
 References
 ==========
@@ -215,6 +235,7 @@ __all__ = [
     "fastest_feasible_tree",
     "min_stop_overhead_s",
     "reaches",
+    "single_level_options",
 ]
 
 
@@ -381,46 +402,61 @@ class AStarPotential:
         return cls([0.0 if r else INF for r in ok], [-INF] * n, 0.0, name="none (Dijkstra order)")
 
     @classmethod
-    def basic(cls, P: PreparedScenario, lb: LowerBounds | None = None) -> AStarPotential:
-        """``LowerBounds.h_time`` / ``h_cost`` of :mod:`evroute.search`."""
+    def basic(
+        cls, P: PreparedScenario, lb: LowerBounds | None = None, objective: str | None = None
+    ) -> AStarPotential:
+        """``LowerBounds.h_time`` / ``h_cost`` of :mod:`evroute.search`.
+
+        ``objective`` (default ``P.objective``) selects the time or the cost
+        version; CFP, which always minimises the trip time, asks for ``"time"``.
+        """
+        obj = _objective(P, objective)
         lb = lb or LowerBounds(P)
-        base, rate = _bound_and_rate(P, lb)
+        base, rate = _bound_and_rate(P, lb, obj)
         g = lb.e_goal
         e_lin = [el + g if el < INF else INF for el in lb.energy_lb]
         pot = cls(base, e_lin, rate, name="basic energy-deficit (LowerBounds.h)")
-        pot.need = completion_energy(P, base)
+        pot.need = completion_energy(P, base, obj)
         return pot
 
     @classmethod
-    def tight(cls, P: PreparedScenario, lb: LowerBounds | None = None) -> AStarPotential:
-        """Coupled time-energy bound plus unavoidable-stop overhead (see class docs)."""
+    def tight(
+        cls, P: PreparedScenario, lb: LowerBounds | None = None, objective: str | None = None
+    ) -> AStarPotential:
+        """Coupled time-energy bound plus unavoidable-stop overhead (see class docs).
+
+        ``objective`` as for :meth:`basic`.
+        """
+        obj = _objective(P, objective)
+        time_obj = obj == "time"
         lb = lb or LowerBounds(P)
-        base, rate = _bound_and_rate(P, lb)
-        rate = max(rate, best_rate_per_kwh(P))
+        base, rate = _bound_and_rate(P, lb, obj)
+        rate = max(rate, best_rate_per_kwh(P, obj))
         g = lb.e_goal
         e_basic = [el + g if el < INF else INF for el in lb.energy_lb]
         e_lin = list(e_basic)
         if rate > 0.0 and math.isfinite(rate):
-            idx = 1 if P.objective == "time" else 3
+            idx = 1 if time_obj else 3
             w = [min(o[idx] + rate * o[2] for o in opts) for opts in P.edge_options]
             W = bellman_ford(P.net, lb.target, w, reverse=True)
             for v, (bv, wv) in enumerate(zip(base, W, strict=True)):
                 if bv < INF and wv < INF:
                     e_lin[v] = max(e_basic[v], g + (wv - bv) / rate)
         overhead = min_stop_overhead_s(P)
-        stop = overhead if P.objective == "time" else P.vot_per_s * overhead
+        stop = overhead if time_obj else P.vot_per_s * overhead
         r = P.e_charge_cap - min(P.e_min, P.e_init) + EPS
         inv_r = 1.0 / r if r > 0.0 and P.stations else 0.0
         pot = cls(base, e_lin, rate, stop, e_basic, inv_r, name="tight coupled energy-deficit + stop count")
-        pot.need = completion_energy(P, base)
+        pot.need = completion_energy(P, base, obj)
         return pot
 
 
-def completion_energy(P: PreparedScenario, base: Sequence[float]) -> list[float]:
+def completion_energy(P: PreparedScenario, base: Sequence[float], objective: str | None = None) -> list[float]:
     """Energy that suffices to reach the destination on a ``B``-shortest path.
 
     ``base`` is the reverse shortest-path distance ``B`` (driving time or
-    cost, minimum over speed levels per edge).  A reverse Dijkstra with the
+    cost -- per ``objective``, default ``P.objective`` -- minimum over speed
+    levels per edge).  A reverse Dijkstra with the
     same weights yields a shortest-path tree; along it,
     ``need[v] = max(e_min, need[w] + c)`` with ``need[destination] =
     e_dest_min`` (the regeneration cap never helps a requirement that is
@@ -429,7 +465,7 @@ def completion_energy(P: PreparedScenario, base: Sequence[float]) -> list[float]
     """
     net = P.net
     n = net.num_nodes
-    idx = 1 if P.objective == "time" else 3
+    idx = 1 if _objective(P, objective) == "time" else 3
     weight: list[float] = []
     cons: list[float] = []
     for opts in P.edge_options:
@@ -465,18 +501,19 @@ def completion_energy(P: PreparedScenario, base: Sequence[float]) -> list[float]
     return need
 
 
-def best_rate_per_kwh(P: PreparedScenario) -> float:
+def best_rate_per_kwh(P: PreparedScenario, objective: str | None = None) -> float:
     """Cheapest price of one charged kWh over all stations and usable SoC bins.
 
     Seconds per kWh for the time objective; generalised cost per kWh
     (``vot * seconds + w_money * money + w_deg * wear``, minimised *jointly*
-    per station and bin) for the cost objective.  Only bins that intersect
+    per station and bin) for the cost objective (``objective`` defaults to
+    ``P.objective``).  Only bins that intersect
     the chargeable range ``[min(e_min, e_init), e_charge_cap]`` count.
     Returns 0 without stations.
     """
     lo = min(P.e_min, P.e_init) - EPS
     hi = P.e_charge_cap
-    time_obj = P.objective == "time"
+    time_obj = _objective(P, objective) == "time"
     best = INF
     for f in P.cf:
         eb = f.e_breaks
@@ -491,19 +528,26 @@ def best_rate_per_kwh(P: PreparedScenario) -> float:
     return 0.0 if best == INF else best
 
 
-def _bound_and_rate(P: PreparedScenario, lb: LowerBounds) -> tuple[list[float], float]:
-    if P.objective == "time":
+def _bound_and_rate(P: PreparedScenario, lb: LowerBounds, objective: str | None = None) -> tuple[list[float], float]:
+    if _objective(P, objective) == "time":
         return list(lb.time_lb), lb.sec_per_kwh
     return list(lb.cost_lb), lb.cost_per_kwh
+
+
+def _objective(P: PreparedScenario, objective: str | None) -> str:
+    obj = P.objective if objective is None else objective
+    if obj not in ("time", "cost"):
+        raise ValueError(f"unknown objective {obj!r}")
+    return obj
 
 
 # ======================================================================
 # dominance helpers (3-D case)
 # ======================================================================
 #: Number of energy bins of the 3-D Pareto sets (a power of two).
-_NB3 = 512
+_NB3 = 128
 #: Size from which a 3-D Pareto set switches from a scan to the binned tree.
-_P3_BUILD = 1024
+_P3_BUILD = 64
 
 
 def _stair_add_min(Pv: list[float], Qv: list[float], p: float, q: float) -> bool:
@@ -684,15 +728,22 @@ def _stair_add_pe(Pv: list[float], Ev: list[float], p: float, e: float) -> None:
 # the engine
 # ======================================================================
 class _LabelSearch:
-    """Result of one run of :func:`_label_search` (label store + counters)."""
+    """Result of one run of :func:`_label_search` (settled-label store + counters).
+
+    Only *settled* labels are stored: ``primary[i]``, ``secondary[i]``,
+    ``energy[i]``, ``node[i]``, ``parent[i]`` and ``how[i]`` describe settled
+    label ``i`` and ``parent`` refers to settled labels as well (a label is
+    only ever extended after it was settled).  Labels that are pushed but
+    never settled live in their heap entries only.
+    """
 
     __slots__ = (
-        "bounded", "charged_stair", "energy", "final", "final_key", "generated", "how",
-        "n_levels", "node", "parent", "peak_queue", "primary", "pruned", "pushes",
+        "bounded", "charged_stair", "created", "energy", "final", "final_key", "generated", "how",
+        "n_levels", "node", "parent", "peak_queue", "primary", "pruned", "pruned_parents", "pushes",
         "secondary", "settled", "stair3", "stair_e", "stair_i", "stair_p", "status",
-        "time_objective",
+        "time_objective", "upper",
     )
-    # label store (parallel lists indexed by label id)
+    # settled-label store (parallel lists indexed by settled-label id)
     primary: list[float]
     secondary: list[float]
     energy: list[float]
@@ -712,14 +763,18 @@ class _LabelSearch:
     settled: int
     generated: int
     pushes: int
+    created: int
     pruned: int
+    pruned_parents: int
     bounded: int
     peak_queue: int
     n_levels: int
     time_objective: bool
+    #: best known value of a complete route at the end (``inf`` if none)
+    upper: float
 
     def reconstruct(self, i: int) -> tuple[list[int], list[int], list[ChargeDecision]]:
-        """Edges, levels and charging stops of the partial route of label ``i``."""
+        """Edges, levels and charging stops of the partial route of settled label ``i``."""
         chain = []
         par = self.parent
         while i >= 0:
@@ -747,6 +802,12 @@ class _LabelSearch:
         return [v for v in range(len(chst)) if sets[v] or (chst[v] != v and sets[chst[v]])]
 
 
+#: Relative slack of the parent-level charging test (see :func:`_label_search`);
+#: float rounding of one charged label is below ``4e-16`` times the magnitudes
+#: involved, so ``1e-12`` is a safe margin that never matters in practice.
+_PARENT_RTOL = 1e-12
+
+
 def _label_search(
     P: PreparedScenario,
     *,
@@ -763,6 +824,8 @@ def _label_search(
     max_key: float = INF,
     trace: SearchTrace | None = None,
     fastest_level_only: bool = False,
+    upper_bound: float = INF,
+    edge_options: Sequence[Sequence[tuple[int, float, float, float]]] | None = None,
 ) -> _LabelSearch:
     """Run the battery-constrained label-setting search (see module docs).
 
@@ -770,7 +833,44 @@ def _label_search(
     ``h = 0`` everywhere (Dijkstra order, every node may be entered).
     Nodes with ``h = inf`` are never entered.  With ``goal = -1`` the search
     runs until the queue is empty or the popped key exceeds ``max_key``
-    (tree mode).
+    (tree mode).  ``upper_bound`` is the value of some complete route (e.g.
+    from a run restricted to one speed level): labels whose key exceeds it
+    are never pushed.  ``edge_options`` replaces ``P.edge_options`` (one
+    tuple of ``(level, time, energy, drive_cost)`` options per edge).
+
+    With the cost objective and time-dependent waits the 3-D sets compare
+    ``(m, t, e)`` with ``m = g - vot * t`` (money and wear so far, see the
+    module docs); the projection staircases then hold ``(m, e)``.
+
+    *Performance devices that do not change the result.*  The sequence of
+    settled labels -- hence the returned route, the objective value and the
+    ``settled`` counter -- is exactly the one of the plain algorithm of the
+    module docs; only labels that the plain algorithm would discard anyway
+    are never created:
+
+    1. **Generated sets.**  Besides the settled Pareto set ``S(v)`` every node
+       keeps the Pareto set ``G(v)`` of all labels *pushed* so far.  A new
+       label dominated by a member ``D`` of ``G(v)`` is dropped at once: ``D``
+       was pushed earlier and has a key no larger (module docs, item 2), so
+       it is popped first (ties: larger energy first, then the smaller
+       insertion number of ``D``); when popped, ``D`` is either settled or
+       discarded because a settled label dominates it -- in both cases the
+       new label would be discarded when popped.  The pop-time test against
+       ``S(v)`` is unchanged.
+    2. **Upper bound.**  Labels with ``key > upper_bound`` (relative slack
+       ``1e-10``) are popped, if ever, after a complete route of value
+       ``<= upper_bound`` and cannot be part of the result.
+    3. **Dominated charging parents.**  For one station ``s``, the label
+       charged from a parent ``(t, x)`` to the target ``y`` has the time
+       ``T + F_s(y)`` with ``T = t + wait + setup - F_s(x)`` (and, for the cost
+       objective, the cost ``K + Phi_s(y)`` with a parent constant ``K``).  If
+       an earlier parent at the same station had ``x' <= x`` and ``T' <= T``
+       (``K' <= K``), it generated every target the new parent could reach,
+       each no later (no more expensive): every child of the new parent is
+       dominated by a generated label and the whole parent is skipped
+       (float rounding is covered by a ``1e-12`` relative margin).  Not used
+       with 3-D dominance.
+    4. Heap entries carry the label data; only settled labels are stored.
     """
     net = P.net
     n = net.num_nodes
@@ -791,18 +891,27 @@ def _label_search(
         hb, el, es = potential.base, potential.e_lin, potential.e_stop
         need = potential.need
         rate, stop, inv_r = potential.rate, potential.stop, potential.inv_r
-    # upper bound from "saturated" labels (enough energy to finish on the
-    # B-shortest path without charging): such a label's key is the value of a
-    # complete route, so labels with a larger key can never be part of a
-    # better solution and are not pushed at all
+    # upper bound: the value of a complete route.  It comes from the caller and
+    # from "saturated" labels (enough energy to finish on the B-shortest path
+    # without charging, so their key is the value of a complete route); labels
+    # with a larger key can never be part of a better solution and are not
+    # pushed at all
     ub = ub_lim = INF
+    if upper_bound < INF:
+        ub = upper_bound
+        ub_lim = ub + 1e-10 * abs(ub) + 1e-9
     ceil = math.ceil
 
     # ---------------------------------------------------- adjacency table
     # one tuple (head, d_primary, d_secondary, consumption, how) per edge and
     # speed level; heads that cannot reach the goal are left out entirely
     head = net.head
-    options = [opts[:1] for opts in P.edge_options] if fastest_level_only else P.edge_options
+    if edge_options is not None:
+        options = edge_options
+    elif fastest_level_only:
+        options = [opts[:1] for opts in P.edge_options]
+    else:
+        options = P.edge_options
     adj: list[tuple[tuple[int, float, float, float, int], ...]] = []
     for v in range(n):
         row = []
@@ -825,7 +934,9 @@ def _label_search(
     TY: list[list[float]] = []
     MY: list[list[float]] = []
     SY: list[list[float]] = []
+    PHI: list[float] = []  # magnitude of the y-dependent part of a charged label (rounding margin)
     JMIN: list[int] = []
+    vot, wm, wd = P.vot_per_s, P.w_money, P.w_deg
     if allow_charging:
         for s in range(len(P.stations)):
             f = P.cf[s]
@@ -834,12 +945,19 @@ def _label_search(
             TY.append([f.time_at(y) for y in tg])
             MY.append([f.money_at(y) for y in tg])
             SY.append([f.soh_at(y) for y in tg])
+            if tg:
+                PHI.append(TY[-1][-1] if time_obj else vot * TY[-1][-1] + wm * MY[-1][-1] + wd * SY[-1][-1])
+            else:
+                PHI.append(0.0)
             # targets below the reserve lead to labels that can never move
             JMIN.append(bisect_left(tg, emin_eps))
     cf = P.cf
     setup = P.setup_s
     wait = P.wait_s
-    vot, wm, wd = P.vot_per_s, P.w_money, P.w_deg
+    # dominated-parent staircases per station: x ascending, offset strictly descending
+    KX: list[list[float]] = [[] for _ in range(len(TG))]
+    KO: list[list[float]] = [[] for _ in range(len(TG))]
+    use_kappa = not dom3
 
     # charged labels get their own Pareto set only at multi-station nodes
     chst = list(range(n))
@@ -849,7 +967,7 @@ def _label_search(
             chst[v] = n_sets
             n_sets += 1
 
-    # ---------------------------------------------------- label store
+    # ------------------------------------------- settled-label store
     PRI: list[float] = []
     SEC: list[float] = []
     EN: list[float] = []
@@ -859,15 +977,20 @@ def _label_search(
     PRI_a, SEC_a, EN_a = PRI.append, SEC.append, EN.append
     ND_a, PAR_a, HOW_a = ND.append, PAR.append, HOW.append
 
-    # 2-D staircases (always; in the 3-D case they hold the (primary, energy)
-    # projection and serve as a fast pre-filter) and the 3-D label lists
+    # settled sets S: 2-D staircases (always; in the 3-D case they hold the
+    # (primary, energy) projection and serve as a fast pre-filter) and the 3-D
+    # structures; generated sets G: the same for every pushed label
     SP: list[list[float]] = [[] for _ in range(n_sets)]
     SE: list[list[float]] = [[] for _ in range(n_sets)]
     SI: list[list[int]] = [[] for _ in range(n_sets)]
+    GP: list[list[float]] = [[] for _ in range(n_sets)]
+    GE: list[list[float]] = [[] for _ in range(n_sets)]
     inv_w = _NB3 / cap if cap > 0 else 0.0
     S3: list[_Pareto3] = [_Pareto3(inv_w) for _ in range(n_sets)] if dom3 else []
+    G3: list[_Pareto3] = [_Pareto3(inv_w) for _ in range(n_sets)] if dom3 else []
 
-    heap: list[tuple[float, float, int]] = []
+    # heap entries: (key, -energy, number, primary, secondary, node, parent, how)
+    heap: list[tuple] = []
     heappush, heappop = heapq.heappush, heapq.heappop
     visit = trace.visit if trace is not None else None
 
@@ -876,22 +999,20 @@ def _label_search(
     key0 = INF
     if hb[source] < INF:
         key0 = p0 + (potential(source, e_start) if potential is not None else 0.0)
-    PRI_a(p0)
-    SEC_a(q0)
-    EN_a(e_start)
-    ND_a(source)
-    PAR_a(-1)
-    HOW_a(_ROOT)
-    nl = 1
+    nl = 1  # labels created (the root included)
     pushes = 0
     if key0 < INF:
-        heappush(heap, (key0, -e_start, 0))
+        heappush(heap, (key0, -e_start, 0, p0, q0, source, -1, _ROOT))
         pushes = 1
-        if e_start >= need[source]:
+        GP[source].append(p0 - vot * q0 if dom3 else p0)
+        GE[source].append(e_start)
+        if dom3:
+            G3[source].add(p0 - vot * q0, q0, e_start)
+        if e_start >= need[source] and key0 < ub:
             ub = key0
             ub_lim = ub + 1e-10 * abs(ub) + 1e-9
 
-    settled = generated = pruned = bounded = peak = 0
+    settled = generated = pruned = bounded = peak = parents_skipped = 0
     final = -1
     final_key = INF
     status = "exhausted"
@@ -903,15 +1024,19 @@ def _label_search(
         if nl > max_labels:
             status = "limit"
             break
-        key, _, i = heappop(heap)
+        key, nx, _, p, q, v, par, code = heappop(heap)
         if key > max_key:
             status = "max_key"
             break
-        v = ND[i]
-        x = EN[i]
-        p = PRI[i]
-        q = SEC[i]
+        x = -nx
         if v == goal and x >= egoal_eps:
+            i = settled
+            PRI_a(p)
+            SEC_a(q)
+            EN_a(x)
+            ND_a(v)
+            PAR_a(par)
+            HOW_a(code)
             final, final_key, status = i, key, "goal"
             settled += 1
             if visit is not None:
@@ -919,19 +1044,19 @@ def _label_search(
             break
 
         # ------------------------------ dominance by settled labels at v
-        charged = False
-        sid = v
-        if is_station[v] and HOW[i] <= -2:
-            charged = True
-            sid = chst[v]
+        charged = code <= -2  # created by a charging stop at v
+        sid = chst[v] if charged else v
+        i = settled
         if dom3:
-            if S3[sid].dominated(SP[sid], SE[sid], p, q, x) or (
-                sid != v and S3[v].dominated(SP[v], SE[v], p, q, x)
+            # 3-D dominance on (money + wear so far, time, energy): see _label_search
+            mm = p - vot * q
+            if S3[sid].dominated(SP[sid], SE[sid], mm, q, x) or (
+                sid != v and S3[v].dominated(SP[v], SE[v], mm, q, x)
             ):
                 pruned += 1
                 continue
-            S3[sid].add(p, q, x)
-            _stair_add(SP[sid], SE[sid], SI[sid], p, x, i)
+            S3[sid].add(mm, q, x)
+            _stair_add(SP[sid], SE[sid], SI[sid], mm, x, i)
         else:
             if sid != v:
                 Pf = SP[v]
@@ -959,32 +1084,39 @@ def _label_search(
                 Pv[lo:hi] = [p]
                 Ev[lo:hi] = [x]
                 SI[sid][lo:hi] = [i]
+        PRI_a(p)
+        SEC_a(q)
+        EN_a(x)
+        ND_a(v)
+        PAR_a(par)
+        HOW_a(code)
         settled += 1
         if visit is not None:
             visit(v, key)
 
         # ------------------------------------------------------- drive
         if x >= emin_eps:
-            for w, dp, dq, c, code in adj[v]:
+            for w, dp, dq, c, cd in adj[v]:
                 ne = x - c
                 if ne > cap:
                     ne = cap
                 elif ne < emin_eps:
                     continue
                 np_ = p + dp
-                nq = q + dq
                 generated += 1
+                Gp = GP[w]
                 if dom3:
-                    if S3[w].dominated(SP[w], SE[w], np_, nq, ne):
+                    nq = q + dq
+                    nm = np_ - vot * nq
+                    if G3[w].dominated(Gp, GE[w], nm, nq, ne):
                         pruned += 1
                         continue
+                    j = -1
                 else:
-                    Pw = SP[w]
-                    if Pw:
-                        j = bisect_right(Pw, np_)
-                        if j and SE[w][j - 1] >= ne:
-                            pruned += 1
-                            continue
+                    j = bisect_right(Gp, np_)
+                    if j and GE[w][j - 1] >= ne:
+                        pruned += 1
+                        continue
                 d = el[w] - ne
                 if d > 0.0:
                     k = np_ + hb[w] + d * rate
@@ -999,13 +1131,25 @@ def _label_search(
                 if k > ub_lim:
                     bounded += 1
                     continue
-                PRI_a(np_)
-                SEC_a(nq)
-                EN_a(ne)
-                ND_a(w)
-                PAR_a(i)
-                HOW_a(code)
-                heappush(heap, (k, -ne, nl))
+                if dom3:
+                    heappush(heap, (k, -ne, nl, np_, nq, w, i, cd))
+                    G3[w].add(nm, nq, ne)
+                    _stair_add_pe(Gp, GE[w], nm, ne)
+                else:
+                    heappush(heap, (k, -ne, nl, np_, q + dq, w, i, cd))
+                    # insert (np_, ne) into the generated staircase of w
+                    Ge = GE[w]
+                    if j == len(Gp):
+                        Gp.append(np_)
+                        Ge.append(ne)
+                    else:
+                        lo = bisect_left(Gp, np_, 0, j)
+                        hi = j
+                        L = len(Gp)
+                        while hi < L and Ge[hi] <= ne:
+                            hi += 1
+                        Gp[lo:hi] = [np_]
+                        Ge[lo:hi] = [ne]
                 nl += 1
                 pushes += 1
 
@@ -1017,6 +1161,8 @@ def _label_search(
                 t, g = q, p
             csid = chst[v]
             hv, elv, esv, needv = hb[v], el[v], es[v], need[v]
+            Gc, Gce = GP[csid], GE[csid]
+            Gf, Gfe = GP[v], GE[v]
             for s in station_at[v]:
                 tg = TG[s]
                 L = len(tg)
@@ -1031,8 +1177,25 @@ def _label_search(
                 su = setup[s]
                 ws = wv + su
                 fx = f.time_at(x)
-                mx = f.money_at(x)
-                sx = f.soh_at(x)
+                if time_obj:
+                    mx = sx = 0.0
+                    off = t + ws - fx
+                    marg = _PARENT_RTOL * (abs(t) + ws + fx + PHI[s])
+                else:
+                    mx = f.money_at(x)
+                    sx = f.soh_at(x)
+                    off = g + (vot * (ws - fx) - wm * mx - wd * sx)
+                    marg = _PARENT_RTOL * (abs(g) + vot * (ws + fx) + wm * mx + wd * sx + PHI[s])
+                if use_kappa:
+                    Kx = KX[s]
+                    jk = bisect_right(Kx, x)
+                    if jk and KO[s][jk - 1] <= off - marg:
+                        # an earlier parent at s with less energy and a smaller
+                        # offset dominates every label this one could create
+                        parents_skipped += 1
+                        generated += L - j0
+                        pruned += L - j0
+                        continue
                 for jj in range(j0, L):
                     y = tg[jj]
                     ch = ty[jj] - fx
@@ -1045,22 +1208,21 @@ def _label_search(
                         np_, nq = ng, nt
                     generated += 1
                     if dom3:
-                        if S3[csid].dominated(SP[csid], SE[csid], np_, nq, y) or (
-                            csid != v and S3[v].dominated(SP[v], SE[v], np_, nq, y)
+                        nm = np_ - vot * nq
+                        if G3[csid].dominated(Gc, Gce, nm, nq, y) or (
+                            csid != v and G3[v].dominated(Gf, Gfe, nm, nq, y)
                         ):
                             pruned += 1
                             continue
                     else:
-                        Pw = SP[csid]
-                        if Pw:
-                            j = bisect_right(Pw, np_)
-                            if j and SE[csid][j - 1] >= y:
+                        if Gc:
+                            j = bisect_right(Gc, np_)
+                            if j and Gce[j - 1] >= y:
                                 pruned += 1
                                 continue
                         if csid != v:
-                            Pw = SP[v]
-                            j = bisect_right(Pw, np_)
-                            if j and SE[v][j - 1] >= y:
+                            j = bisect_right(Gf, np_)
+                            if j and Gfe[j - 1] >= y:
                                 pruned += 1
                                 continue
                     d = elv - y
@@ -1077,15 +1239,16 @@ def _label_search(
                     if k > ub_lim:
                         bounded += 1
                         continue
-                    PRI_a(np_)
-                    SEC_a(nq)
-                    EN_a(y)
-                    ND_a(v)
-                    PAR_a(i)
-                    HOW_a(-2 - s)
-                    heappush(heap, (k, -y, nl))
+                    heappush(heap, (k, -y, nl, np_, nq, v, i, -2 - s))
+                    if dom3:
+                        G3[csid].add(nm, nq, y)
+                        _stair_add_pe(Gc, Gce, nm, y)
+                    else:
+                        _stair_add_pe(Gc, Gce, np_, y)
                     nl += 1
                     pushes += 1
+                if use_kappa:
+                    _stair_add_min(Kx, KO[s], x, off + marg)
 
     res = _LabelSearch()
     res.primary, res.secondary, res.energy = PRI, SEC, EN
@@ -1094,11 +1257,13 @@ def _label_search(
     res.stair3 = S3 if dom3 else None
     res.charged_stair = chst
     res.final, res.final_key, res.status = final, final_key, status
-    res.settled, res.generated, res.pushes = settled, generated, pushes
+    res.settled, res.generated, res.pushes, res.created = settled, generated, pushes, nl
     res.pruned, res.bounded = pruned + bounded, bounded
+    res.pruned_parents = parents_skipped
     res.peak_queue = peak
     res.n_levels = nlev
     res.time_objective = time_obj
+    res.upper = ub
     return res
 
 
@@ -1202,6 +1367,57 @@ def fastest_feasible_tree(
     return out
 
 
+def single_level_options(P: PreparedScenario, rate: float = 0.0) -> list[tuple[tuple[int, float, float, float], ...]]:
+    """One speed level per edge: the one minimising ``primary + rate * energy``.
+
+    ``primary`` is the driving time (objective ``"time"``) or the driving cost
+    (``"cost"``); ties go to the faster level.  With ``rate`` = the price of a
+    charged kWh this is the level a driver who buys every kWh at that price
+    would choose -- a good restriction for finding a near-optimal route quickly.
+    """
+    idx = 1 if P.objective == "time" else 3
+    return [(min(opts, key=lambda o: (o[idx] + rate * o[2], o[1])),) for opts in P.edge_options]
+
+
+def _single_level_bound(
+    P: PreparedScenario, pot: AStarPotential, *, targets: str, max_labels: int
+) -> tuple[float, int]:
+    """Upper bound on the optimum from a search restricted to one speed level per edge.
+
+    With several speed levels the Pareto sets grow by orders of magnitude,
+    and so does the number of labels whose key lies *above* the optimum:
+    they are pushed but never popped.  A route restricted to one level per
+    edge (:func:`single_level_options`) is a route of the full problem, so its
+    value bounds the optimum from above and the full search never pushes
+    labels with a larger key (:func:`_label_search`, item 2) -- the settled
+    labels and the result are unchanged.  The restricted search uses the same
+    potential (admissible and consistent on a subgraph as well) and a quarter
+    of the label budget; whatever bound it has found when it stops is used
+    (the "saturated label" bound counts too: it is the value of a route of the
+    full problem).  Returns ``(bound, settled labels of the restricted run)``;
+    ``(inf, 0)`` with a single speed level.
+    """
+    if all(len(o) <= 1 for o in P.edge_options):
+        return INF, 0
+    res = _label_search(
+        P,
+        source=P.origin,
+        e_start=P.e_init,
+        objective=P.objective,
+        goal=P.destination,
+        e_goal=P.e_dest_min,
+        potential=pot,
+        allow_charging=True,
+        targets=targets,
+        max_labels=max(1, max_labels // 4),
+        edge_options=single_level_options(P, pot.rate),
+    )
+    bound = res.upper
+    if res.final >= 0:
+        bound = min(bound, res.primary[res.final])
+    return bound, res.settled
+
+
 # ======================================================================
 # planners
 # ======================================================================
@@ -1252,6 +1468,8 @@ class LabelSettingPlanner(Planner):
         t0 = time.perf_counter()
         pot = self._potential(P)
         t1 = time.perf_counter()
+        ub, ub_settled = _single_level_bound(P, pot, targets=targets, max_labels=max_labels)
+        t_ub = time.perf_counter()
         res = _label_search(
             P,
             source=P.origin,
@@ -1264,6 +1482,7 @@ class LabelSettingPlanner(Planner):
             targets=targets,
             max_labels=max_labels,
             trace=tr,
+            upper_bound=ub,
         )
         t2 = time.perf_counter()
         h0 = pot(P.origin, P.e_init)
@@ -1275,14 +1494,18 @@ class LabelSettingPlanner(Planner):
             pruned=res.pruned,
             peak_queue=res.peak_queue,
             extra={
-                "labels": len(res.node),
+                "labels": res.created,
                 "pruned_by_bound": res.bounded,
+                "pruned_parents": res.pruned_parents,
                 "targets": targets,
                 "potential": pot.name,
-                "dominance": "3d (cost, time, energy)" if (P.objective == "cost" and P.time_dependent) else "2d",
+                "dominance": "3d (money+wear, time, energy)" if (P.objective == "cost" and P.time_dependent) else "2d",
                 "status": res.status,
                 "bounds_s": t1 - t0,
                 "search_s": t2 - t1,
+                "upper_bound": ub if math.isfinite(ub) else None,
+                "upper_bound_s": t_ub - t1,
+                "upper_bound_settled": ub_settled,
                 "h_origin": h0 if math.isfinite(h0) else None,
             },
         )

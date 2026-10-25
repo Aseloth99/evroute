@@ -57,8 +57,9 @@ def dijkstra(
     adj = net.in_edges if reverse else net.out_edges
     other = net.tail if reverse else net.head
     heap = [(0.0, source)]
+    heappop, heappush = heapq.heappop, heapq.heappush  # (local names: hot loop)
     while heap:
-        d, u = heapq.heappop(heap)
+        d, u = heappop(heap)
         if d > dist[u]:
             continue
         if u == target:
@@ -69,7 +70,7 @@ def dijkstra(
             if nd < dist[w]:
                 dist[w] = nd
                 pred[w] = e
-                heapq.heappush(heap, (nd, w))
+                heappush(heap, (nd, w))
     return dist, pred
 
 
@@ -90,8 +91,9 @@ def bellman_ford(
     other = net.tail if reverse else net.head
     q: deque[int] = deque([source])
     in_queue[source] = True
+    popleft, append, appendleft = q.popleft, q.append, q.appendleft  # (local names: hot loop)
     while q:
-        u = q.popleft()
+        u = popleft()
         in_queue[u] = False
         du = dist[u]
         for e in adj[u]:
@@ -104,9 +106,9 @@ def bellman_ford(
                     if relax_count[w] > n:
                         raise ValueError("negative cycle in energy weights")
                     if q and nd < dist[q[0]]:
-                        q.appendleft(w)
+                        appendleft(w)
                     else:
-                        q.append(w)
+                        append(w)
                     in_queue[w] = True
     return dist
 
@@ -141,7 +143,8 @@ def path_from_reverse_pred(net: RoadNetwork, pred: list[int], source: int, targe
 def min_level_weights(prepared: PreparedScenario, which: str) -> list[float]:
     """Per-edge minimum over speed levels of ``time``, ``energy`` or ``cost``."""
     idx = {"time": 1, "energy": 2, "cost": 3}[which]
-    return [min(o[idx] for o in opts) for opts in prepared.edge_options]
+    # (same values as min(o[idx] for o in opts); single-level edges skip the generator)
+    return [opts[0][idx] if len(opts) == 1 else min([o[idx] for o in opts]) for opts in prepared.edge_options]
 
 
 class LowerBounds:

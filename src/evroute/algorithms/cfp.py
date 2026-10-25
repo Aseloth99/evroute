@@ -21,7 +21,10 @@ energy cap (section 4) and the A* keys (section 4).
 
 CFP is a **time-objective** algorithm: with ``P.objective == "cost"`` it still
 minimises the trip time (the evaluator reports the cost of the resulting
-plan).  Use BLS / BLS-A* or the Pareto planner for the generalised cost.
+plan), and its potential and energy cap are always built for the trip time
+(``objective="time"`` of :meth:`~evroute.algorithms.labels.AStarPotential.tight`
+and :func:`~evroute.algorithms.labels.completion_energy`).  Use BLS / BLS-A*
+or the Pareto planner for the generalised cost.
 
 Notation
 ========
@@ -281,10 +284,16 @@ Implementation notes
 
 * A heap entry *is* the label: ``(key, seq, v, s, t0, Fb, b, inn, cost, out,
   parent, how, switch_time)`` with ``Fb = F_s(b)``; dominated labels vanish
-  when popped.  Only settled labels are stored (a record per label for the
-  parent chain, and per node a list of ``(t_feas, B_max, ts, bs)`` for the
-  dominance test, with a cheap scalar pre-filter before the breakpoint
-  comparison).
+  when popped.  Only settled labels are stored: a record per label for the
+  parent chain, and per node a :class:`_SettledSet` for the dominance test --
+  constant labels in a staircase (one bisection), the others sorted by
+  ``B_max`` behind two scalar pre-filters and a first-breakpoint test before
+  the full breakpoint comparison.
+* Drive labels that a settled constant label, or a constant label pushed
+  earlier, dominates are dropped before they are pushed, and with several
+  speed levels a search restricted to one level per edge first provides an
+  upper bound on the optimum (labels with a larger key are never pushed).
+  Neither changes the settled labels or the result (see :func:`_search`).
 * ``how`` is ``edge * n_levels + level`` for a drive, ``-2 - station`` for a
   stop and ``-1`` for the root.
 * Reconstruction walks the parent chain from the incumbent with its time
@@ -297,11 +306,13 @@ Implementation notes
   :mod:`evroute.algorithms.labels` (:class:`~evroute.algorithms.labels.AStarPotential`,
   :func:`~evroute.algorithms.labels.completion_energy`); nodes that cannot
   reach the destination are never entered.
-* Cost: every popped label is compared with the settled labels of its node
-  (two scalar pre-filters, then the breakpoint comparison), so the run time
-  grows roughly quadratically with the number of labels per node.  The energy
+* Cost: a popped non-constant label may still be compared with many settled
+  labels of its node (those passing the scalar pre-filters), so the run time
+  can grow quadratically with the number of such labels per node.  The energy
   cap and the A* key keep those sets small; on large networks or with several
-  speed levels use ``"cfp-astar"`` (identical optimum).
+  speed levels use ``"cfp-astar"`` (identical optimum).  With several speed
+  levels the number of labels can still grow very large (every edge trades
+  time for energy); ``max_labels`` is the safeguard.
 * The pure functions :func:`label_function`, :func:`arrival_time`,
   :func:`dominates`, :func:`switch_candidates` and :func:`evaluate_function`
   are public so that the mathematics can be tested in isolation.
@@ -340,7 +351,7 @@ from __future__ import annotations
 import heapq
 import math
 import time
-from bisect import bisect_right
+from bisect import bisect_left, bisect_right
 from collections.abc import Sequence
 from dataclasses import dataclass
 
@@ -606,6 +617,8 @@ def _dominated_in(labels: list, ts: list[float], bs: list[float], bmax: float, e
     Two scalar necessary conditions (earlier feasible time, at least the same
     final energy) filter the candidates before the breakpoint comparison of
     :func:`dominates`.  Returns ``(dominated, number of full comparisons)``.
+    (Reference implementation; the search uses :class:`_SettledSet`, which
+    gives the same answers in logarithmic time for most queries.)
     """
     tfe = ts[0] + eps
     bme = bmax - eps
@@ -616,6 +629,115 @@ def _dominated_in(labels: list, ts: list[float], bs: list[float], bmax: float, e
             if dominates(ts1, bs1, ts, bs, eps):
                 return True, checks
     return False, checks
+
+
+def _stair_max_add(T: list[float], V: list[float], t: float, v: float) -> None:
+    """Add ``(t, v)`` to a *maximum* staircase (``T`` and ``V`` strictly increasing).
+
+    The staircase answers "largest ``v'`` with ``t' <= t``" by one bisection;
+    points with ``t' >= t`` and ``v' <= v`` are removed (they can never be
+    that answer again), a point dominated by an existing one is not added.
+    """
+    j = bisect_right(T, t)
+    if j and V[j - 1] >= v:
+        return
+    if j == len(T):
+        T.append(t)
+        V.append(v)
+        return
+    lo = bisect_left(T, t, 0, j)
+    hi = j
+    n = len(T)
+    while hi < n and V[hi] <= v:
+        hi += 1
+    T[lo:hi] = [t]
+    V[lo:hi] = [v]
+
+
+class _SettledSet:
+    """Settled labels of one node (or one charged set) for the dominance test.
+
+    Gives exactly the answer of :func:`_dominated_in` over all settled labels,
+    but in ``O(log n)`` for the common cases:
+
+    * *constant* labels (a single breakpoint -- every label that has not
+      charged yet, and labels whose stop cannot add energy) are dominated
+      precisely when ``t_feas' <= t_feas + eps`` and ``B' >= B_max - eps`` (all
+      comparisons of :func:`dominates` reduce to these two), so they are kept
+      in a maximum staircase over ``(t_feas, B)``;
+    * the other labels pass through the two scalar pre-filters of
+      :func:`_dominated_in` first: a staircase over ``(t_feas, B_max)`` tells in
+      one bisection whether *any* of them passes, and the labels sorted by
+      decreasing ``B_max`` limit the scan to those with ``B_max' >= B_max - eps``
+      (the order of the scan does not change the answer).
+    """
+
+    __slots__ = ("cb", "ct", "fb", "fl", "qb", "qt")
+
+    def __init__(self) -> None:
+        self.ct: list[float] = []  # constant labels: max staircase (t_feas, value)
+        self.cb: list[float] = []
+        self.fb: list[float] = []  # other labels sorted by -B_max ...
+        self.fl: list[tuple] = []  # ... as (t_feas, B_max, ts, bs)
+        self.qt: list[float] = []  # max staircase (t_feas, B_max) of the other labels
+        self.qb: list[float] = []
+
+    def dominated(self, ts: list[float], bs: list[float], bmax: float, eps: float) -> tuple[bool, int]:
+        tfe = ts[0] + eps
+        bme = bmax - eps
+        ct = self.ct
+        if ct:
+            j = bisect_right(ct, tfe)
+            if j and self.cb[j - 1] >= bme:
+                return True, 0
+        qt = self.qt
+        if not qt:
+            return False, 0
+        j = bisect_right(qt, tfe)
+        if not j or self.qb[j - 1] < bme:
+            return False, 0
+        checks = 0
+        fl = self.fl
+        t = ts[0]
+        b0e = bs[0] - eps
+        for k in range(bisect_right(self.fb, -bme)):
+            tf1, bm1, ts1, bs1 = fl[k]
+            if tf1 <= tfe:
+                # the first comparison of dominates(): B1 at t_feas of the new
+                # label, evaluated exactly as there (but found by bisection)
+                last1 = len(ts1) - 1
+                j = bisect_right(ts1, t) - 1
+                if j < 0:
+                    j = 0
+                if j == last1 or t <= tf1:
+                    v1 = bs1[j] if t > tf1 else bs1[0]
+                else:
+                    dt = ts1[j + 1] - ts1[j]
+                    v1 = bs1[j + 1] if dt <= 0.0 else bs1[j] + (bs1[j + 1] - bs1[j]) * (t - ts1[j]) / dt
+                if v1 < b0e:
+                    continue
+                checks += 1
+                if dominates(ts1, bs1, ts, bs, eps):
+                    return True, checks
+        return False, checks
+
+    def constant_dominated(self, tf: float, b: float, eps: float) -> bool:
+        """The constant-label part of :meth:`dominated` for ``t_feas = tf``, ``B_max = b``."""
+        ct = self.ct
+        if not ct:
+            return False
+        j = bisect_right(ct, tf + eps)
+        return bool(j) and self.cb[j - 1] >= b - eps
+
+    def add(self, ts: list[float], bs: list[float], bmax: float) -> None:
+        tf = ts[0]
+        if len(ts) == 1:
+            _stair_max_add(self.ct, self.cb, tf, bmax)
+            return
+        k = bisect_right(self.fb, -bmax)
+        self.fb.insert(k, -bmax)
+        self.fl.insert(k, (tf, bmax, ts, bs))
+        _stair_max_add(self.qt, self.qb, tf, bmax)
 
 
 def _search(
@@ -629,12 +751,33 @@ def _search(
     eps: float,
     exact_switching: bool,
     trace: SearchTrace | None,
+    options: Sequence[Sequence[tuple[int, float, float, float]]] | None = None,
+    upper_bound: float = INF,
 ) -> _Outcome:
     """The CFP label-setting search (see the module docs).
 
     The potential is ``h(v, e) = hb[v] + rate * max(0, el[v] - e)``; ``hb[v]``
     is ``inf`` for nodes that cannot reach the destination (they are never
-    entered).  ``el is None`` means ``h = 0`` (Dijkstra order).
+    entered).  ``el is None`` means ``h = 0`` (Dijkstra order).  ``options``
+    replaces ``P.edge_options``; ``upper_bound`` is the trip time of some
+    feasible route.
+
+    *Performance devices that do not change the result* (the settled labels,
+    hence the incumbent and the route, are those of the plain algorithm):
+
+    1. the settled labels of a node live in a :class:`_SettledSet`, which
+       answers the dominance test exactly like a scan over all of them;
+    2. a drive label that is not at the destination is dropped when it is
+       generated if the plain algorithm would discard it when popped: if a
+       *settled* constant label dominates it (settled sets only grow), or if
+       a constant label pushed earlier dominates it *exactly*
+       (``t_feas' <= t_feas``, ``B' >= B_max``) -- that label has a key no
+       larger (Lemma 2) and a smaller sequence number, so it is popped first
+       and is then settled, or discarded in favour of a settled label that
+       dominates both;
+    3. labels with a key above ``upper_bound`` (relative slack ``1e-9``) are
+       never pushed: they cannot lead to a route of at most that time, while
+       the optimum is at most that time.
     """
     net = P.net
     n = net.num_nodes
@@ -655,10 +798,12 @@ def _search(
         need = [x + shift if x < INF else INF for x in need]
     cap_lim = cap - eps
     emin_eps = emin - eps
+    ub_lim = upper_bound + 1e-9 * abs(upper_bound) + 1e-6 if upper_bound < INF else INF
 
     # ---------------------------------------------------- adjacency table
     head = net.head
-    options = P.edge_options
+    if options is None:
+        options = P.edge_options
     adj: list[tuple[tuple[int, float, float, int], ...]] = []
     for v in range(n):
         row = []
@@ -701,7 +846,10 @@ def _search(
         if len(lst) > 1:
             csid[v] = n_sets
             n_sets += 1
-    sets: list[list] = [[] for _ in range(n_sets)]
+    sets: list[_SettledSet] = [_SettledSet() for _ in range(n_sets)]
+    # constant drive labels pushed so far, per node: max staircase (t_feas, B)
+    gen_t: list[list[float]] = [[] for _ in range(n)]
+    gen_b: list[list[float]] = [[] for _ in range(n)]
     records: list[tuple] = []  # settled labels: (t0, Fb, s, parent, how, switch_time)
 
     heap: list[tuple] = []
@@ -725,7 +873,7 @@ def _search(
             if ta < best:
                 best = ta
                 best_rec = (0.0, 0.0, -1, -1, _ROOT, 0.0)
-        if h0 < best:
+        if h0 < best and h0 <= ub_lim:
             push(heap, (h0, 0, origin, -1, 0.0, 0.0, e0, emin, 0.0, Q, -1, _ROOT, 0.0))
             seq = 1
             pushes = 1
@@ -764,17 +912,17 @@ def _search(
         # ------------------------------------ dominance by settled labels
         charged = how <= -2
         sid = csid[v] if charged else v
-        dom, nchk = _dominated_in(sets[v], ts, bs, bmax, eps)
+        dom, nchk = sets[v].dominated(ts, bs, bmax, eps)
         checks_total += nchk
         if not dom and sid != v:
-            dom, nchk = _dominated_in(sets[sid], ts, bs, bmax, eps)
+            dom, nchk = sets[sid].dominated(ts, bs, bmax, eps)
             checks_total += nchk
         if dom:
             pruned += 1
             continue
         i_new = len(records)
         records.append((t0, Fb, s, par, how, sw))
-        sets[sid].append((ts[0], bmax, ts, bs))
+        sets[sid].add(ts, bs, bmax)
         settled += 1
         if visit is not None:
             visit(v, key)
@@ -813,7 +961,7 @@ def _search(
                     k2 = tf2 + (hb[w] + d * rate if d > 0.0 else hb[w])
                 else:
                     k2 = tf2
-                if k2 >= best:
+                if k2 >= best or k2 > ub_lim:
                     pruned_bound += 1
                     continue
                 if w == dest:
@@ -823,9 +971,49 @@ def _search(
                         best_rec = (t02, Fb, s, i_new, code, 0.0)
                         if k2 >= best:
                             continue
+                    const2 = False
+                else:
+                    # (t_feas, B_max) of the new label exactly as label_function()
+                    # will compute them when it is popped (capped at need[w])
+                    oc2 = need[w]
+                    if out2 < oc2:
+                        oc2 = out2
+                    if s < 0:
+                        bm2 = b - cost2
+                        if bm2 > oc2:
+                            bm2 = oc2
+                        const2 = True
+                    else:
+                        xt2 = cap if cap >= b else b
+                        if b >= inn2 - eps:
+                            xlo2 = b
+                        else:
+                            xlo2 = inn2 if inn2 < xt2 else xt2
+                        xs2 = oc2 + cost2
+                        if xs2 > xt2:
+                            xs2 = xt2
+                        if xs2 - xlo2 <= eps:
+                            bm2 = xlo2 - cost2
+                            if bm2 > oc2:
+                                bm2 = oc2
+                            const2 = True
+                        else:
+                            bm2 = xs2 - cost2
+                            const2 = False
+                    if sets[w].constant_dominated(tf2, bm2, eps):
+                        pruned += 1
+                        continue
+                    gt = gen_t[w]
+                    if gt:
+                        j = bisect_right(gt, tf2)
+                        if j and gen_b[w][j - 1] >= bm2:
+                            pruned += 1
+                            continue
                 push(heap, (k2, seq, w, s, t02, Fb, b, inn2, cost2, out2, i_new, code, 0.0))
                 seq += 1
                 pushes += 1
+                if const2:
+                    _stair_max_add(gen_t[w], gen_b[w], tf2, bm2)
 
         # ------------------------------------------------------- stops
         if not charged and is_station[v]:
@@ -869,7 +1057,7 @@ def _search(
                         kn = tfn + (hb[v] + d * rate if d > 0.0 else hb[v])
                     else:
                         kn = tfn
-                    if kn >= best:
+                    if kn >= best or kn > ub_lim:
                         pruned_bound += 1
                         continue
                     if v == dest:
@@ -988,7 +1176,7 @@ class CFPPlanner(Planner):
         (``hb = inf`` elsewhere), no energy term.
         """
         tl, _ = dijkstra(P.net, P.destination, min_level_weights(P, "time"), reverse=True)
-        need = completion_energy(P, tl)
+        need = completion_energy(P, tl, "time")
         return [0.0 if d < INF else INF for d in tl], None, 0.0, need, "none (Dijkstra order)"
 
     def _plan(self, prepared: PreparedScenario, *, trace: bool) -> RoutePlan:
@@ -1004,6 +1192,26 @@ class CFPPlanner(Planner):
         t0 = time.perf_counter()
         hb, el, rate, need, pot_name = self._potential(P)
         t1 = time.perf_counter()
+        ub = INF
+        if any(len(o) > 1 for o in P.edge_options):
+            # Several speed levels: first solve the problem restricted to one level per
+            # edge (the one minimising time + rate * energy).  Its route is a route of the
+            # full problem, so its trip time bounds the optimum and the full search never
+            # pushes labels with a larger key -- the result is unchanged (see _search).
+            pre = _search(
+                P,
+                hb=hb,
+                el=el,
+                rate=rate,
+                need=need,
+                max_labels=max(1, max_labels // 4),
+                eps=eps,
+                exact_switching=exact_switching,
+                trace=None,
+                options=[(min(o, key=lambda x: (x[1] + rate * x[2], x[1])),) for o in P.edge_options],
+            )
+            ub = pre.best
+        t_ub = time.perf_counter()
         res = _search(
             P,
             hb=hb,
@@ -1014,6 +1222,7 @@ class CFPPlanner(Planner):
             eps=eps,
             exact_switching=exact_switching,
             trace=tr,
+            upper_bound=ub,
         )
         t2 = time.perf_counter()
         proven = res.status == "optimal" and (exact_switching or _textbook_is_exact(P))
@@ -1039,6 +1248,8 @@ class CFPPlanner(Planner):
                 "planned_objective": "time",
                 "bounds_s": t1 - t0,
                 "search_s": t2 - t1,
+                "upper_bound": ub if math.isfinite(ub) else None,
+                "upper_bound_s": t_ub - t1,
             },
         )
         if res.best_rec is None:
@@ -1103,10 +1314,10 @@ class CFPAStarPlanner(CFPPlanner):
         if kind == "basic":
             g = lb.e_goal
             el = [e + g if e < INF else INF for e in lb.energy_lb]
-            need = completion_energy(P, lb.time_lb)
+            need = completion_energy(P, lb.time_lb, "time")
             return list(lb.time_lb), el, lb.sec_per_kwh, need, "basic energy-deficit (LowerBounds.h_time)"
         if kind == "tight":
-            pot = AStarPotential.tight(P, lb)
+            pot = AStarPotential.tight(P, lb, "time")
             return list(pot.base), list(pot.e_lin), pot.rate, list(pot.need), "tight coupled energy-deficit"
         raise ValueError(f"unknown potential {kind!r}; choose from ('tight', 'basic')")
 
