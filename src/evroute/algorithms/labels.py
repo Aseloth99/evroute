@@ -172,8 +172,8 @@ parent, how)``; settled labels are copied into flat parallel lists
 indexed by a settled-label id.  ``how`` packs the transition that created a
 label: ``edge * n_levels + level`` for a drive, ``-2 - station`` for a
 charging stop (a label with ``how = -2 - s`` may not stop at ``s`` next)
-and ``-1`` for the root.  The secondary criterion is the generalised cost for the time
-objective and the trip time for the cost objective.  Per node, the settled
+and ``-1`` for the root.  The secondary criterion is the generalised cost
+for the time objective and the trip time for the cost objective.  Per node, the settled
 and the pushed 2-D Pareto sets are *staircases*: sorted lists (primary
 ascending, energy strictly ascending), queried and updated with
 :mod:`bisect` in ``O(log n)``.  The 3-D sets (:class:`_Pareto3`, over

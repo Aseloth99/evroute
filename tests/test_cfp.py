@@ -871,14 +871,20 @@ def test_label_limit_is_reported():
     P = sc.prepare()
     p = _run(P, "cfp", max_labels=20)
     assert p.stats.extra["status"] == "limit"
-    assert not p.feasible and "label limit" in p.message
+    assert not p.feasible and "label limit" in p.message and "does not mean that no route exists" in p.message
     full = _run(P, "cfp")
     assert full.stats.extra["status"] == "optimal"
-    # a limit hit after the first incumbent still returns that (feasible) plan
-    q = _run(P, "cfp-astar", max_labels=60)
-    if q.feasible:
+    # several speed levels: the search restricted to one level per edge finishes within a
+    # quarter of the budget, the full search does not -- its route is returned, flagged
+    P = grid_scenario(9, 9, seed=21, initial_soc=0.3, speed_factors=(1.0, 0.9, 0.8)).prepare()
+    full = _run(P, "cfp")
+    assert full.stats.extra["status"] == "optimal" and full.stats.pushes > 1200
+    for name in ("cfp", "cfp-astar"):
+        q = _run(P, name, max_labels=1200)
+        assert q.stats.extra["status"] == "limit" and q.stats.extra["upper_bound_status"] == "optimal"
         _assert_consistent(q)
-        assert "not proven" in q.message and q.total_time_s >= full.total_time_s - 1e-6
+        assert "label limit" in q.message and "not proven" in q.message
+        assert q.total_time_s >= full.total_time_s - 1e-6
 
 
 def test_trace_stats_and_registry():

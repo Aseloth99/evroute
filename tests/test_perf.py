@@ -15,6 +15,7 @@ from __future__ import annotations
 import math
 import random
 import time
+from itertools import pairwise
 
 import pytest
 
@@ -111,11 +112,11 @@ def _set_dominated_reference(labels, ts, bs, eps=1e-9):
     pts = sorted({t for t1, _ in fun for t in t1} | set(ts))
     pts = [t for t in pts if t >= ts[0]]
     probe = set(pts) | {pts[-1] + 1e4}
-    for a, b in zip(pts, pts[1:]):
+    for a, b in pairwise(pts):
         probe.update((a + (b - a) * f for f in (1e-7, 0.25, 0.5, 0.75, 1 - 1e-7)))
     for t1, b1 in fun:
         knots = sorted(set(t1) | set(ts))
-        for a, b in zip(knots, knots[1:]):
+        for a, b in pairwise(knots):
             d1 = evaluate_function(t1, b1, a) - evaluate_function(ts, bs, a)
             d2 = evaluate_function(t1, b1, b) - evaluate_function(ts, bs, b)
             if d1 * d2 < 0.0:
@@ -155,7 +156,7 @@ def test_cfp_envelope_answers_like_the_definition():
                 env.add(ts, bs)
                 assert env.dominated(ts, bs, 1e-9)[0]
                 T, V = env.T, env.V
-                assert all(a <= b for a, b in zip(T, T[1:])) and all(a <= b for a, b in zip(V, V[1:]))
+                assert all(a <= b for a, b in pairwise(T)) and all(a <= b for a, b in pairwise(V))
                 fun = [(t1, b1) for t1, b1 in labels if len(t1) > 1]
                 for t in (rng.uniform(T[0], T[-1] + 50.0) for _ in range(10) if T):
                     want = max(evaluate_function(t1, b1, t) for t1, b1 in fun if t1[0] <= t)
@@ -267,3 +268,50 @@ def test_eco_speeds_on_the_turkey_preset_stay_fast():
     assert p.stats.settled <= 400_000, p.stats.settled
     assert p.stats.pushes <= 1_000_000, p.stats.pushes  # ~2 million before the bound and the generated sets
     assert dt < 60.0, dt  # about 3 s on a laptop
+
+
+# ----------------------------------------------------------------------------
+# 4. CFP with several speed levels (set dominance, bound for the Dijkstra order)
+# ----------------------------------------------------------------------------
+
+
+def test_cfp_with_three_speed_levels_is_exact_and_fast():
+    """Regression: with several speed levels CFP compared labels one by one and its label
+    sets exploded (Karaman -> Mersin: 43 000 settled labels and 13 s for ``"cfp"``; on
+    Karaman -> Istanbul it ran out of labels and reported no route).  With the set
+    dominance of :class:`~evroute.algorithms.cfp._Envelope` both variants are exact and
+    small: the optimum is never above the grid optimum of BLS-A*."""
+    from evroute.generators.presets import get_scenario
+
+    P = get_scenario("turkey-karaman-mersin", speed_factors=ECO).prepare()
+    bls = _run(P, "bls-astar")
+    assert bls.feasible
+    for name, budget in (("cfp", 8_000), ("cfp-astar", 8_000)):
+        t0 = time.perf_counter()
+        p = _run(P, name)
+        dt = time.perf_counter() - t0
+        assert p.feasible and p.stats.extra["status"] == "optimal", (name, p.message)
+        assert p.stats.extra["optimality"] == "proven"
+        assert p.total_time_s <= bls.total_time_s + 1e-6
+        assert p.internal_objective == pytest.approx(p.total_time_s, abs=1e-6)
+        assert p.stats.settled <= budget, (name, p.stats.settled)
+        assert dt < 10.0, (name, dt)  # about 0.1 s on a laptop
+
+
+@pytest.mark.slow
+def test_cfp_with_three_speed_levels_on_karaman_istanbul():
+    """The motivating instance of the regression above (about 15 / 20 s on a laptop)."""
+    from evroute.generators.presets import get_scenario
+
+    P = get_scenario("turkey-karaman-istanbul", speed_factors=ECO).prepare()
+    bls = _run(P, "bls-astar")
+    one = _run(get_scenario("turkey-karaman-istanbul").prepare(), "cfp-astar")
+    for name in ("cfp-astar", "cfp"):
+        t0 = time.perf_counter()
+        p = _run(P, name)
+        dt = time.perf_counter() - t0
+        assert p.feasible and p.stats.extra["status"] == "optimal", (name, p.message)
+        assert p.total_time_s <= bls.total_time_s + 1e-6
+        assert p.total_time_s <= one.total_time_s + 1e-6  # more speed levels never hurt
+        assert p.stats.settled <= 500_000, (name, p.stats.settled)
+        assert dt < 120.0, (name, dt)

@@ -1922,13 +1922,6 @@ def test_bug4_zero_reserve_float_noise_is_not_stranding():
     _assert_clean(tally)
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "BUG-4 (CFP): cfp.py raises the reserve and the goal energy to a private floor of 10*eps = 1e-8 kWh "
-    "when they are zero ('floor = 10.0 * eps', 'emin = max(P.e_min, floor)', 'egoal = max(P.e_dest_min, "
-    "floor)' at the top of _search, cfp.py:903-907 at the time of writing), a workaround for the old "
-    "strict evaluator; the route that ends at -9e-16 kWh (feasible for evaluate() and every other planner) "
-    "is rejected and CFP reports that no route exists. Remove the floor now that evaluate() tolerates float "
-    "noise"))
 def test_bug4_cfp_zero_reserve_float_noise_is_not_stranding():
     P = _zero_reserve_knife_edge().prepare()
     assert evaluate(P, PlanDecision([0], [0])).feasible
@@ -1937,13 +1930,6 @@ def test_bug4_cfp_zero_reserve_float_noise_is_not_stranding():
         assert p.feasible, (name, p.message)
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "BUG-4 (robustness): the Monte Carlo kernel still strands at any negative energy "
-    "(robustness.py:427 'strand = [drives and m < 0.0 ...]' in _Outcomes.events, and robustness.py:720 "
-    "'stranded = out.min_kwh[r] < 0.0' in the _verify cross-check) while evaluate() strands below -TOL_KWH: "
-    "a zero-noise replay of the knife-edge plan counts 3/3 strandings, and verify=True raises "
-    "'Monte Carlo replay disagrees with evaluate(): stranding, feasibility'. Both comparisons should be "
-    "'< -TOL_KWH'"))
 def test_bug4_monte_carlo_zero_reserve_float_noise_is_not_stranding():
     P = _zero_reserve_knife_edge().prepare()
     p = _run(P, "bls")

@@ -424,7 +424,7 @@ class _Outcomes:
         """
         drives = self.drives
         lim_r, lim_a = reserve_kwh - TOL_KWH, arrival_kwh - TOL_KWH
-        strand = [drives and m < 0.0 for m in self.min_kwh]
+        strand = [drives and m < -TOL_KWH for m in self.min_kwh]
         breach = [s or (drives and m < lim_r) for s, m in zip(strand, self.min_kwh)]
         short = [s or a < lim_a for s, a in zip(strand, self.arrival_kwh)]
         return strand, breach, short
@@ -717,7 +717,7 @@ def _verify(
             low = min(min(ev.node_energy_depart[:-1]), min(ev.node_energy_arrive[1:]))
         else:
             low = ev.node_energy_depart[-1]
-        stranded = out.min_kwh[r] < 0.0
+        stranded = out.min_kwh[r] < -TOL_KWH
         checks = {
             "kernel determinism": rec.time_s[r] == out.time_s[r] and rec.arrival_kwh[r] == out.arrival_kwh[r],
             "total time": same(ev.total_time_s, out.time_s[r]),

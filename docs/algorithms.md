@@ -15,9 +15,9 @@ moves $(v, x) \to (v, y)$, $y > x$, in $W_j(t) + \sigma_j + F_j(y) - F_j(x)$
 seconds where $t$ is the arrival time.  A route is a path in this (infinite)
 state graph from $(o, x_0)$ to some $(d, x)$ with $x \ge e_d$.
 
-*Consecutive stops.*  Several stops may follow each other at one node, at
-pairwise *consecutive-distinct* stations: after a stop at $j$ the next stop
-at the same node uses a station $j' \ne j$ (e.g. a fast DC charger up to the
+*Consecutive stops.*  Several stops may follow each other at one node as
+long as consecutive stops use different stations: after a stop at $j$ the
+next stop at the same node uses a station $j' \ne j$ (e.g. a fast DC charger up to the
 energy where its power falls below that of an AC charger next to it, then the
 AC charger -- cheaper, or even faster near full in the cold).  A second stop
 at $j$ itself is never useful: it pays $W_j + \sigma_j$ again for energy the
@@ -54,7 +54,11 @@ label has $g_1 \le g_2$, i.e. a key no larger.  BLS/BLS-A\* are therefore exact
 for the cost objective with time-dependent waits as well (regression
 `test_cost_dominance_with_time_dependent_waits_regression`, where the rule
 $(g, t, x)$ discards the slow cheap first charge of the optimum); the Pareto
-planner keeps $(t, M, W, x)$ apart and agrees.
+planner keeps $(t, M, W, x)$ apart and agrees.  The price is effort: the 3-D
+label sets are much larger than the 2-D ones (with three speed levels, or on
+the Turkey presets with their time-dependent queues, the cost objective can
+exceed the default label budget), so `max_labels` and the A\* potential matter
+more there.
 
 ## 2. BLS — battery-constrained label setting
 
@@ -163,25 +167,59 @@ positive: $\Phi$ is quasi-convex on the piece and attains its maximum at an
 endpoint.  $\square$
 
 **Key.** Let $t_{feas}$ be the earliest time at which $B$ is defined.  The
-queue key is $t_{feas}$ (CFP) or $t_{feas} + h(v, B(t_{feas}))$ (CFP-A\*).
-Because $B'(t) \le P_{\max}/3600$ and $h$ falls by at most $3600/P_{\max}$ per
-kWh, $t + h(v, B(t))$ is non-decreasing in $t$; the minimum over the whole
-label is attained at $t_{feas}$, so the key is a valid lower bound.
+queue key is $t_{feas}$ (CFP) or $\min_t\, t + h(v, B(t))$ (CFP-A\*).
+Because $B'(t) \le P_{\max}/3600$ and the linear part of $h$ falls by at most
+$3600/P_{\max}$ per kWh, $t + h(v, B(t))$ is non-decreasing in $t$ as long as
+the stop-count term of the tight potential (Section 3) is constant; it can
+drop inside a label (the vehicle keeps charging in a stop it has already paid
+for), so the minimum is taken over $t_{feas}$ and the times at which $B$ reaches
+the energies where the count drops (closed form via $F_j$).  The key is a
+lower bound for every route of the label and never decreases along edge
+extensions and stops (consistency of $h$).  With several speed levels CFP
+first solves the problem restricted to one level per edge; its trip time is an
+upper bound, and no label whose lower bound exceeds it is pushed (plain CFP
+keeps the Dijkstra order and uses the CFP-A\* key only for this test).
 
-**Dominance.** Label 1 dominates label 2 at the same node if
-$B_1(t) \ge B_2(t)$ for all $t$ — checked exactly on the union of their
-breakpoints and at $t\to\infty$ (both are linear in between).
+**Dominance (set dominance).** A label is discarded when the *upper envelope*
+of the settled labels of its node lies above it: $\max_{L'} B_{L'}(t) \ge
+B(t)$ for all $t \ge t_{feas}$, the maximum over the settled labels with
+$t_{feas}(L') \le t$ -- checked exactly on the union of the breakpoints
+(everything is piecewise linear).  It is exact: a route of the label that
+leaves the node at time $t$ is matched by the settled label attaining the
+envelope at $t$, whose extensions and (by Lemma 3) stop labels were generated.
+Single-label dominance ($B_1 \ge B_2$ everywhere) is the special case of a
+one-label envelope and was used by earlier versions; with several speed
+levels it is far too weak (the labels of one charging event that drove
+different speed levels are each best somewhere: fast ones early, frugal ones
+once the charger saturates), and CFP ran out of labels on the Turkey presets.
+Constant labels (not charged yet) are compared one by one through a
+staircase, the others through their envelope.
+
+*Consecutive stops.*  A label created by a stop at $j$ spawns stop labels for
+every other station of its node (the model of Section 1); one settled set per
+node stays exact because a label charging at $j$ that attains the envelope
+covers any stop at $j$ by simply continuing to charge.  At the origin with
+$x_0 < \underline e$ and several stations, a stop label below the reserve is
+*extended*: its function, dominance tests and switch candidates start where
+charging starts (it may switch below the reserve, but drive only from
+$t_{feas}$ on).
 
 **Theorem 3.** With static waits, CFP returns a fastest feasible route with
-arbitrary (continuous) charging amounts.  *Sketch:* every label operation is
-monotone and distributes over pointwise maxima, so pruning dominated labels is
-safe; by Lemma 3 creating station labels at breakpoints loses nothing; keys
-are lower bounds that never decrease along label extensions; the first final
-entry popped at $d$ is therefore optimal.  $\square$
+arbitrary (continuous) charging amounts (consecutive stops at different
+stations of a node included).  *Sketch:* every label operation is monotone
+and distributes over pointwise maxima, so pruning labels below the envelope
+of settled labels is safe; by Lemma 3 creating station labels at breakpoints
+loses nothing; keys are lower bounds that never decrease along label
+extensions; the first final entry popped at $d$ is therefore optimal.
+$\square$ (`cfp.py` extends the candidate set by upward power breaks and
+wait-profile knots, which makes the result exact for non-concave charging
+curves and FIFO time-dependent waits as well.)
 
-With time-dependent waits CFP evaluates $W_{j'}$ at each concrete switch time;
-plans remain consistent with the evaluator but optimality is no longer
-guaranteed (Lemma 3's derivative gains a $-W'$ term).
+With time-dependent waits CFP evaluates $W_{j'}$ at each concrete switch time.
+With the breakpoints alone (option `exact_switching=False`) plans remain
+consistent with the evaluator but optimality is no longer guaranteed
+(Lemma 3's derivative gains a $-W'$ term); the default candidate set adds the
+knots of the wait profiles, between which $W'$ is constant, and is exact.
 
 ## 5. Multi-criteria search
 
@@ -189,9 +227,22 @@ guaranteed (Lemma 3's derivative gains a $-W'$ term).
 $(t, \mathcal M, \mathcal W)$ with energy as an additional maximised resource,
 and prunes labels whose optimistic completion vector (current values plus
 consistent lower bounds) is dominated by the destination front, as in NAMOA\*
-(Mandow & Pérez de la Cruz, 2010).  The fastest front member equals BLS with
-objective time and the cheapest equals BLS with objective cost — both
-equalities are asserted in the test-suite.
+(Mandow & Pérez de la Cruz, 2010).  The transitions (including consecutive
+stops) are those of BLS.  The fastest front member equals BLS with objective
+time and the cheapest equals BLS with objective cost — both equalities are
+asserted in the test-suite.
+
+*Front maintenance in floating point.*  In exact arithmetic a new front
+member never dominates an existing one (members arrive in order of time).
+Routes with mathematically equal trip times reach the destination with times
+that differ in the last bits, and the goal-directed keys are monotone only up
+to a few ulps, so an equally fast but cheaper route can arrive right after a
+member it dominates.  A new route is therefore rejected if a member covers it
+(money and wear within a relative $10^{-9}$, time implicit), and otherwise
+removes every member it covers (time within a relative $10^{-12}$, money and
+wear within $10^{-9}$); vectors equal within these tolerances keep the member
+that arrived first.  The front is thus mutually non-dominated up to rounding
+(BUG-1 of the cross-validation suite).
 
 ## 6. Baselines
 

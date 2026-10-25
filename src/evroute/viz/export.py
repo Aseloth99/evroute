@@ -457,7 +457,7 @@ def _stations_block(P: PreparedScenario) -> list[dict[str, Any]]:
 
 
 def _network_block(scenario: Scenario) -> dict[str, Any]:
-    d = scenario.network.to_dict()
+    d = scenario.network.to_dict(compact=True)
     return d
 
 

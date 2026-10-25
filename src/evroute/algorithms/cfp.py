@@ -1067,17 +1067,13 @@ def _search(
             j += 1
     nlev = len(P.speed_factors)
     Q = P.capacity
-    # A zero reserve would let exact "just enough" plans arrive with exactly 0 kWh, where float
-    # rounding (-1e-15) trips the evaluator's strict "battery empty" test: keep a hair of margin.
-    floor = 10.0 * eps
-    emin = max(P.e_min, floor)
+    # (no private floor for a zero reserve: "just enough" plans may arrive with -1e-15 kWh of
+    # float noise, which the evaluator tolerates like every other energy check, TOL_KWH)
+    emin = P.e_min
     cap = P.e_charge_cap
     e0 = P.e_init
-    egoal = max(P.e_dest_min, floor)
+    egoal = P.e_dest_min
     origin, dest = P.origin, P.destination
-    shift = max(emin - P.e_min, egoal - P.e_dest_min)
-    if shift > 0.0:  # raising every reserve by at most `shift` raises the energy needed by at most that
-        need = [x + shift if x < INF else INF for x in need]
     cap_lim = cap - eps
     emin_eps = emin - eps
     ub_lim = upper_bound + 1e-9 * abs(upper_bound) + 1e-6 if upper_bound < INF else INF
