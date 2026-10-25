@@ -9,7 +9,7 @@ Examples::
     evroute viz turkey-karaman-istanbul -o karaman-istanbul.html
     evroute viz corridor -o corridor.html --no-animate --lang en
     evroute serve turkey-karaman-istanbul
-    evroute animate turkey-karaman-istanbul -o race.gif
+    evroute gallery -o docs/img
     evroute robustness turkey-izmir-erzurum -n 2000
     evroute experiments --quick -o results/
 
@@ -224,14 +224,12 @@ def cmd_serve(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_animate(args: argparse.Namespace) -> int:
-    from .algorithms import plan
-    from .viz.animate import animate_route
+def cmd_gallery(args: argparse.Namespace) -> int:
+    from .viz.figures import make_gallery
 
-    sc = _load_scenario(args)
-    plans = [plan(sc, a, trace=True) for a in _algorithms(args.algorithms)]
-    out = animate_route(sc, [p for p in plans if p.edges], args.out, animate=not args.no_animate, fps=args.fps)
-    print(f"wrote {out}")
+    paths = make_gallery(args.out, quick=args.quick)
+    for p in paths or []:
+        print(f"wrote {p}")
     return 0
 
 
@@ -324,13 +322,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--open", action="store_true", help="open a browser tab")
     p.set_defaults(func=cmd_serve)
 
-    p = sub.add_parser("animate", help="render a GIF/MP4 animation with matplotlib")
-    _scenario_options(p)
-    p.add_argument("-o", "--out", default="evroute.gif")
-    p.add_argument("--algorithms", default="greedy,bls-astar,cfp")
-    p.add_argument("--fps", type=int, default=20)
-    p.add_argument("--no-animate", action="store_true", help="write a static PNG instead")
-    p.set_defaults(func=cmd_animate)
+    p = sub.add_parser("gallery", help="render the seaborn figure gallery (needs matplotlib + seaborn)")
+    p.add_argument("-o", "--out", default="docs/img")
+    p.add_argument("--quick", action="store_true", help="fewer instances, faster")
+    p.set_defaults(func=cmd_gallery)
 
     p = sub.add_parser("figures", help="publication figures for one scenario")
     _scenario_options(p)
