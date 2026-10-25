@@ -722,7 +722,7 @@ def test_edge_cases():
         _assert_consistent(p)
         assert p.stops[0].position == 0 and p.stops[0].energy_out_kwh >= P.e_min - 1e-6
     assert _run(P, "cfp").total_time_s <= _run(P, "bls").total_time_s + 1e-6
-    # several stations at one node: one stop per visit, best station chosen
+    # several stations at one node: consecutive stops only at different stations
     sc = grid_scenario(8, 8, seed=7, n_stations=8, initial_soc=0.25)
     for i, s in enumerate(list(sc.stations[:4])):
         sc.stations.append(
@@ -741,8 +741,8 @@ def test_edge_cases():
     _assert_consistent(c)
     assert c.total_time_s == pytest.approx(a.total_time_s, abs=1e-6)
     assert c.total_time_s <= bls.total_time_s + 1e-6
-    positions = [s.position for s in c.stops]
-    assert len(positions) == len(set(positions))  # at most one stop per node visit
+    for s1, s2 in zip(c.stops, c.stops[1:]):  # never the same station twice in a row
+        assert s1.position != s2.position or s1.station != s2.station
 
 
 def test_best_station_at_a_multi_station_node_is_chosen():
@@ -757,6 +757,57 @@ def test_best_station_at_a_multi_station_node_is_chosen():
         only_fast = _run(_line_scenario(lengths, [fast], 0.30).prepare(), "cfp")
         assert p.total_time_s == pytest.approx(only_fast.total_time_s, abs=1e-6)
         assert p.total_time_s <= _run(sc.prepare(), "bls-astar").total_time_s + 1e-6
+
+
+def _two_station_node(*, at_origin, setup_s, soc, reserve, temperature_c, vehicle):
+    """O --30 km--> S --150 km--> D (``at_origin``: O = S, O --200 km--> D); the station node
+    hosts a DC charger (50 kW, or 150 kW at the origin) and a 22 kW AC charger."""
+    b = NetworkBuilder()
+    o = b.add_node(0.0, 0.0, 100.0)
+    s = o if at_origin else b.add_node(30e3, 0.0, 100.0)
+    d = b.add_node(200e3 if at_origin else 180e3, 0.0, 100.0)
+    if not at_origin:
+        b.add_road(o, s, road_class="motorway")
+    b.add_road(s, d, road_class="motorway")
+    st = [Station(0, s, 150.0 if at_origin else 50.0, "DC", price_per_kwh=0.75, setup_s=setup_s, daily_sessions=1.0),
+          Station(1, s, 22.0, "AC", price_per_kwh=0.30, setup_s=setup_s, daily_sessions=1.0)]
+    return Scenario("two stations at one node", b.build(), st, vehicle, Query(o, d, soc, 9 * 3600.0),
+                    Conditions(temperature_c=temperature_c, preconditioning=False),
+                    Preferences(queue_aware=False, charge_step_soc=0.05, reserve_soc=reserve, min_arrival_soc=0.1))
+
+
+@pytest.mark.parametrize("case", ["derated DC then AC", "AC below the reserve then DC"])
+def test_consecutive_stops_at_one_node(case):
+    """Regression (BUG-3 of the cross-validation suite): a stop may be followed by a stop at
+    *another* station of the same node.  (a) Cold compact50, no preconditioning: the derated
+    DC charger is faster than the AC charger up to 37.4 kWh and slower above, so with zero
+    setup the fastest route charges DC to 37.4 kWh and then AC to the just-enough energy.
+    (b) A DC curve that is slow (15 kW) below 20 % SoC, 5 % initial charge, 25 % reserve and
+    both chargers at the origin: AC to 20 % -- below the reserve, which the evaluator checks on
+    arrival and departure only -- then DC (an *extended* label, module docs)."""
+    if case.startswith("derated"):
+        sc = _two_station_node(at_origin=False, setup_s=0.0, soc=0.3, reserve=0.1, temperature_c=-10.0,
+                               vehicle=get_vehicle("compact50"))
+        first = 37.4
+    else:
+        veh = dataclasses.replace(get_vehicle("compact50"), dc_curve=ChargingCurve((0.0, 0.2, 1.0), (15.0, 150.0)),
+                                  ac_max_kw=22.0)
+        sc = _two_station_node(at_origin=True, setup_s=30.0, soc=0.05, reserve=0.25, temperature_c=20.0, vehicle=veh)
+        first = 10.0
+    P = sc.prepare()
+    one = min(_run(sc.with_(stations=[s]).prepare(), "cfp").total_time_s for s in sc.stations)
+    fine = _run(sc.with_preferences(charge_step_soc=0.005).prepare(), "bls-astar")
+    for name in ("cfp", "cfp-astar"):
+        p = _run(P, name)
+        _assert_consistent(p)
+        assert [(s.position, s.station) for s in p.stops] == [(p.stops[0].position, 0 if first > 20 else 1),
+                                                              (p.stops[0].position, 1 if first > 20 else 0)]
+        assert p.stops[0].energy_out_kwh == pytest.approx(first, abs=1e-6)
+        assert p.total_time_s < one - 10.0  # the best single stop is clearly slower
+        assert p.total_time_s <= fine.total_time_s + 1e-6  # and no grid route beats the continuous optimum
+        assert fine.total_time_s - p.total_time_s < 5.0
+    if not case.startswith("derated"):
+        assert p.stops[0].energy_out_kwh < P.e_min < p.stops[1].energy_out_kwh
 
 
 def _regen_line(length_last, soc=1.0):

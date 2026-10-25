@@ -158,23 +158,44 @@ class RoadNetwork:
         return sum(self.length[e] for e in edge_path)
 
     # -------------------------------------------------------- serialisation
-    def to_dict(self) -> dict[str, Any]:
+    def to_dict(self, *, compact: bool = False) -> dict[str, Any]:
+        """JSON-ready copy of the network.
+
+        By default it is *lossless*: floats are stored unrounded, and the
+        :mod:`json` module writes ``repr(float)``, the shortest text that reads
+        back as the same double, so ``from_dict(json.loads(json.dumps(d)))``
+        reproduces every coordinate, elevation and length bit for bit -- and
+        with them every edge time and energy, plan and objective value.
+
+        ``compact=True`` rounds coordinates and elevations to 1 cm, lengths to
+        1 mm and latitudes/longitudes to 1e-6 degrees (about a quarter less
+        text on the Turkey network).  That is meant for display payloads only:
+        a network rebuilt from a compact dict is a slightly *different*
+        instance (edge energies move by ~1e-6 relative, so a just-feasible
+        plan can become infeasible).
+        """
+
+        def num(values: list[float], digits: int) -> list[float]:
+            if compact:
+                return [round(float(v), digits) for v in values]
+            return [float(v) for v in values]
+
         d: dict[str, Any] = {
-            "x": [round(v, 2) for v in self.x],
-            "y": [round(v, 2) for v in self.y],
-            "elevation": [round(v, 2) for v in self.elevation],
-            "tail": list(self.tail),
-            "head": list(self.head),
-            "length": [round(v, 3) for v in self.length],
-            "speed_kmh": list(self.speed_kmh),
+            "x": num(self.x, 2),
+            "y": num(self.y, 2),
+            "elevation": num(self.elevation, 2),
+            "tail": [int(v) for v in self.tail],
+            "head": [int(v) for v in self.head],
+            "length": num(self.length, 3),
+            "speed_kmh": [float(v) for v in self.speed_kmh],
             "road_class": list(self.road_class),
-            "twin": list(self.twin),
+            "twin": [int(v) for v in self.twin],
             "node_name": {str(k): v for k, v in self.node_name.items()},
             "edge_name": {str(k): v for k, v in self.edge_name.items()},
         }
         if self.lat is not None and self.lon is not None:
-            d["lat"] = [round(v, 6) for v in self.lat]
-            d["lon"] = [round(v, 6) for v in self.lon]
+            d["lat"] = num(self.lat, 6)
+            d["lon"] = num(self.lon, 6)
         return d
 
     @classmethod

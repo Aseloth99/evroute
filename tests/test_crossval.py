@@ -38,10 +38,13 @@ Invariants (ids as in ``tests/fuzz_report.md``)
   adaptive targets never strand more often; a plan made with a safety factor
   stays feasible (and no slower) under nominal consumption, and a larger
   safety factor never yields a faster optimum.
-* **I8 serialisation** -- scenario and plan round trips through JSON.
+* **I8 serialisation** -- scenario and plan round trips through JSON are lossless:
+  the reloaded scenario prepares bit-identical data and every plan (also one
+  rebuilt from ``RoutePlan.to_dict`` alone) replays to the identical objective.
 * **I9 brute force** -- on tiny digraphs (<= 7 nodes, <= 2 stations) an
-  exhaustive enumeration of walks (each node at most twice) x stops x targets
-  equals BLS, and its Pareto front equals the planner's front.
+  exhaustive enumeration of walks (each node at most twice) x up to two stops
+  per node visit x targets equals BLS, its Pareto front equals the planner's
+  front, and CFP is no slower than the best one-stop-per-visit route.
 * **I10 metamorphic** -- relabelling nodes/edges/stations, duplicating a
   station, adding a slower parallel road, moving the departure without
   queues: same optimum; more initial energy, an extra station, an extra speed
@@ -58,11 +61,12 @@ matrix of odd inputs (cap below the reserve, empty battery, origin =
 destination, unreachable destination, departure after 24 h, ...) must not
 crash or disagree.
 
-Tiers: the default (fast) tier checks ~180 instances in about 20 s;
+Tiers: the default (fast) tier checks ~180 instances in about 20 s (budget: 90 s);
 ``@pytest.mark.slow`` checks thousands but runs only when asked for (``pytest
 -m slow tests/test_crossval.py`` or ``EVROUTE_SLOW=1``).  Bugs found by this
-suite are kept as ``xfail(strict=True)`` reproductions at the end of the file;
-``tests/fuzz_report.md`` summarises a full run.
+suite are kept as ``xfail(strict=True)`` reproductions at the end of the file
+(and become plain regression tests once fixed); ``tests/fuzz_report.md``
+summarises the suite, its coverage and the bugs.
 """
 
 from __future__ import annotations
@@ -97,6 +101,9 @@ PEAKS_H = (7.5, 8.5, 12.0, 16.5, 17.5, 18.0, 23.6, 0.2)
 HEURISTICS = ("naive", "greedy", "station-graph", "genetic")
 #: absolute tolerance for "never slower than" comparisons [s]
 TOL_S = 1e-6
+#: relative trip-time difference below which two Pareto routes are equally fast
+#: (``pareto.TIE_RTOL``: goal-directed keys are monotone only up to a few ulps)
+TIE_RTOL = 1e-12
 
 
 def _close(a: float, b: float, rel: float = 1e-9, abs_: float = 1e-9) -> bool:
@@ -367,7 +374,7 @@ INVARIANTS = {
     "I5": "no feasible plan of any planner beats cfp on time",
     "I6": "feasibility agreement of the exact planners",
     "I7": "robustness: zero-noise MC = evaluate, adaptive <= same-target, safety factor",
-    "I8": "serialisation round trips",
+    "I8": "lossless serialisation round trips",
     "I9": "brute force on tiny digraphs (BLS value and Pareto front)",
     "I10": "metamorphic relations (relabel, duplicate, monotone easier instances)",
     "I11": "no feasible neighbour of an exact optimum is better (mutation search)",
@@ -476,7 +483,7 @@ def replay(P: PreparedScenario, d: PlanDecision) -> tuple[bool, float, float]:
                 ok = False
             a, k = d.edges[i], d.levels[i]
             c = P.edge_energy[k][a]
-            if e - c < 0.0:
+            if e - c < -TOL_KWH:  # empty battery, same float tolerance as the reserve (BUG-4)
                 ok = False
             e = min(e - c, P.capacity)
             t += P.edge_time[k][a]
@@ -923,14 +930,16 @@ def check_pareto(tally: Tally, sc: Scenario, P: PreparedScenario, par: RoutePlan
     tally.check("I4", bool(members) and all(m.feasible for m in members),
                 lambda: f"pareto: infeasible or missing members {tag}")
     crit = [_crit(m) for m in members]
-    # a member dominated by a *faster* one is a real bug; one dominated by a member
-    # with the same trip time up to rounding is the known BUG-1 (xfail test below)
+    # a member dominated by one that is faster or equally fast up to float noise in the time
+    # (pareto.TIE_RTOL = 1e-12; BUG-1, fixed) is a bug.  A "dominator" that is slower by more
+    # than that (but within the 1e-9 slack of _dominates_tol) is a distinct route with a real,
+    # if tiny, time difference: both belong on the front.
     pairs = [(i, j) for i in range(len(crit)) for j in range(len(crit)) if i != j and _dominates_tol(crit[i], crit[j])]
-    bad = [(i, j) for i, j in pairs if crit[i][0] < crit[j][0] - 1e-9 * abs(crit[j][0]) - 1e-9]
+    bad = [(i, j) for i, j in pairs if crit[i][0] <= crit[j][0] * (1.0 + TIE_RTOL)]
     tally.check("I4", not bad, lambda: f"pareto: member {bad[0][0]} {crit[bad[0][0]]} dominates "
                                        f"{bad[0][1]} {crit[bad[0][1]]} {tag}")
     if len(pairs) > len(bad):
-        tally.skip("I4 member dominated by an equally fast member (xfail BUG-1)")
+        tally.skip("I4 member next to a member up to 1e-9 slower but cheaper (distinct times)")
     other = "cost" if P.objective == "time" else "time"
     Po = sc.with_preferences(objective=other).prepare()
     ref = {P.objective: plans.get("bls-astar"), other: _run(Po, "bls-astar", max_labels=budget.bls_labels)}
@@ -950,11 +959,14 @@ def check_pareto(tally: Tally, sc: Scenario, P: PreparedScenario, par: RoutePlan
     for m in rng.sample(members, min(4, len(members))):
         x = _crit(m)
         for _ in range(budget.mutations // 4):
-            q = evaluate(P, neighbours(P, m.decision, rng, False))
+            nd = neighbours(P, m.decision, rng, False)
+            if nd is None:
+                break
+            q = evaluate(P, nd)
             if q.feasible and _one_stop_per_visit(q):
                 y = _crit(q)
-                # (a neighbour that equals another member up to rounding is BUG-1 territory)
-                tally.check("I11", not (_dominates_tol(y, x, 1e-7) and y[0] < x[0] - 1e-9 * x[0] - 1e-9),
+                # (equally fast up to float noise counts since BUG-1 is fixed)
+                tally.check("I11", not (_dominates_tol(y, x, 1e-7) and y[0] <= x[0] * (1.0 + TIE_RTOL)),
                             lambda: f"pareto member {x} dominated by a feasible neighbour {y} {tag}")
     # one documented option variant per instance
     variant = random.Random(f"evroute-crossval-pareto-{tag}").choice(("martins", "epsilon", "two-criteria"))
@@ -965,7 +977,7 @@ def check_pareto(tally: Tally, sc: Scenario, P: PreparedScenario, par: RoutePlan
             a = sorted(_crit(m) for m in alt.alternatives)
             ok = len(a) == len(crit) and all(all(_close(x, y, 1e-9, 1e-9) for x, y in zip(u, v, strict=True))
                                              for u, v in zip(a, sorted(crit), strict=True))
-            # (equal-time ties may be resolved differently: BUG-1)
+            # (members 1e-12..1e-9 apart in time may be resolved differently)
             tally.check("I4", ok or len(pairs) > len(bad),
                         lambda: f"pareto goal_directed=False front ({len(a)}) != goal-directed front ({len(crit)}) {tag}")
     elif variant == "epsilon":
@@ -1051,12 +1063,22 @@ def check_safety_factor(tally: Tally, sc: Scenario, inst: Instance, tag: str, bu
 # I8: serialisation
 # =============================================================================
 def check_serialisation(tally: Tally, sc: Scenario, P: PreparedScenario, plans: dict, tag: str) -> None:
+    """I8: ``Scenario`` JSON is lossless (BUG-2) and ``RoutePlan.to_dict`` keeps the objective.
+
+    The reloaded scenario must prepare bit-identical edge data, every plan's decision must
+    replay to the *same* objective on it, and the decision rebuilt from the plan's JSON
+    (edges, levels, stops) must replay identically too -- including knife-edge plans."""
     d1 = json.loads(json.dumps(sc.to_dict(), allow_nan=False))
     sc1 = Scenario.from_dict(d1)
     d2 = json.loads(json.dumps(sc1.to_dict(), allow_nan=False))
     tally.check("I8", d1 == d2, lambda: f"Scenario.to_dict is not a fixed point after one round trip {tag}")
-    sc2 = Scenario.from_dict(d2)
-    P1, P2 = sc1.prepare(), sc2.prepare()
+    tally.check("I8", d1 == sc.to_dict(), lambda: f"Scenario.to_dict is not JSON-normal (tuples, keys) {tag}")
+    P1 = sc1.prepare()
+    tally.check("I8", sc1.network == sc.network and P1.edge_time == P.edge_time and P1.edge_energy == P.edge_energy
+                and P1.target_grid == P.target_grid and P1.cf == P.cf
+                and all(getattr(P1, a) == getattr(P, a) for a in ("capacity", "e_min", "e_charge_cap", "e_init",
+                                                                    "e_dest_min", "setup_s", "speed_factors")),
+                lambda: f"the reloaded scenario prepares different data {tag}")
     for name in ("bls-astar", "cfp-astar", "greedy"):
         p = plans.get(name)
         if p is None or not p.feasible:
@@ -1068,22 +1090,21 @@ def check_serialisation(tally: Tally, sc: Scenario, P: PreparedScenario, plans: 
                     and back["feasible"] and back["generalized_cost"] == p.generalized_cost
                     and back["internal_objective"] == p.internal_objective,
                     lambda: f"{name}: RoutePlan.to_dict changes the objective {tag}")
-        # the same decision on the round-tripped scenario: second generation is bit-identical
-        r1, r2 = evaluate(P1, p.decision), evaluate(P2, p.decision)
-        tally.check("I8", r1.feasible == r2.feasible and r1.objective_value == r2.objective_value,
-                    lambda: f"{name}: second round trip changes the objective {tag}")
-        # the network is stored rounded (cm / mm): values move slightly (xfail BUG-2)
-        dev = abs(r1.objective_value - p.objective_value) / max(abs(p.objective_value), 1e-9)
-        tally.note("serialisation drift (relative)", dev)
-        margin = min(min(p.node_energy_arrive[1:], default=INF) - P.e_min,
-                     min(p.node_energy_depart[:-1], default=INF) - P.e_min,
-                     p.node_energy_arrive[-1] - P.e_dest_min)
-        if margin < 1e-3 and not r1.feasible:
-            tally.skip("I8 knife-edge plan infeasible after the lossy round trip (xfail BUG-2)")
-            continue
-        tally.check("I8", r1.feasible == p.feasible and dev <= 1e-4,
+        # the same decision on the round-tripped scenario is bit-identical (no BUG-2 drift)
+        r1 = evaluate(P1, p.decision)
+        tally.check("I8", r1.feasible == p.feasible and r1.objective_value == p.objective_value
+                    and r1.total_time_s == p.total_time_s and r1.generalized_cost == p.generalized_cost,
                     lambda: f"{name}: objective after round trip {r1.objective_value!r} vs {p.objective_value!r} "
-                            f"feasible={r1.feasible} {tag}")
+                            f"feasible={r1.feasible} ({r1.message}) {tag}")
+        # ... and so is the decision rebuilt from the plan's JSON alone (a stop's target is its
+        # departure energy; a no-op stop above the cap is re-targeted at the cap, also a no-op)
+        rebuilt = PlanDecision(back["edges"], back["levels"],
+                               [ChargeDecision(s["position"], s["station"], min(s["energy_out_kwh"], P1.e_charge_cap))
+                                for s in back["stops"]])
+        r2 = evaluate(P1, rebuilt)
+        tally.check("I8", r2.feasible and r2.objective_value == p.objective_value,
+                    lambda: f"{name}: decision rebuilt from RoutePlan JSON replays to {r2.objective_value!r} "
+                            f"vs {p.objective_value!r} ({r2.message}) {tag}")
 
 
 # =============================================================================
@@ -1256,13 +1277,20 @@ def _detour(P: PreparedScenario, u: int, v: int, avoid: int, rng: random.Random)
     return path[::-1]
 
 
-def neighbours(P: PreparedScenario, d: PlanDecision, rng: random.Random, continuous: bool):
-    """Random small modifications of a decision (targets, stops, speed levels, detours)."""
+#: attempts to draw an applicable modification before :func:`neighbours` gives up
+NEIGHBOUR_ATTEMPTS = 64
+
+
+def neighbours(P: PreparedScenario, d: PlanDecision, rng: random.Random, continuous: bool) -> PlanDecision | None:
+    """Random small modifications of a decision (targets, stops, speed levels, detours).
+
+    ``None`` if no modification applies (e.g. an edge-less plan without an origin station,
+    or one road, no station and one speed level) -- the draw used to loop forever there."""
     net = P.net
     nodes = [P.origin] + [net.head[a] for a in d.edges]
     charges = list(d.charges)
     nlev = len(P.speed_factors)
-    while True:
+    for _ in range(NEIGHBOUR_ATTEMPTS):
         op = rng.choice(("target", "target", "drop", "add", "move", "level", "detour"))
         edges, levels, ch = list(d.edges), list(d.levels), list(charges)
         if op == "target" and ch:
@@ -1309,6 +1337,7 @@ def neighbours(P: PreparedScenario, d: PlanDecision, rng: random.Random, continu
         else:
             continue
         return PlanDecision(edges, levels, ch)
+    return None
 
 
 def check_local_optimality(tally: Tally, P: PreparedScenario, plan: RoutePlan, name: str, seed: int, n: int) -> None:
@@ -1319,6 +1348,9 @@ def check_local_optimality(tally: Tally, P: PreparedScenario, plan: RoutePlan, n
     better = []
     for _ in range(n):
         nd = neighbours(P, plan.decision, rng, cont)
+        if nd is None:
+            tally.skip("I11 (no applicable modification)")
+            break
         q = evaluate(P, nd)
         if not q.feasible or not _one_stop_per_visit(q):
             continue
@@ -1350,8 +1382,8 @@ def _oracle_targets(P: PreparedScenario, s: int) -> list[float]:
 def brute_force(P: PreparedScenario, max_visits: int = 2, max_steps: int = 400_000, stops_per_visit: int = 1):
     """Exhaustive enumeration of walks (every node at most ``max_visits`` times)
     with at most ``stops_per_visit`` stops (at distinct stations) per node visit
-    to any target of the target set.  ``stops_per_visit=1`` is the model of the
-    planners; 2 probes the gap of BUG-3.
+    to any target of the target set.  ``stops_per_visit=1`` is the model of CFP;
+    BLS, BLS-A* and Pareto allow consecutive stops at different stations (BUG-3).
 
     Returns ``(best objective, best decision, (t, money, wear) of the
     non-dominated complete routes)``; ``None`` if the enumeration needs more
@@ -1385,12 +1417,16 @@ def brute_force(P: PreparedScenario, max_visits: int = 2, max_steps: int = 400_0
                 best[1] = PlanDecision(list(edges), list(levels), [ChargeDecision(*c) for c in charges])
             return  # every continuation is dominated by this complete route
         if len(used_here) < stops_per_visit:
-            for s in P.station_at.get(v, []):
+            here = P.station_at.get(v, [])
+            # a stop may end below the reserve only if another stop can follow at this node
+            # (the evaluator checks the reserve on arrival and departure, not between stops)
+            low_ok = len(used_here) + 1 < min(stops_per_visit, len(here))
+            for s in here:
                 if s in used_here:
                     continue
                 f = P.cf[s]
                 for y in tg[s]:
-                    if y > e + eps and y >= P.e_min - eps:
+                    if y > e + eps and (low_ok or y >= P.e_min - eps):
                         wt = P.wait_s(s, t)
                         ch = f.time_at(y) - f.time_at(e)
                         rec(v, t + (wt + P.setup_s[s] + ch), g + P.charge_cost(s, e, y, ch, wt),
@@ -1436,12 +1472,17 @@ def _front_of(points: list[tuple[float, float, float]]) -> list[tuple[float, flo
 
 
 def check_brute_force(inst: Instance, tally: Tally | None = None) -> Tally:
-    """I9 (and I1/I2 on the tiny instance)."""
+    """I9 (and I1/I2 on the tiny instance).
+
+    BLS, BLS-A* and Pareto model consecutive stops at different stations of one node
+    (BUG-3, fixed for them), so their oracle enumerates up to two stops per node visit (a
+    tiny digraph has at most two stations); CFP is compared with the one-stop enumeration
+    (BUG-3 is open for CFP)."""
     tally = tally if tally is not None else Tally()
     sc = build_scenario(inst)
     P = sc.prepare()
     tag = inst.describe()
-    res = brute_force(P)
+    res = brute_force(P, stops_per_visit=2)
     if res is None:
         tally.skip("brute force (too many walks)")
         return tally
@@ -1471,14 +1512,21 @@ def check_brute_force(inst: Instance, tally: Tally | None = None) -> Tally:
         rp = evaluate(P, decision)
         tally.check("I9", rp.feasible and _close(rp.objective_value, value, 1e-9, 1e-9),
                     lambda: f"oracle decision replays to {rp.objective_value!r} != {value!r} {tag}")
-    # continuous charging can only help
+    # continuous charging can only help (against routes with one stop per node visit)
     c = _run(P, "cfp")
     check_plan(tally, P, c, f"cfp {tag}", True)
     if value < INF:
         tally.check("I9", c.feasible, lambda: f"cfp infeasible, brute force {value!r} {tag}")
         if P.objective == "time" and c.feasible:
-            tally.check("I9", c.total_time_s <= value + TOL_S, lambda: f"cfp {c.total_time_s!r} > brute force "
-                                                                      f"{value!r} {tag}")
+            one = value
+            if len({ch.position for ch in decision.charges}) < len(decision.charges):
+                r1 = brute_force(P)  # the optimum needs two stops at one node: enumerate one-stop routes
+                one = r1[0] if r1 is not None else None
+            if one is None:
+                tally.skip("I9 cfp (one-stop enumeration too large)")
+            else:
+                tally.check("I9", c.total_time_s <= one + TOL_S,
+                            lambda: f"cfp {c.total_time_s!r} > one-stop brute force {one!r} {tag}")
     # the Pareto front
     par = _run(P, "pareto")
     if value == INF:
@@ -1642,8 +1690,27 @@ def test_edge_cases_are_consistent(base):
     assert tally.checked["I1"] > 100
 
 
+def test_neighbour_search_terminates_without_applicable_moves():
+    """Regression: :func:`neighbours` drew operations in a ``while True`` loop and hung
+    forever when none applies -- an edge-less plan (origin = destination) without an origin
+    station, or one road without a detour, station or second speed level.  The fast tier
+    never finished (``test_edge_cases_are_consistent``)."""
+    sc = _single_edge(0.5)
+    P = sc.prepare()
+    assert P.net.num_edges == 2 and not P.stations and len(P.speed_factors) == 1
+    for cont in (False, True):
+        assert neighbours(P, PlanDecision([0], [0]), random.Random(1), cont) is None
+        P0 = sc.with_query(destination=sc.query.origin).prepare()
+        assert neighbours(P0, PlanDecision([], []), random.Random(1), cont) is None
+    # with a choice of speed levels a neighbour exists again
+    P2 = sc.with_preferences(speed_factors=(1.0, 0.8)).prepare()
+    nd = neighbours(P2, PlanDecision([0], [0]), random.Random(1), False)
+    assert nd is not None and nd.edges == [0] and nd.levels in ([0], [1])
+
+
 # =============================================================================
-# bugs found by this suite: strict xfail reproductions (remove the marker when fixed)
+# bugs found by this suite: strict xfail reproductions (remove the marker when fixed,
+# keep the test as a regression test; see tests/fuzz_report.md)
 # =============================================================================
 #: BUG-1 instances (fast-profile sampler of an earlier revision, frozen here)
 BUG1_TIE = Instance(seed=322, generator="corridor", size=(189.3, 20.0, False), vehicle="van75", temperature_c=-13.3,
@@ -1660,34 +1727,49 @@ BUG1_ULP = Instance(seed=6, generator="grid", size=(3, 7, 14146.7, 8), vehicle="
                     origin_station=True, stacked=2)
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "BUG-1: pareto.py keeps front members that a later member dominates. Lemma 3 (a new member never "
-    "dominates an existing one) assumes exact key order, but routes with mathematically equal trip times "
-    "(e.g. the same energy charged at two stations with the same charging power) reach the destination via "
-    "different float sums, and the goal-directed keys t + T_lb(v) are not monotone in floating point; the "
-    "dearer route is popped first and stays in the front (_pareto_search, front entry around pareto.py:779-789)"))
 def test_bug1_pareto_front_keeps_a_dominated_member():
+    """Regression for BUG-1 (fixed in pareto.py): the front kept members that a later member
+    dominates.  Lemma 3 (a new member never dominates an existing one) assumes exact key order,
+    but routes with mathematically equal trip times (e.g. the same energy charged at two
+    stations with the same charging power) reach the destination via different float sums,
+    and the goal-directed keys t + T_lb(v) are not monotone in floating point; the dearer
+    route was popped first and stayed in the front."""
     P = build_scenario(BUG1_TIE).prepare()
     crit = [_crit(m) for m in _run(P, "pareto").alternatives]
     dominated = [(i, j) for i in range(len(crit)) for j in range(len(crit)) if i != j and _dominates(crit[i], crit[j])]
     assert not dominated, [(crit[i], crit[j]) for i, j in dominated]
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "BUG-1 (rounding variant): a member 1 ulp faster but 0.77 EUR dearer than another member with the same "
-    "wear survives, although both routes have the same trip time in exact arithmetic"))
+def test_bug1_pareto_front_differs_from_brute_force_on_a_tie():
+    """Regression for BUG-1 on a 3-node brute-force instance (slow tier, tiny seed 10850): two
+    AC stations with the same 22 kW power; charging more at the origin and less at the second
+    station gives the same trip time in exact arithmetic, but 19897.815888469413 s vs ...417 s
+    in floating point -- the member that is 1 ulp faster but 6.26 EUR dearer stayed in the
+    front, which the exhaustive enumeration (I9) reports as dominated."""
+    P = build_scenario(sample_tiny(10850)).prepare()
+    res = brute_force(P)
+    assert res is not None
+    want = _front_of(res[2])
+    got = [_crit(m) for m in _run(P, "pareto").alternatives]
+    extra = [g for g in got if any(_dominates_tol(p, g, 1e-7) for p in want)]
+    assert not extra, (extra, want)
+
+
 def test_bug1_pareto_front_keeps_a_member_dominated_up_to_rounding():
+    """Regression for BUG-1 (rounding variant): a member 1 ulp faster but 0.77 EUR dearer than
+    another member with the same wear survived, although both routes have the same trip time
+    in exact arithmetic."""
     P = build_scenario(BUG1_ULP).prepare()
     crit = [_crit(m) for m in _run(P, "pareto").alternatives]
     dominated = [(i, j) for i in range(len(crit)) for j in range(len(crit)) if i != j and _dominates_tol(crit[i], crit[j])]
     assert not dominated, [(crit[i], crit[j]) for i, j in dominated]
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "BUG-2: Scenario.to_dict is lossy: RoadNetwork.to_dict rounds x/y/elevation to 1 cm and lengths to 1 mm "
-    "(network.py:161-178), so a saved and reloaded scenario has different edge energies -- objective values "
-    "move by ~1e-6 relative and exact (just-enough) CFP plans replay as infeasible (reserve undercut by ~1e-5 kWh)"))
 def test_bug2_scenario_json_round_trip_reproduces_the_plan():
+    """Regression for BUG-2 (fixed): ``RoadNetwork.to_dict`` used to round x/y/elevation to
+    1 cm and lengths to 1 mm, so a saved and reloaded scenario had different edge energies --
+    objective values moved by ~1e-6 relative and exact (just-enough) CFP plans replayed as
+    infeasible (reserve undercut by ~1e-5 kWh).  The dict is lossless now."""
     sc = grid_scenario(5, 5, seed=2, initial_soc=0.2, n_stations=6)
     p = _run(sc.prepare(), "cfp")
     assert p.feasible
@@ -1695,6 +1777,10 @@ def test_bug2_scenario_json_round_trip_reproduces_the_plan():
     again = evaluate(back.prepare(), p.decision)
     assert again.feasible, again.violations
     assert again.objective_value == p.objective_value
+    assert back.network == sc.network
+    Pb, P = back.prepare(), sc.prepare()
+    assert Pb.edge_time == P.edge_time and Pb.edge_energy == P.edge_energy and Pb.target_grid == P.target_grid
+    assert _run(Pb, "cfp").decision == p.decision
 
 
 def _two_station_line(objective: str, setup_s: float) -> Scenario:
@@ -1767,12 +1853,12 @@ def test_two_station_line_reference_values():
     assert {round(y, 9) for y in (35.2, 39.6)} <= {round(y, 9) for y in P.target_grid}
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "BUG-3: BLS/BLS-A*/Pareto allow at most one charging stop per node visit (labels.py:1013 'if not charged', "
-    "pareto.py:878), justified by 'two consecutive stops would pay the waiting and setup time twice'. With two "
-    "different stations at one node that is false: fast DC to 80 % then cheap AC to 90 % (both grid targets, "
-    "accepted by evaluate()) costs 90.72 vs the claimed grid optimum 91.75"))
 def test_bug3_consecutive_stops_at_two_stations_beat_the_grid_optimum():
+    """Regression for BUG-3 (fixed for BLS/BLS-A*/Pareto): they allowed at most one charging
+    stop per node visit, justified by 'two consecutive stops would pay the waiting and setup
+    time twice'.  With two different stations at one node that is false: fast DC to 80 % then
+    cheap AC to 90 % (both grid targets, accepted by evaluate()) costs 90.72 vs the claimed
+    grid optimum 91.75."""
     P = _two_station_line("cost", 60.0).prepare()
     double = evaluate(P, PlanDecision([0, 2], [0, 0], [ChargeDecision(1, 0, 35.2), ChargeDecision(1, 1, 39.6)]))
     assert double.feasible
@@ -1782,8 +1868,8 @@ def test_bug3_consecutive_stops_at_two_stations_beat_the_grid_optimum():
 
 
 @pytest.mark.xfail(strict=True, reason=(
-    "BUG-3 (CFP): CFP's guarantee covers routes with at most one stop per node visit only (cfp.py:105-108, "
-    "'charged here ... spawns no further stop'); with zero setup, DC to 37.4 kWh then AC to the same "
+    "BUG-3 (CFP): CFP's guarantee covers routes with at most one stop per node visit only (module docs of "
+    "cfp.py when found: a label 'charged here ... spawns no further stop'); with zero setup, DC to 37.4 kWh then AC to the same "
     "just-enough energy is 16 s faster than the 'exact' CFP optimum, and evaluate() accepts it"))
 def test_bug3_consecutive_stops_beat_the_continuous_optimum():
     P = _two_station_line("time", 0.0).prepare()
@@ -1817,15 +1903,50 @@ def _zero_reserve_knife_edge() -> Scenario:
     raise AssertionError("no knife-edge initial SoC found")
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "BUG-4: with reserve_soc = min_arrival_soc = 0, evaluate() flags 'battery empty' as soon as the energy "
-    "is below 0.0 by any amount (evaluate.py:162, strict '< 0.0'), contradicting the 1e-6 kWh tolerance it "
-    "applies to the reserve and arrival checks (DEV_SPEC 1.2). A route arriving with -5e-14 kWh is returned "
-    "by BLS/BLS-A*/Pareto/greedy/station-graph as infeasible ('battery empty after 30.0 km') while CFP, which "
-    "adds a private 1e-8 kWh floor for exactly this reason (cfp.py:645-647), reports that no route exists"))
 def test_bug4_zero_reserve_float_noise_is_not_stranding():
+    """Regression for BUG-4 (fixed in evaluate.py): with reserve_soc = min_arrival_soc = 0,
+    evaluate() used to flag 'battery empty' as soon as the energy was below 0.0 by any amount
+    (strict ``< 0.0``), contradicting the 1e-6 kWh tolerance of the reserve and arrival checks
+    (DEV_SPEC 1.2): a route arriving with -9e-16 kWh was returned by BLS/BLS-A*/Pareto/greedy/
+    station-graph as infeasible ('battery empty after 30.0 km').  Now only an energy below
+    ``-TOL_KWH`` strands."""
     P = _zero_reserve_knife_edge().prepare()
     assert -1e-9 < P.e_init - P.edge_energy[0][0] < 0.0
-    for name in ("bls", "bls-astar", "pareto", "cfp", "greedy"):
+    direct = evaluate(P, PlanDecision([0], [0]))
+    assert direct.feasible and direct.stranded_at_m is None, direct.violations
+    tally = Tally()
+    for name in ("bls", "bls-astar", "pareto", "greedy", "station-graph", "naive", "genetic"):
         p = _run(P, name)
         assert p.feasible, (name, p.message)
+        check_plan(tally, P, p, name, name in ("bls", "bls-astar", "pareto"))
+    _assert_clean(tally)
+
+
+@pytest.mark.xfail(strict=True, reason=(
+    "BUG-4 (CFP): cfp.py raises the reserve and the goal energy to a private floor of 10*eps = 1e-8 kWh "
+    "when they are zero ('floor = 10.0 * eps', 'emin = max(P.e_min, floor)', 'egoal = max(P.e_dest_min, "
+    "floor)' at the top of _search, cfp.py:903-907 at the time of writing), a workaround for the old "
+    "strict evaluator; the route that ends at -9e-16 kWh (feasible for evaluate() and every other planner) "
+    "is rejected and CFP reports that no route exists. Remove the floor now that evaluate() tolerates float "
+    "noise"))
+def test_bug4_cfp_zero_reserve_float_noise_is_not_stranding():
+    P = _zero_reserve_knife_edge().prepare()
+    assert evaluate(P, PlanDecision([0], [0])).feasible
+    for name in ("cfp", "cfp-astar"):
+        p = _run(P, name)
+        assert p.feasible, (name, p.message)
+
+
+@pytest.mark.xfail(strict=True, reason=(
+    "BUG-4 (robustness): the Monte Carlo kernel still strands at any negative energy "
+    "(robustness.py:427 'strand = [drives and m < 0.0 ...]' in _Outcomes.events, and robustness.py:720 "
+    "'stranded = out.min_kwh[r] < 0.0' in the _verify cross-check) while evaluate() strands below -TOL_KWH: "
+    "a zero-noise replay of the knife-edge plan counts 3/3 strandings, and verify=True raises "
+    "'Monte Carlo replay disagrees with evaluate(): stranding, feasibility'. Both comparisons should be "
+    "'< -TOL_KWH'"))
+def test_bug4_monte_carlo_zero_reserve_float_noise_is_not_stranding():
+    P = _zero_reserve_knife_edge().prepare()
+    p = _run(P, "bls")
+    assert p.feasible
+    rep = monte_carlo(P, p, n=3, seed=1, trip_cv=0.0, edge_cv=0.0, wait_model="expected", verify=True)
+    assert rep.planned_feasible and rep.n_strand == rep.n_reserve_breach == rep.n_arrival_short == 0

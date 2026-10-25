@@ -49,7 +49,10 @@ class Station:
     setup_s: float = 180.0
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        d = asdict(self)
+        if not isinstance(self.demand_profile, str):  # a tuple of weights is written (and read) as a list
+            d["demand_profile"] = [float(w) for w in self.demand_profile]
+        return d
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "Station":
@@ -159,8 +162,19 @@ class Scenario:
 
     # ------------------------------------------------------ serialisation
     def to_dict(self) -> dict[str, Any]:
+        """JSON-ready, lossless description of the instance.
+
+        ``Scenario.from_dict(json.loads(json.dumps(sc.to_dict())))`` rebuilds
+        an instance that plans bit-identically: the network is stored
+        unrounded (see :meth:`RoadNetwork.to_dict`), floats survive JSON
+        exactly (``repr``), and the only normalisations are tuple -> list
+        (``speed_factors`` and the vehicle's charging curve become tuples
+        again on loading) and non-string ``meta`` keys -> strings.  The
+        result is a fixed point: ``to_dict`` of the reloaded scenario is equal
+        to the dict it was loaded from.
+        """
         prefs = asdict(self.preferences)
-        prefs["speed_factors"] = list(self.preferences.speed_factors)
+        prefs["speed_factors"] = [float(f) for f in self.preferences.speed_factors]
         return {
             "format": "evroute-scenario/1",
             "name": self.name,
@@ -172,7 +186,7 @@ class Scenario:
             "query": asdict(self.query),
             "conditions": asdict(self.conditions),
             "preferences": prefs,
-            "meta": self.meta,
+            "meta": _json_ready(self.meta),
         }
 
     @classmethod
@@ -383,6 +397,17 @@ class PreparedScenario:
             "speed_levels": list(self.speed_factors),
             "p_max_kw": round(self.p_max, 1),
         }
+
+
+def _json_ready(obj: Any) -> Any:
+    """Copy of ``obj`` in the form :func:`json.loads` returns it (tuples -> lists,
+    dictionary keys -> strings), so that ``to_dict`` output is a JSON fixed point."""
+    if isinstance(obj, dict):
+        # json writes int/float/bool/None keys as 1, 1.5, true, null -- exactly json.dumps(k)
+        return {k if isinstance(k, str) else json.dumps(k): _json_ready(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_json_ready(v) for v in obj]
+    return obj
 
 
 def _pareto_options(

@@ -46,16 +46,19 @@ allowed iff ``e >= e_min`` and ``e' >= e_min`` (the origin's initial energy
 may be below the reserve; such a label can only charge).
 
 *Charge* at station ``s`` of node ``v`` to a target ``y`` of
-:func:`~evroute.algorithms.labels.charging_targets` with ``e < y`` and
-``y >= e_min``::
+:func:`~evroute.algorithms.labels.charging_targets` with ``e < y`` (and
+``y >= e_min`` at a node with a single station)::
 
     t' = t + (wait_s(s, t) + setup_s + F_s(y) - F_s(e))
     m' = m + M_s(y) - M_s(e),   w' = w + S_s(y) - S_s(e),   e' = y
 
 with the cumulative time, money and wear functions ``F_s, M_s, S_s`` of
 :class:`~evroute.charging.ChargingFunction`; the wait is evaluated at the
-arrival time.  A label created by charging at ``v`` does not charge again at
-``v`` (one stop per visit, as in BLS).
+arrival time.  The stop rule is the one of BLS: a label created by a stop at
+``s`` may stop again at any *other* station of ``v`` (e.g. fast DC, then
+cheap AC), never at ``s`` itself right away (the first stop could have
+charged further for less); a stop may end below the reserve at a node with
+several stations, since only another stop can follow it there.
 
 Dominance
 =========
@@ -68,13 +71,14 @@ more energy never hurts later (driving keeps the order of energies,
 more expensive), and the expected waits are FIFO, ``t + wait(t)``
 non-decreasing (Orda & Rom 1990; guaranteed by
 :class:`~evroute.queueing.WaitProfile`), so arriving earlier never makes a
-stop end later -- also with time-dependent waits.  The one-stop-per-visit
-rule is handled as in BLS: at a node with a single station a charged label
-may dominate a free one (its free parent could charge directly to any higher
-target, with no larger time, money or wear, because ``F_s, M_s, S_s`` are
-additive along the charging curve); nodes with several stations keep two
-Pareto sets (free labels compared with free labels, charged labels with
-both).
+stop end later -- also with time-dependent waits.  One Pareto set per node
+is exact although a label ``A`` created by a stop at ``s`` may not stop at
+``s`` next: a stop of a dominated label ``B`` at ``s`` to a target
+``y > e_A`` is matched by ``A``'s parent charging directly to ``y`` (no
+larger time, money or wear: ``F_s, M_s, S_s`` are additive along the
+charging curve and the wait and setup are not paid twice), and one to
+``y <= e_A`` by ``A`` itself (see the module docs of
+:mod:`evroute.algorithms.labels`).
 
 Search order (Martins 1984, goal-directed)
 ==========================================
@@ -123,12 +127,31 @@ is never expanded (any extension is strictly slower and no cheaper) and
 enters the front unless a member dominates it in criteria space
 ``(t, m, w)`` (by Lemma 2 a ``(m, w)`` staircase query).
 
-**Lemma 3.**  A new member never dominates an existing one (that would need
-equal time and, by the lexicographic order, equal money and wear -- a
-duplicate, which is rejected), so the front only grows, in order of
-increasing time, and the members are mutually non-dominated.  When the queue
-is empty the front is a minimal complete set of the Pareto-optimal criteria
-vectors.
+**Lemma 3.**  In exact arithmetic a new member never dominates an existing
+one (that would need equal time and, by the lexicographic order, equal money
+and wear -- a duplicate, which is rejected), so the front only grows, in
+order of increasing time, and the members are mutually non-dominated.  When
+the queue is empty the front is a minimal complete set of the Pareto-optimal
+criteria vectors.
+
+*Floating point (front maintenance).*  Routes with mathematically equal trip
+times (e.g. the same energy charged at two stations with the same power, or
+the same edges summed in a different order) reach the destination with times
+that differ in the last bits, and the goal-directed keys ``t + T_lb(v)`` are
+monotone only up to a few units in the last place, so a destination label
+can be popped a few ulps *before* an equally fast but cheaper one.  The front
+is therefore maintained robustly: a new route ``c`` is rejected if a member
+``f`` *covers* it (``m_f <= m_c (1 + R)``, ``w_f <= w_c (1 + R)`` with
+``R = FRONT_RTOL`` and the epsilon tolerance, and -- implicitly, by the pop
+order -- ``t_f <= t_c`` up to a few ulps); otherwise it enters, and every
+member ``f`` it covers in turn -- ``t_c <= t_f (1 + TIE_RTOL)``,
+``m_c <= m_f (1 + R)``, ``w_c <= w_f (1 + R)`` with ``TIE_RTOL = 1e-12``,
+i.e. an equally fast member that is dearer or wears more -- leaves the
+front.  Vectors that are equal within these tolerances are resolved
+deterministically in favour of the member that was popped first (a later
+one is covered and rejected).  A member is only ever removed by a route that
+is as fast up to ``TIE_RTOL`` and no worse up to ``R`` in money and wear, so
+the coverage statements below hold up to these factors.
 
 Target pruning (NAMOA*-style)
 =============================
@@ -278,6 +301,11 @@ EPS = 1e-9
 #: wear (e.g. the same charging decision reached along two almost equally
 #: long paths) do not become spurious members.
 FRONT_RTOL = 1e-9
+#: Relative tolerance under which two trip times count as equal in the front
+#: maintenance (module docs, "Floating point"): goal-directed keys are monotone
+#: only up to a few ulps, so an equally fast but cheaper route can be popped
+#: right after a member it dominates.
+TIE_RTOL = 1e-12
 #: Names of the criteria, in lexicographic order.
 CRITERIA = ("time", "money", "wear")
 #: Accepted values of the ``criteria`` option.
@@ -295,6 +323,7 @@ __all__ = [
     "EPSILON_SCOPES",
     "FRONT_RTOL",
     "OPTIONS",
+    "TIE_RTOL",
     "CompletionBounds",
     "ParetoPlanner",
     "chargeable_rates",
@@ -586,7 +615,7 @@ class _ParetoSearch:
 
     __slots__ = (
         "energy", "front", "generated", "how", "money", "n_levels", "node", "parent",
-        "peak_queue", "pruned", "pruned_front", "pushes", "settled", "status", "time", "wear",
+        "peak_queue", "pruned", "pruned_front", "pushes", "replaced", "settled", "status", "time", "wear",
     )
     time: list[float]
     money: list[float]
@@ -602,6 +631,8 @@ class _ParetoSearch:
     pushes: int
     pruned: int
     pruned_front: int
+    #: members that left the front for an equally fast, cheaper route (float ties)
+    replaced: int
     peak_queue: int
     n_levels: int
 
@@ -658,6 +689,8 @@ def _pareto_search(
     # destination tests: tolerance plus floating-point guard
     fm = (1.0 + eps_money) * (1.0 + FRONT_RTOL)
     fw = (1.0 + eps_wear) * (1.0 + FRONT_RTOL)
+    # front maintenance: "c covers f" in money and wear up to rounding
+    rf = 1.0 + FRONT_RTOL
     # node tests: exact unless eps_labels (multiplying by 1.0 is exact)
     nfm = 1.0 + eps_money if eps_labels else 1.0
     nfw = 1.0 + eps_wear if eps_labels else 1.0
@@ -705,19 +738,13 @@ def _pareto_search(
         TY.append([f.time_at(y) for y in tg])
         MY.append([f.money_at(y) for y in tg])
         SY.append([f.soh_at(y) for y in tg])
-        # targets below the reserve lead to labels that can never move
-        JMIN.append(bisect_left(tg, emin_eps))
+        # targets below the reserve lead to labels that can never move -- unless
+        # another station of the node can raise the energy further
+        alone = len(station_at[P.stations[s].node]) <= 1
+        JMIN.append(bisect_left(tg, emin_eps) if alone else 0)
     cf = P.cf
     setup = P.setup_s
     wait = P.wait_s
-
-    # charged labels get their own Pareto set only at multi-station nodes
-    chst = list(range(n))
-    n_sets = n
-    for v, lst in station_at.items():
-        if len(lst) > 1:
-            chst[v] = n_sets
-            n_sets += 1
 
     # ---------------------------------------------------- label store
     TT: list[float] = []
@@ -730,11 +757,11 @@ def _pareto_search(
     TT_a, MM_a, WW_a, EN_a = TT.append, MM.append, WW.append, EN.append
     ND_a, PAR_a, HOW_a = ND.append, PAR.append, HOW.append
 
-    # settled sets: (money, energy) staircase per set, plus a 3-D archive
-    SM: list[list[float]] = [[] for _ in range(n_sets)]
-    SE: list[list[float]] = [[] for _ in range(n_sets)]
+    # settled sets (one per node): (money, energy) staircase plus a 3-D archive
+    SM: list[list[float]] = [[] for _ in range(n)]
+    SE: list[list[float]] = [[] for _ in range(n)]
     inv_w = _NB / cap if cap > 0 else 0.0
-    S3: list[Any] | None = [None] * n_sets if use_wear else None
+    S3: list[Any] | None = [None] * n if use_wear else None
 
     # destination front: member label ids (in time order) and the minimum
     # (money, wear-key) staircase used by the front tests (Lemma 2)
@@ -760,7 +787,7 @@ def _pareto_search(
         heappush(heap, (pot[source], 0.0, 0.0, -e0, 0))
         pushes = 1
 
-    settled = generated = pruned = pruned_front = peak = 0
+    settled = generated = pruned = pruned_front = peak = replaced = 0
     status = "exhausted"
 
     while heap:
@@ -779,9 +806,34 @@ def _pareto_search(
         if v == dest and x >= egoal_eps:
             j = bisect_right(FM, m * fm)
             if j and FW[j - 1] <= k * fw:
-                pruned_front += 1
+                pruned_front += 1  # covered by a member (popped no later)
                 continue
-            FR.append(i)  # Lemma 3: no existing member is dominated by it
+            # members it covers (equally fast up to TIE_RTOL, no dearer and no more
+            # wear up to FRONT_RTOL) leave the front -- only possible on float ties
+            # (module docs, "Floating point"); members are in pop order, which is
+            # time order up to a few ulps, so only the tail needs a look
+            tie = TIE_RTOL * abs(t)
+            t_lo = t - 4.0 * tie
+            mc = m / rf
+            kc = k / rf
+            q = len(FR) - 1
+            drop = []
+            while q >= 0:
+                f = FR[q]
+                tf = TT[f]
+                if tf < t_lo:
+                    break
+                if t <= tf + tie and mc <= MM[f] and kc <= (WW[f] if use_wear else 0.0):
+                    drop.append(q)
+                q -= 1
+            if drop:
+                for q in drop:  # (descending positions)
+                    del FR[q]
+                FM, FW = [], []
+                for f in FR:
+                    _stair_add_min(FM, FW, MM[f], WW[f] if use_wear else 0.0)
+                replaced += len(drop)
+            FR.append(i)
             _stair_add_min(FM, FW, m, k)
             settled += 1
             if visit is not None:
@@ -803,30 +855,18 @@ def _pareto_search(
                     continue
 
         # ------------------------------ dominance by settled labels at v
-        charged = False
-        sid = v
-        if is_station[v] and HOW[i] <= -2:
-            charged = True
-            sid = chst[v]
         mq = m * nfm  # also the money query of every drive successor
-        Ms = SM[sid]
+        Ms = SM[v]
         if Ms:
             j = bisect_right(Ms, mq)
-            if j and SE[sid][j - 1] >= x and (S3 is None or S3[sid].dominated(mq, k * nfw, x)):
+            if j and SE[v][j - 1] >= x and (S3 is None or S3[v].dominated(mq, k * nfw, x)):
                 pruned += 1
                 continue
-        if sid != v:
-            Ms = SM[v]
-            if Ms:
-                j = bisect_right(Ms, mq)
-                if j and SE[v][j - 1] >= x and (S3 is None or S3[v].dominated(mq, k * nfw, x)):
-                    pruned += 1
-                    continue
-        _stair_add_max(SM[sid], SE[sid], m, x)
+        _stair_add_max(Ms, SE[v], m, x)
         if S3 is not None:
-            a3 = S3[sid]
+            a3 = S3[v]
             if a3 is None:
-                a3 = S3[sid] = _Archive3(inv_w)
+                a3 = S3[v] = _Archive3(inv_w)
             a3.add(m, k, x)
         settled += 1
         if visit is not None:
@@ -875,12 +915,16 @@ def _pareto_search(
                 pushes += 1
 
         # ------------------------------------------------------ charge
-        if not charged and is_station[v]:
-            csid = chst[v]
+        if is_station[v]:
+            last = -2 - HOW[i]  # station of the stop that created this label (< 0: none)
             hv = hwd[v]
             env = eneed[v]
             pv = pot[v]
+            Ms, Es = SM[v], SE[v]
+            A3 = S3[v] if S3 is not None else None
             for s in station_at[v]:
+                if s == last:
+                    continue  # never the same station twice in a row (module docs)
                 tg = TG[s]
                 L = len(tg)
                 j0 = bisect_right(tg, x + EPS)
@@ -902,19 +946,10 @@ def _pareto_search(
                     nk = nw if use_wear else 0.0
                     generated += 1
                     nmq = nm * nfm
-                    Ms = SM[csid]
-                    if Ms:
-                        j = bisect_right(Ms, nmq)
-                        if j and SE[csid][j - 1] >= y and (S3 is None or S3[csid].dominated(nmq, nk * nfw, y)):
-                            pruned += 1
-                            continue
-                    if csid != v:
-                        Ms = SM[v]
-                        if Ms:
-                            j = bisect_right(Ms, nmq)
-                            if j and SE[v][j - 1] >= y and (S3 is None or S3[v].dominated(nmq, nk * nfw, y)):
-                                pruned += 1
-                                continue
+                    j = bisect_right(Ms, nmq)
+                    if j and Es[j - 1] >= y and (A3 is None or A3.dominated(nmq, nk * nfw, y)):
+                        pruned += 1
+                        continue
                     if FM:
                         d = env - y
                         if d > 0.0:
@@ -947,6 +982,7 @@ def _pareto_search(
     res.status = status
     res.settled, res.generated, res.pushes = settled, generated, pushes
     res.pruned, res.pruned_front = pruned, pruned_front
+    res.replaced = replaced
     res.peak_queue = peak
     res.n_levels = nlev
     return res
@@ -1104,6 +1140,7 @@ class ParetoPlanner(Planner):
                 "labels": len(res.node),
                 "pruned_by_dominance": res.pruned,
                 "pruned_by_front": res.pruned_front,
+                "front_replaced": res.replaced,
                 "front": [[TT[i], MM[i], WW[i], EN[i]] for i in res.front],
                 "bounds_s": t1 - t0,
                 "search_s": t2 - t1,

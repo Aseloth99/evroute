@@ -9,7 +9,9 @@ algorithm, so it doubles as the correctness oracle in the test-suite:
 * a plan is *feasible* iff it is a connected origin->destination path, every
   charging stop is at a station on that path, the energy never drops below
   the reserve at any node, never exceeds the charging cap when charging, and
-  the arrival energy meets the destination requirement;
+  the arrival energy meets the destination requirement -- each up to the
+  float tolerance :data:`TOL_KWH`, which also applies to the empty battery
+  (the battery is empty when the energy falls below ``-TOL_KWH``);
 * the objective it reports must match the algorithm's internal objective.
 
 Rules (shared with all algorithms):
@@ -27,7 +29,12 @@ import math
 from .plan import ChargeDecision, ChargeStop, PlanDecision, RoutePlan, SearchStats, SearchTrace
 from .scenario import PreparedScenario
 
-#: Energy tolerance for feasibility checks [kWh].
+#: Energy tolerance for every feasibility check [kWh]: the reserve, the
+#: arrival requirement, the charging cap and the empty battery.  Energies are
+#: sums of float edge consumptions, so a route that is feasible in exact
+#: arithmetic can come out ~1e-14 kWh short; only a shortfall of more than
+#: ``TOL_KWH`` is a violation (and with ``reserve_soc = 0`` an energy in
+#: ``[-TOL_KWH, 0)`` is float noise, not an empty battery).
 TOL_KWH = 1e-6
 
 
@@ -159,8 +166,10 @@ def evaluate(
             dt = P.edge_time[k][ed]
             if c_e > 0:
                 consumed += c_e
-                if stranded_at is None and e - c_e < 0.0:
-                    frac = max(e, 0.0) / c_e
+                # same tolerance as the reserve check: with a zero reserve, ending an
+                # edge at -1e-14 kWh is rounding noise, not an empty battery (BUG-4)
+                if stranded_at is None and e - c_e < -TOL_KWH:
+                    frac = max(e, 0.0) / c_e  # where the battery reaches zero
                     stranded_at = dist + frac * net.length[ed]
             new_e = min(e - c_e, P.capacity)
             if new_e > e:

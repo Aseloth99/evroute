@@ -152,9 +152,13 @@ def _oracle_targets(P, s, mode):
 
 def brute_force(P, mode="grid+breaks", max_len=9, max_visits=2):
     """Exhaustive search over walks (each node visited at most ``max_visits``
-    times, at most ``max_len`` edges) and over one optional charging stop per
-    visit of a station node, to any target of the target set.  Pruning only
-    by the (non-negative, monotone) partial objective."""
+    times, at most ``max_len`` edges) and over charging stops to any target of
+    the target set: during a visit of a station node, any sequence of stops in
+    which consecutive stops use different stations (a stop at the station just
+    used is pointless: the previous stop could have charged further).  A stop
+    may end below the reserve -- the evaluator only checks arrival and
+    departure -- but the route can then only stop again.  Pruning only by the
+    (non-negative, monotone) partial objective."""
     net = P.net
     time_obj = P.objective == "time"
     tg = {s: _oracle_targets(P, s, mode) for s in range(len(P.stations))}
@@ -163,7 +167,7 @@ def brute_force(P, mode="grid+breaks", max_len=9, max_visits=2):
     visits[P.origin] = 1
     eps = 1e-9
 
-    def rec(v, t, g, e, edges, levels, charges, charged_here):
+    def rec(v, t, g, e, edges, levels, charges, last):
         prim = t if time_obj else g
         if prim >= best[0]:
             return
@@ -171,15 +175,16 @@ def brute_force(P, mode="grid+breaks", max_len=9, max_visits=2):
             best[0] = prim
             best[1] = PlanDecision(list(edges), list(levels), [ChargeDecision(*c) for c in charges])
             return
-        if not charged_here:
-            for s in P.station_at.get(v, []):
-                f = P.cf[s]
-                for y in tg[s]:
-                    if y > e + eps:
-                        w = P.wait_s(s, t)
-                        ch = f.charge_time(e, y)
-                        rec(v, t + (w + P.setup_s[s] + ch), g + P.charge_cost(s, e, y, ch, w), y,
-                            edges, levels, charges + [(len(edges), s, y)], True)
+        for s in P.station_at.get(v, []):
+            if s == last:
+                continue
+            f = P.cf[s]
+            for y in tg[s]:
+                if y > e + eps:
+                    w = P.wait_s(s, t)
+                    ch = f.charge_time(e, y)
+                    rec(v, t + (w + P.setup_s[s] + ch), g + P.charge_cost(s, e, y, ch, w), y,
+                        edges, levels, charges + [(len(edges), s, y)], s)
         if e >= P.e_min - eps and len(edges) < max_len:
             for a in net.out_edges[v]:
                 w = net.head[a]
@@ -192,12 +197,12 @@ def brute_force(P, mode="grid+breaks", max_len=9, max_visits=2):
                     visits[w] += 1
                     edges.append(a)
                     levels.append(k)
-                    rec(w, t + tau, g + dc, ne, edges, levels, charges, False)
+                    rec(w, t + tau, g + dc, ne, edges, levels, charges, -1)
                     edges.pop()
                     levels.pop()
                     visits[w] -= 1
 
-    rec(P.origin, 0.0, 0.0, P.e_init, [], [], [], False)
+    rec(P.origin, 0.0, 0.0, P.e_init, [], [], [], -1)
     return best[0], best[1]
 
 
@@ -245,8 +250,9 @@ def test_brute_force_oracle_tiny_grids(objective):
 
 @pytest.mark.parametrize("objective", ["time", "cost"])
 def test_brute_force_oracle_stacked_stations_and_origin_charging(objective):
-    """Several stations on one node (two Pareto sets), a station at the origin
-    with an initial energy below the reserve and a station at the destination."""
+    """Several stations on one node (consecutive stops at different stations),
+    a station at the origin with an initial energy below the reserve and a
+    station at the destination."""
     for seed in range(8):
         sc = _tiny(seed, 3, 3, objective, n_stations=2,
                    initial_soc=(0.05, 0.12, 0.25)[seed % 3],
@@ -398,6 +404,67 @@ def test_origin_station_with_initial_energy_below_reserve(objective):
         assert first.position == 0 and first.station == len(st) - 1
         assert first.energy_out_kwh >= P.e_min
     assert math.isclose(plans[0].internal_objective, plans[1].internal_objective, rel_tol=1e-9)
+
+
+def _two_station_node_line(objective, *, dc_curve=None, ac_max_kw=None, at_origin=False, setup_s=60.0,
+                           soc=0.3, reserve=0.1, temperature_c=-10.0):
+    """O --30 km--> S --150 km--> D (or O --180 km--> D with ``at_origin``); the station node
+    hosts a 50/150 kW DC charger (0.75 / kWh) and a 22 kW AC charger (0.30 / kWh)."""
+    import dataclasses
+
+    from evroute.network import NetworkBuilder
+    from evroute.scenario import Conditions, Preferences, Query, Scenario
+    from evroute.vehicle import get_vehicle
+
+    veh = get_vehicle("compact50")
+    if dc_curve is not None:
+        veh = dataclasses.replace(veh, dc_curve=dc_curve, ac_max_kw=ac_max_kw)
+    b = NetworkBuilder()
+    o = b.add_node(0.0, 0.0, 100.0)
+    s = o if at_origin else b.add_node(30e3, 0.0, 100.0)
+    d = b.add_node(180e3 if not at_origin else 200e3, 0.0, 100.0)
+    if not at_origin:
+        b.add_road(o, s, road_class="motorway")
+    b.add_road(s, d, road_class="motorway")
+    st = [Station(0, s, 150.0 if at_origin else 50.0, "DC", price_per_kwh=0.75, setup_s=setup_s, daily_sessions=1.0),
+          Station(1, s, 22.0, "AC", price_per_kwh=0.30, setup_s=setup_s, daily_sessions=1.0)]
+    return Scenario("two stations at one node", b.build(), st, veh, Query(o, d, initial_soc=soc, departure_s=9 * 3600.0),
+                    Conditions(temperature_c=temperature_c, preconditioning=False),
+                    Preferences(objective=objective, queue_aware=False, charge_step_soc=0.05, reserve_soc=reserve,
+                                min_arrival_soc=0.1))
+
+
+@pytest.mark.parametrize("case", ["derated DC then AC (cost)", "below the reserve (time)",
+                                  "below the reserve (cost)"])
+def test_consecutive_stops_at_two_stations_of_one_node(case):
+    """Regression (BUG-3 of the cross-validation suite): after a stop, a stop at *another*
+    station of the same node may follow -- the cold, derated DC charger is fast and dear up
+    to 80 % and slower than the cheap AC charger near full; at the origin a stop may even
+    end below the reserve when the other station takes over (the evaluator checks arrival
+    and departure only).  BLS and BLS-A* must match the brute force over that model."""
+    from evroute.vehicle import ChargingCurve
+
+    if case.startswith("derated"):
+        sc = _two_station_node_line("cost")
+    else:  # DC slow (15 kW) below 20 % SoC, 150 kW above; 5 % initial charge, 25 % reserve
+        sc = _two_station_node_line("time" if "time" in case else "cost",
+                                    dc_curve=ChargingCurve((0.0, 0.2, 1.0), (15.0, 150.0)), ac_max_kw=22.0,
+                                    at_origin=True, setup_s=30.0, soc=0.05, reserve=0.25, temperature_c=20.0)
+    sc = sc.with_preferences(charge_step_soc=0.1)  # (keeps the enumeration of stop chains small)
+    P = sc.prepare()
+    value, decision = brute_force(P, "grid")
+    assert len(decision.charges) == 2 and len({c.position for c in decision.charges}) == 1
+    assert decision.charges[0].station != decision.charges[1].station
+    for name in ("bls", "bls-astar"):
+        p = _run(P, name, targets="grid")
+        _assert_consistent(P, p)
+        assert math.isclose(p.internal_objective, value, rel_tol=1e-12), (name, p.internal_objective, value)
+        assert len(p.stops) == 2 and p.stops[0].position == p.stops[1].position
+        if "reserve" in case:  # the first stop ends below the reserve, the departure respects it
+            assert p.stops[0].energy_out_kwh < P.e_min < p.stops[1].energy_out_kwh
+    # the best route with a single stop at that node is clearly worse
+    single = min(_run(sc.with_(stations=[s]).prepare(), "bls", targets="grid").objective_value for s in sc.stations)
+    assert value < single - (1.0 if P.objective == "cost" else 100.0)
 
 
 def test_origin_equals_destination():

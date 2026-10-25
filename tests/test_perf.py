@@ -19,7 +19,7 @@ import time
 import pytest
 
 from evroute.algorithms import get_planner
-from evroute.algorithms.cfp import _dominated_in, _SettledSet, dominates, label_function
+from evroute.algorithms.cfp import _dominated_in, _Envelope, evaluate_function, label_function
 from evroute.algorithms.labels import (
     AStarPotential,
     _label_search,
@@ -57,12 +57,18 @@ def _search(P, pot, **kw):
 # ----------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("objective", ["time", "cost"])
-def test_upper_bound_from_one_speed_level_leaves_the_search_unchanged(objective):
-    """Same settled labels, route and value with and without the single-level bound."""
-    sc = grid_scenario(9, 9, seed=21, initial_soc=0.3, speed_factors=ECO, objective=objective)
+@pytest.mark.parametrize("objective,td", [("time", True), ("cost", False), ("cost", True)])
+def test_upper_bound_from_one_speed_level_leaves_the_search_unchanged(objective, td):
+    """Same settled labels, route and value with and without the single-level bound.
+
+    (Cost objective with time-dependent waits -- 3-D dominance on money + wear, time and
+    energy: only with the tight potential.  In Dijkstra order the exact 3-D label sets of
+    this eco-speed grid exceed the 5 million label budget, with or without the bound.)"""
+    sc = grid_scenario(9, 9, seed=21, initial_soc=0.3, speed_factors=ECO, objective=objective,
+                       time_dependent_waits=td)
     P = sc.prepare()
-    for pot in (AStarPotential.tight(P), AStarPotential.zero(P)):
+    pots = [AStarPotential.tight(P)] + ([AStarPotential.zero(P)] if objective == "time" or not td else [])
+    for pot in pots:
         ub, _ = _single_level_bound(P, pot, targets="grid+breaks", max_labels=1_000_000)
         assert math.isfinite(ub)
         plain = _search(P, pot)
@@ -85,30 +91,76 @@ def test_single_level_options_pick_one_level_per_edge():
         assert one[0][1] == min(o[1] for o in full)  # rate 0: the fastest level
 
 
-def test_cfp_settled_set_answers_like_the_reference_scan():
-    """``_SettledSet`` (staircases + sorted scan) == the plain pre-filtered scan."""
+def _set_dominated_reference(labels, ts, bs, eps=1e-9):
+    """CFP set dominance from its definition: a settled *constant* label dominates the new
+    label, or the upper envelope of the settled non-constant labels is ``>= B - eps`` on
+    ``[t_feas, inf)`` -- probed at every breakpoint, at every crossing of a settled label
+    with ``B``, densely in between and far beyond (a tolerance of 1e-7 on the probes)."""
+    for t1, b1 in labels:
+        if len(t1) == 1 and t1[0] <= ts[0] + eps and b1[0] >= bs[-1] - eps:
+            return True
+    fun = [(t1, b1) for t1, b1 in labels if len(t1) > 1]
+    if not fun or min(t1[0] for t1, _ in fun) > ts[0] + eps:
+        return False
+    start = min(t1[0] for t1, _ in fun)
+
+    def env(t):
+        t = max(t, start)
+        return max(evaluate_function(t1, b1, t) for t1, b1 in fun if t1[0] <= t)
+
+    pts = sorted({t for t1, _ in fun for t in t1} | set(ts))
+    pts = [t for t in pts if t >= ts[0]]
+    probe = set(pts) | {pts[-1] + 1e4}
+    for a, b in zip(pts, pts[1:]):
+        probe.update((a + (b - a) * f for f in (1e-7, 0.25, 0.5, 0.75, 1 - 1e-7)))
+    for t1, b1 in fun:
+        knots = sorted(set(t1) | set(ts))
+        for a, b in zip(knots, knots[1:]):
+            d1 = evaluate_function(t1, b1, a) - evaluate_function(ts, bs, a)
+            d2 = evaluate_function(t1, b1, b) - evaluate_function(ts, bs, b)
+            if d1 * d2 < 0.0:
+                probe.add(a + (b - a) * d1 / (d1 - d2))
+    return all(env(t) >= evaluate_function(ts, bs, t) - 1e-7 for t in probe if t >= ts[0])
+
+
+def test_cfp_envelope_answers_like_the_definition():
+    """``_Envelope`` (constant staircase + upper envelope of the other labels) gives the
+    answer of the set-dominance definition, is implied by single-label dominance (the rule
+    of earlier versions) and stores exactly the upper envelope."""
     P = grid_scenario(6, 6, seed=4, initial_soc=0.3).prepare()
     cf = P.cf[0]
     cap = P.e_charge_cap
     rng = random.Random(11)
+    n_dom = n_set_only = 0
     for _ in range(60):
+        labels: list = []
         ref: list = []
-        fast = _SettledSet()
-        for _k in range(rng.randint(1, 60)):
+        env = _Envelope()
+        for _k in range(rng.randint(1, 40)):
             if rng.random() < 0.4:  # a constant label
                 ts, bs = [round(rng.uniform(0, 500), rng.choice((0, 1, 3)))], [rng.uniform(5, 40)]
             else:
                 b = rng.uniform(2, 30)
                 ts, bs = label_function(cf, cap, rng.uniform(0, 400), cf.time_at(b), b,
                                         rng.uniform(2, 35), rng.uniform(-3, 15), rng.uniform(10, 60))
-            bmax = bs[-1]
-            got, _ = fast.dominated(ts, bs, bmax, 1e-9)
-            want, _ = _dominated_in(ref, ts, bs, bmax, 1e-9)
-            assert got == want
-            if not want or rng.random() < 0.3:
-                ref.append((ts[0], bmax, ts, bs))
-                fast.add(ts, bs, bmax)
-                assert fast.dominated(ts, bs, bmax, 1e-9)[0] and dominates(ts, bs, ts, bs)
+            got, _ = env.dominated(ts, bs, 1e-9)
+            assert got == _set_dominated_reference(labels, ts, bs)
+            single, _ = _dominated_in(ref, ts, bs, bs[-1], 1e-9)
+            assert got or not single  # single-label dominance implies set dominance
+            n_dom += got
+            n_set_only += got and not single
+            if not got or rng.random() < 0.3:
+                labels.append((ts, bs))
+                ref.append((ts[0], bs[-1], ts, bs))
+                env.add(ts, bs)
+                assert env.dominated(ts, bs, 1e-9)[0]
+                T, V = env.T, env.V
+                assert all(a <= b for a, b in zip(T, T[1:])) and all(a <= b for a, b in zip(V, V[1:]))
+                fun = [(t1, b1) for t1, b1 in labels if len(t1) > 1]
+                for t in (rng.uniform(T[0], T[-1] + 50.0) for _ in range(10) if T):
+                    want = max(evaluate_function(t1, b1, t) for t1, b1 in fun if t1[0] <= t)
+                    assert env.right(t) == pytest.approx(want, abs=1e-9)
+    assert n_dom > 300 and n_set_only > 5  # the set rule prunes labels no single label dominates
 
 
 def test_cfp_with_the_cost_objective_plans_exactly_like_with_time():

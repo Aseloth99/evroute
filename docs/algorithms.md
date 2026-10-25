@@ -15,6 +15,20 @@ moves $(v, x) \to (v, y)$, $y > x$, in $W_j(t) + \sigma_j + F_j(y) - F_j(x)$
 seconds where $t$ is the arrival time.  A route is a path in this (infinite)
 state graph from $(o, x_0)$ to some $(d, x)$ with $x \ge e_d$.
 
+*Consecutive stops.*  Several stops may follow each other at one node, at
+pairwise *consecutive-distinct* stations: after a stop at $j$ the next stop
+at the same node uses a station $j' \ne j$ (e.g. a fast DC charger up to the
+energy where its power falls below that of an AC charger next to it, then the
+AC charger -- cheaper, or even faster near full in the cold).  A second stop
+at $j$ itself is never useful: it pays $W_j + \sigma_j$ again for energy the
+first stop could have charged, and $F_j$, the money and the wear are additive
+along the charging curve.  The evaluator checks the reserve on arrival and on
+departure only, so at the origin with $x_0 < \underline e$ a stop may end
+below the reserve when another stop at the same node follows.  This is
+exactly the set of plans `evaluate()` accepts; earlier versions allowed one
+stop per node visit and missed such routes (BUG-3 of the cross-validation
+suite).
+
 **Lemma 1 (monotonicity).** Let two partial routes reach the same node $v$
 with $(t_1, x_1)$ and $(t_2, x_2)$, $t_1 \le t_2$ and $x_1 \ge x_2$.  Any
 completion of the second is feasible for the first and arrives no later.
@@ -26,21 +40,40 @@ x_2$ takes no longer ($F_j$ is increasing).  Driving times do not depend on
 the clock, and waiting satisfies FIFO ($t + W_j(t)$ non-decreasing), so the
 first route is never behind at any later event.  $\square$
 
-For the generalised-cost objective the same argument holds for
-$(g, x)$ when waits are static; with time-dependent waits the label must also
-carry $t$ (cost of later waits depends on the clock), giving 3-D dominance.
+For the generalised-cost objective $g = \mathrm{VoT}\cdot T + m$ (with $m$
+the weighted money and wear spent so far) the same argument holds for
+$(g, x)$ when waits are static.  With time-dependent waits FIFO only says that
+the earlier label leaves a queue *no later*: a falling queue can absorb its
+whole head start, so comparing $(g, t, x)$ is **not** sound (an earlier label
+that paid more money can lose its time advantage while its money disadvantage
+persists).  The exact rule compares $(m, t, x)$: $m_1 \le m_2$, $t_1 \le t_2$,
+$x_1 \ge x_2$ -- every completion of label 2 is then matched by label 1 with
+no larger final $T$ (FIFO) and no larger final $m$ (money and wear increments
+are no larger from a higher energy), hence no larger $g$; and the dominating
+label has $g_1 \le g_2$, i.e. a key no larger.  BLS/BLS-A\* are therefore exact
+for the cost objective with time-dependent waits as well (regression
+`test_cost_dominance_with_time_dependent_waits_regression`, where the rule
+$(g, t, x)$ discards the slow cheap first charge of the optimum); the Pareto
+planner keeps $(t, M, W, x)$ apart and agrees.
 
 ## 2. BLS — battery-constrained label setting
 
 BLS restricts charging targets to a finite set $\mathcal Y_j$ (the
 `charge_step_soc` grid united with the breakpoints of $F_j$ below $\bar e$) and
 runs a multi-criteria Dijkstra over labels $(t, x)$ per node, pruning by
-Lemma 1.  Energies are kept *continuous* — consumption is never rounded, so
+Lemma 1.  A label $A$ created by a stop at $j$ may stop again at every other
+station of its node.  One Pareto set per node is exact although $A$ cannot
+stop at $j$ next: if $A$ dominates a label $B$, a stop of $B$ at $j$ to a
+target $y > x_A$ is matched by $A$'s parent $C$ (which just stopped at $j$)
+charging directly to $y$ ($t_C + W_j(t_C) + \sigma_j + F_j(y) - F_j(x_C) = t_A - F_j(x_A) +
+F_j(y) \le t_B + W_j(t_B) + \sigma_j + F_j(y) - F_j(x_B)$, likewise for money
+and wear), and one to $y \le x_A$ by $A$ itself.  Energies are kept *continuous* — consumption is never rounded, so
 there is no accumulated discretisation error along long paths (a classic
 problem of SoC-bucket formulations).
 
 **Theorem 1.** BLS returns a route of minimum trip time among all routes whose
-charging targets lie in $\mathcal Y$.
+charging targets lie in $\mathcal Y$ (consecutive stops at different stations
+of a node included).
 
 *Proof sketch.* Every transition has non-negative duration, so labels are
 settled in non-decreasing time.  By Lemma 1 a label dominated by a settled

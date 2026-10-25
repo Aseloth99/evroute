@@ -373,8 +373,10 @@ def _oracle_targets(P, s, mode):
 
 def brute_force_front(P, mode, max_len=8, max_visits=2, ncrit=3):
     """Exhaustive enumeration of walks (each node at most ``max_visits`` times,
-    at most ``max_len`` edges, every speed level) and of one optional charging
-    stop per visit of a station node to any target.  A partial route is cut
+    at most ``max_len`` edges, every speed level) and of charging stops to any
+    target: during a visit of a station node, any sequence of stops in which
+    consecutive stops use different stations (a stop may end below the
+    reserve; the route can then only stop again).  A partial route is cut
     only if a complete route found so far is no worse in every criterion
     (then every completion is dominated, since time strictly increases)."""
     net = P.net
@@ -386,7 +388,7 @@ def brute_force_front(P, mode, max_len=8, max_visits=2, ncrit=3):
     def weakly_dominated(vec):
         return any(all(a <= b for a, b in zip(f, vec)) for f in front)
 
-    def rec(v, t, m, w, e, n_edges, charged_here):
+    def rec(v, t, m, w, e, n_edges, last):
         vec = (t, m, w)[:ncrit]
         if weakly_dominated(vec):
             return
@@ -394,14 +396,15 @@ def brute_force_front(P, mode, max_len=8, max_visits=2, ncrit=3):
             front[:] = [f for f in front if not all(a <= b for a, b in zip(vec, f))]
             front.append(vec)
             return
-        if not charged_here:
-            for s in P.station_at.get(v, []):
-                f = P.cf[s]
-                for y in tg[s]:
-                    if y > e + EPS and y >= P.e_min - EPS:
-                        wq = P.wait_s(s, t)
-                        rec(v, t + (wq + P.setup_s[s] + f.charge_time(e, y)), m + f.money(e, y),
-                            w + f.soh(e, y), y, n_edges, True)
+        for s in P.station_at.get(v, []):
+            if s == last:
+                continue
+            f = P.cf[s]
+            for y in tg[s]:
+                if y > e + EPS:
+                    wq = P.wait_s(s, t)
+                    rec(v, t + (wq + P.setup_s[s] + f.charge_time(e, y)), m + f.money(e, y),
+                        w + f.soh(e, y), y, n_edges, s)
         if e >= P.e_min - EPS and n_edges < max_len:
             for a in net.out_edges[v]:
                 u = net.head[a]
@@ -412,10 +415,10 @@ def brute_force_front(P, mode, max_len=8, max_visits=2, ncrit=3):
                     if ne < P.e_min - EPS:
                         continue
                     visits[u] += 1
-                    rec(u, t + tau, m, w + P.drive_soh_per_kwh * max(c, 0.0), ne, n_edges + 1, False)
+                    rec(u, t + tau, m, w + P.drive_soh_per_kwh * max(c, 0.0), ne, n_edges + 1, -1)
                     visits[u] -= 1
 
-    rec(P.origin, 0.0, 0.0, 0.0, P.e_init, 0, False)
+    rec(P.origin, 0.0, 0.0, 0.0, P.e_init, 0, -1)
     return sorted(front)
 
 
@@ -450,11 +453,24 @@ def test_front_equals_brute_force_on_tiny_instances(ncrit):
         for m in p.alternatives:
             assert len(m.edges) <= 8
             assert max(m.nodes.count(v) for v in set(m.nodes)) <= 2
-        # ... so both fronts must coincide
+        # ... so both fronts must coincide -- up to rounding: routes that are equally
+        # expensive in exact arithmetic can differ by an ulp in float sums (e.g. DC to
+        # 9.8 kWh then AC to 19.6 kWh versus DC/AC/DC/AC with the same kWh per station),
+        # and the enumeration then keeps a slower route that is 1 ulp cheaper as a
+        # spurious point; the planner identifies them (FRONT_RTOL)
         got = sorted(v[:ncrit] for v in _internal_front(p))
-        assert len(got) == len(oracle), (seed, got, oracle)
-        for a, b in zip(got, oracle):
-            assert all(math.isclose(x, y, rel_tol=1e-9, abs_tol=1e-15) for x, y in zip(a, b)), (seed, a, b)
+
+        def same(a, b):
+            return all(math.isclose(x, y, rel_tol=1e-9, abs_tol=1e-15) for x, y in zip(a, b))
+
+        def covers(a, b):
+            return all(x <= y + 1e-9 * abs(y) + 1e-15 for x, y in zip(a, b))
+
+        assert len(got) <= len(oracle), (seed, got, oracle)
+        for g in got:  # every member is a point of the exact front
+            assert any(same(g, o) for o in oracle), (seed, g, oracle)
+        for o in oracle:  # every point of the exact front is matched (or tied up to rounding)
+            assert any(same(g, o) or covers(g, o) for g in got), (seed, o, got)
         nontrivial += len(oracle) >= 3
     assert nontrivial >= 3
 
@@ -584,6 +600,33 @@ def test_registry_helper_and_serialisation():
     d = q.to_dict()
     assert len(d["alternatives"]) == len(q.alternatives)
     json.dumps(d)  # the viewer contract is plain JSON
+
+
+def test_consecutive_stops_at_two_stations_of_one_node():
+    """Regression (BUG-3 of the cross-validation suite): DC (fast, dear, derated near full in
+    the cold) to 80 % and then AC (cheap) to 90 % at the same node is on the front, and the
+    cheapest member equals the BLS cost optimum, which uses exactly that pair of stops."""
+    b = NetworkBuilder()
+    o, s, d = b.add_node(0.0, 0.0, 100.0), b.add_node(30e3, 0.0, 100.0), b.add_node(180e3, 0.0, 100.0)
+    b.add_road(o, s, road_class="motorway")
+    b.add_road(s, d, road_class="motorway")
+    st = [Station(0, s, 50.0, "DC", price_per_kwh=0.75, setup_s=60.0, daily_sessions=1.0),
+          Station(1, s, 22.0, "AC", price_per_kwh=0.30, setup_s=60.0, daily_sessions=1.0)]
+    sc = Scenario("two stations at one node", b.build(), st, get_vehicle("compact50"),
+                  Query(o, d, initial_soc=0.3, departure_s=9 * 3600.0),
+                  Conditions(temperature_c=-10.0, preconditioning=False),
+                  Preferences(objective="cost", queue_aware=False, charge_step_soc=0.05))
+    P = sc.prepare()
+    bls = get_planner("bls").plan(P)
+    p = get_planner("pareto").plan(P)
+    assert p.feasible and bls.feasible
+    assert [(x.station, x.energy_out_kwh) for x in bls.stops] == [(0, pytest.approx(35.2)), (1, pytest.approx(39.6))]
+    assert math.isclose(min(m.generalized_cost for m in p.alternatives), bls.objective_value, rel_tol=1e-9)
+    assert [(x.station, x.position) for x in p.stops] == [(0, 1), (1, 1)]
+    for m in p.alternatives:
+        _assert_member_consistent(P, m)
+        for a, c in zip(m.stops, m.stops[1:]):  # never the same station twice in a row
+            assert a.position != c.position or a.station != c.station
 
 
 def test_origin_station_below_reserve_and_origin_equals_destination():

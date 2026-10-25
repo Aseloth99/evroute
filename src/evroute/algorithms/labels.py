@@ -43,11 +43,24 @@ charge.
 where ``F_s`` is the exact piecewise-linear "time to charge from empty"
 function of :class:`~evroute.charging.ChargingFunction`.  The arithmetic is
 literally the one of :func:`evroute.evaluate.evaluate`, so for the time
-objective the internal and the evaluated objective agree bit for bit.  A
-label that was created by charging at ``v`` does not charge again at ``v``
-(at most one stop per visit of a node -- two consecutive stops would pay
-the waiting and setup time twice).  Targets below the reserve are skipped
-(such a label could never move again).
+objective the internal and the evaluated objective agree bit for bit.
+
+*Consecutive stops.*  A label created by a stop at station ``s`` of ``v``
+may stop again at ``v``, at any **other** station ``s2 != s`` of the node
+(e.g. fast DC to 80 % and then cheap AC to 90 %, or the reverse when a
+derated DC charger is slower than AC near full), any number of times; it
+never stops at ``s`` itself right away: that second stop pays wait and
+setup again for energy the first stop could have charged directly, at no
+lower time, money or wear (``F_s``, ``M_s`` and ``S_s`` are additive along
+the charging curve and FIFO waits are non-negative).  Every stop raises the
+energy to the next target, so the chains are finite.  The model is
+therefore *every route the evaluator accepts whose charging targets lie in
+the target set*.  Targets below the reserve are skipped at nodes with a
+single station (such a label could never move again); at a node with
+several stations they are kept -- this only matters at the origin when
+``e_init < e_min`` -- because the evaluator checks the reserve on arrival
+and departure only, so a stop that ends below the reserve may be followed
+by a stop at another station of the node.
 
 Dominance
 =========
@@ -76,19 +89,22 @@ larger than ``B``'s only if ``m_A <= m_B``.  (Comparing ``g`` instead of
 cases: an earlier label that paid more money can be overtaken in a falling
 queue.)
 
-*One stop per visit.*  A label ``A`` created by charging at ``v`` may
-dominate a label ``B`` that is still allowed to charge at ``v``.  If ``v``
-hosts a **single** station this is still exact: ``A`` was created by some
-settled free label ``C`` at ``v``, and because charging costs are additive
-along the charging function (``F_s``, money and wear are cumulative), ``C``
-charging directly to any target ``y > e_A`` finishes no later and no more
-expensively than ``B`` charging to ``y``
-(``t_C + w(t_C) + setup + F(y) - F(e_C) = t_A - F(e_A) + F(y) <= t_B + w(t_B)
-+ setup + F(y) - F(e_B)``, likewise for the cost), and targets ``y <= e_A``
-are dominated by ``A`` itself.  At a node with **several** stations this
-argument fails (``C`` might have charged at a different station), so such
-nodes keep two Pareto sets: free labels are only compared with free labels,
-charged labels with both.
+*Dominance and the consecutive-stop rule.*  A label ``A`` created by a stop
+at station ``s`` of ``v`` cannot stop at ``s`` again, so it can do less than
+a label ``B`` at ``v`` that may still stop at ``s``.  Comparing the two with
+the rules above is nevertheless exact, so every node keeps **one** Pareto
+set: ``B``'s other continuations are open to ``A`` as well, and a stop of
+``B`` at ``s`` to a target ``y`` is matched by ``A``'s parent ``C`` (a
+settled label at ``v`` that may stop at ``s``, since it just did): for
+``y > e_A`` the label ``C`` charging directly to ``y`` has the time
+``t_C + w(t_C) + setup + F_s(y) - F_s(e_C) = t_A - F_s(e_A) + F_s(y)
+<= t_B + w(t_B) + setup + F_s(y) - F_s(e_B)`` (``t_A <= t_B``,
+``e_A >= e_B``, ``w >= 0``) and, by the same telescoping of the cumulative
+money and wear functions, no larger cost or money + wear; it carries the
+same tag ``s`` as ``B``'s child.  For ``y <= e_A`` ``A`` itself dominates
+``B``'s child.  (Earlier versions forbade every second stop at a node and
+kept a separate set for charged labels at multi-station nodes; they missed
+routes such as DC-then-AC at one node.)
 
 Search order and exactness
 ==========================
@@ -155,8 +171,8 @@ parent, how)``; settled labels are copied into flat parallel lists
 (``primary``, ``secondary``, ``energy``, ``node``, ``parent``, ``how``)
 indexed by a settled-label id.  ``how`` packs the transition that created a
 label: ``edge * n_levels + level`` for a drive, ``-2 - station`` for a
-charging stop (the *charged-here* flag is ``how <= -2``) and ``-1`` for the
-root.  The secondary criterion is the generalised cost for the time
+charging stop (a label with ``how = -2 - s`` may not stop at ``s`` next)
+and ``-1`` for the root.  The secondary criterion is the generalised cost for the time
 objective and the trip time for the cost objective.  Per node, the settled
 and the pushed 2-D Pareto sets are *staircases*: sorted lists (primary
 ascending, energy strictly ascending), queried and updated with
@@ -738,7 +754,7 @@ class _LabelSearch:
     """
 
     __slots__ = (
-        "bounded", "charged_stair", "created", "energy", "final", "final_key", "generated", "how",
+        "bounded", "created", "energy", "final", "final_key", "generated", "how",
         "n_levels", "node", "parent", "peak_queue", "primary", "pruned", "pruned_parents", "pushes",
         "secondary", "settled", "stair3", "stair_e", "stair_i", "stair_p", "status",
         "time_objective", "upper",
@@ -750,12 +766,11 @@ class _LabelSearch:
     node: list[int]
     parent: list[int]
     how: list[int]
-    # settled Pareto sets per node (and per charged set at multi-station nodes)
+    # settled Pareto sets, one per node
     stair_p: list[list[float]]
     stair_e: list[list[float]]
     stair_i: list[list[int]]
     stair3: list[_Pareto3] | None
-    charged_stair: list[int]
     # outcome and counters
     final: int
     final_key: float
@@ -797,9 +812,7 @@ class _LabelSearch:
 
     def settled_nodes(self) -> list[int]:
         """Nodes holding at least one settled label."""
-        chst = self.charged_stair
-        sets = self.stair_p
-        return [v for v in range(len(chst)) if sets[v] or (chst[v] != v and sets[chst[v]])]
+        return [v for v, st in enumerate(self.stair_p) if st]
 
 
 #: Relative slack of the parent-level charging test (see :func:`_label_search`);
@@ -949,8 +962,10 @@ def _label_search(
                 PHI.append(TY[-1][-1] if time_obj else vot * TY[-1][-1] + wm * MY[-1][-1] + wd * SY[-1][-1])
             else:
                 PHI.append(0.0)
-            # targets below the reserve lead to labels that can never move
-            JMIN.append(bisect_left(tg, emin_eps))
+            # targets below the reserve lead to labels that can never move -- unless
+            # another station of the node can raise the energy further (module docs)
+            alone = len(station_at[P.stations[s].node]) <= 1
+            JMIN.append(bisect_left(tg, emin_eps) if alone else 0)
     cf = P.cf
     setup = P.setup_s
     wait = P.wait_s
@@ -958,14 +973,6 @@ def _label_search(
     KX: list[list[float]] = [[] for _ in range(len(TG))]
     KO: list[list[float]] = [[] for _ in range(len(TG))]
     use_kappa = not dom3
-
-    # charged labels get their own Pareto set only at multi-station nodes
-    chst = list(range(n))
-    n_sets = n
-    for v, lst in station_at.items():
-        if len(lst) > 1:
-            chst[v] = n_sets
-            n_sets += 1
 
     # ------------------------------------------- settled-label store
     PRI: list[float] = []
@@ -980,14 +987,14 @@ def _label_search(
     # settled sets S: 2-D staircases (always; in the 3-D case they hold the
     # (primary, energy) projection and serve as a fast pre-filter) and the 3-D
     # structures; generated sets G: the same for every pushed label
-    SP: list[list[float]] = [[] for _ in range(n_sets)]
-    SE: list[list[float]] = [[] for _ in range(n_sets)]
-    SI: list[list[int]] = [[] for _ in range(n_sets)]
-    GP: list[list[float]] = [[] for _ in range(n_sets)]
-    GE: list[list[float]] = [[] for _ in range(n_sets)]
+    SP: list[list[float]] = [[] for _ in range(n)]
+    SE: list[list[float]] = [[] for _ in range(n)]
+    SI: list[list[int]] = [[] for _ in range(n)]
+    GP: list[list[float]] = [[] for _ in range(n)]
+    GE: list[list[float]] = [[] for _ in range(n)]
     inv_w = _NB3 / cap if cap > 0 else 0.0
-    S3: list[_Pareto3] = [_Pareto3(inv_w) for _ in range(n_sets)] if dom3 else []
-    G3: list[_Pareto3] = [_Pareto3(inv_w) for _ in range(n_sets)] if dom3 else []
+    S3: list[_Pareto3] = [_Pareto3(inv_w) for _ in range(n)] if dom3 else []
+    G3: list[_Pareto3] = [_Pareto3(inv_w) for _ in range(n)] if dom3 else []
 
     # heap entries: (key, -energy, number, primary, secondary, node, parent, how)
     heap: list[tuple] = []
@@ -1044,28 +1051,21 @@ def _label_search(
             break
 
         # ------------------------------ dominance by settled labels at v
-        charged = code <= -2  # created by a charging stop at v
-        sid = chst[v] if charged else v
+        # (one Pareto set per node, also for labels that may not stop at the
+        # station they were charged at: see "Dominance and the consecutive-stop
+        # rule" in the module docs)
         i = settled
         if dom3:
             # 3-D dominance on (money + wear so far, time, energy): see _label_search
             mm = p - vot * q
-            if S3[sid].dominated(SP[sid], SE[sid], mm, q, x) or (
-                sid != v and S3[v].dominated(SP[v], SE[v], mm, q, x)
-            ):
+            if S3[v].dominated(SP[v], SE[v], mm, q, x):
                 pruned += 1
                 continue
-            S3[sid].add(mm, q, x)
-            _stair_add(SP[sid], SE[sid], SI[sid], mm, x, i)
+            S3[v].add(mm, q, x)
+            _stair_add(SP[v], SE[v], SI[v], mm, x, i)
         else:
-            if sid != v:
-                Pf = SP[v]
-                j = bisect_right(Pf, p)
-                if j and SE[v][j - 1] >= x:
-                    pruned += 1
-                    continue
-            Pv = SP[sid]
-            Ev = SE[sid]
+            Pv = SP[v]
+            Ev = SE[v]
             j = bisect_right(Pv, p)
             if j and Ev[j - 1] >= x:
                 pruned += 1
@@ -1073,7 +1073,7 @@ def _label_search(
             if j == len(Pv):
                 Pv.append(p)
                 Ev.append(x)
-                SI[sid].append(i)
+                SI[v].append(i)
             else:
                 # the new label dominates the entries with p' >= p and e' <= x
                 lo = bisect_left(Pv, p)
@@ -1083,7 +1083,7 @@ def _label_search(
                     hi += 1
                 Pv[lo:hi] = [p]
                 Ev[lo:hi] = [x]
-                SI[sid][lo:hi] = [i]
+                SI[v][lo:hi] = [i]
         PRI_a(p)
         SEC_a(q)
         EN_a(x)
@@ -1154,16 +1154,17 @@ def _label_search(
                 pushes += 1
 
         # ------------------------------------------------------ charge
-        if not charged and allow_charging and is_station[v]:
+        if allow_charging and is_station[v]:
             if time_obj:
                 t, g = p, q
             else:
                 t, g = q, p
-            csid = chst[v]
+            last = -2 - code  # station of the stop that created this label (< 0: none)
             hv, elv, esv, needv = hb[v], el[v], es[v], need[v]
-            Gc, Gce = GP[csid], GE[csid]
-            Gf, Gfe = GP[v], GE[v]
+            Gc, Gce = GP[v], GE[v]
             for s in station_at[v]:
+                if s == last:
+                    continue  # never the same station twice in a row (module docs)
                 tg = TG[s]
                 L = len(tg)
                 j0 = bisect_right(tg, x + EPS)
@@ -1209,22 +1210,14 @@ def _label_search(
                     generated += 1
                     if dom3:
                         nm = np_ - vot * nq
-                        if G3[csid].dominated(Gc, Gce, nm, nq, y) or (
-                            csid != v and G3[v].dominated(Gf, Gfe, nm, nq, y)
-                        ):
+                        if G3[v].dominated(Gc, Gce, nm, nq, y):
                             pruned += 1
                             continue
-                    else:
-                        if Gc:
-                            j = bisect_right(Gc, np_)
-                            if j and Gce[j - 1] >= y:
-                                pruned += 1
-                                continue
-                        if csid != v:
-                            j = bisect_right(Gf, np_)
-                            if j and Gfe[j - 1] >= y:
-                                pruned += 1
-                                continue
+                    elif Gc:
+                        j = bisect_right(Gc, np_)
+                        if j and Gce[j - 1] >= y:
+                            pruned += 1
+                            continue
                     d = elv - y
                     if d > 0.0:
                         k = np_ + hv + d * rate
@@ -1241,7 +1234,7 @@ def _label_search(
                         continue
                     heappush(heap, (k, -y, nl, np_, nq, v, i, -2 - s))
                     if dom3:
-                        G3[csid].add(nm, nq, y)
+                        G3[v].add(nm, nq, y)
                         _stair_add_pe(Gc, Gce, nm, y)
                     else:
                         _stair_add_pe(Gc, Gce, np_, y)
@@ -1255,7 +1248,6 @@ def _label_search(
     res.node, res.parent, res.how = ND, PAR, HOW
     res.stair_p, res.stair_e, res.stair_i = SP, SE, SI
     res.stair3 = S3 if dom3 else None
-    res.charged_stair = chst
     res.final, res.final_key, res.status = final, final_key, status
     res.settled, res.generated, res.pushes, res.created = settled, generated, pushes, nl
     res.pruned, res.bounded = pruned + bounded, bounded
@@ -1343,22 +1335,16 @@ def fastest_feasible_tree(
     )
     need = min_arrival_energy or {}
     out: dict[int, tuple] = {}
-    SP, SE, SI, chst = res.stair_p, res.stair_e, res.stair_i, res.charged_stair
+    SE, SI = res.stair_e, res.stair_i
     energy, primary = res.energy, res.primary
     for v in range(P.net.num_nodes):
-        best = -1
-        best_t = INF
-        for sid in ((v,) if chst[v] == v else (v, chst[v])):
-            Ev = SE[sid]
-            if not Ev:
-                continue
-            j = bisect_left(Ev, need[v] - EPS) if v in need else 0
-            if j < len(Ev):
-                tj, ij = SP[sid][j], SI[sid][j]
-                if best < 0 or tj < best_t or (tj == best_t and energy[ij] > energy[best]):
-                    best, best_t = ij, tj
-        if best < 0:
+        Ev = SE[v]
+        if not Ev:
             continue
+        j = bisect_left(Ev, need[v] - EPS) if v in need else 0
+        if j >= len(Ev):
+            continue
+        best = SI[v][j]
         edges, levels, charges = res.reconstruct(best)
         if allow_charging:
             out[v] = (primary[best], energy[best], edges, levels, charges)
