@@ -1,21 +1,28 @@
-"""Paper style shared by every static figure and animation of EVRoute.
+"""Paper style shared by every static figure of EVRoute.
 
-This module is the single place that decides how EVRoute *looks*:
+This module is the single place that decides how EVRoute's static figures
+*look*:
 
 * **one colour per algorithm**, taken from the colour-blind-safe palette of
-  Okabe & Ito (2008, *Color Universal Design*), so that "BLS-A* is blue" holds
-  in every figure, table, animation and -- ideally -- in the web viewer;
+  Okabe & Ito (2008, *Color Universal Design*) and identical to the colours
+  of the interactive web viewer (:mod:`evroute.viz.export`), so that
+  "BLS-A* is blue" holds in every figure, table and the animated demo;
 * a **secondary encoding** per algorithm (marker shape, and a dashed line for
   heuristics without an optimality guarantee) so that the figures survive
   grey-scale printing and colour-vision deficiencies;
+* a **seaborn theme** (Waskom 2021, *J. Open Source Softw.* 6(60), 3021):
+  :func:`apply` calls :func:`seaborn.set_theme` with a clean ``"ticks"``
+  style, the ``"paper"`` context and the EVRoute palette, and
+  :func:`paper` installs the same settings temporarily; without seaborn
+  the equivalent plain-matplotlib settings are used;
 * fonts and sizes for **IEEE single-column (3.5 in) and double-column
   (7.16 in)** figures, with TrueType (Type 42) fonts embedded in PDF/PS
   output as IEEE PDF eXpress requires;
 * a :func:`save` helper that writes a vector PDF and a 300 dpi PNG at once.
 
-Everything at module level is plain Python; matplotlib is imported lazily
-inside the functions that need it, so the palette can be imported by code
-that must stay dependency-free (e.g. the web exporter).
+Everything at module level is plain Python; matplotlib and seaborn are
+imported lazily inside the functions that need them, so the palette can be
+imported by code that must stay dependency-free.
 
 Typical use::
 
@@ -24,19 +31,23 @@ Typical use::
     with style.paper():                    # or: style.apply() globally
         fig, ax = plt.subplots(figsize=style.figsize("single"))
         ax.plot(x, y, **style.line_kw("bls-astar"))
+        sns.barplot(data=rows, x="runtime", y="algorithm",
+                    hue="algorithm", palette=style.algorithm_palette(names))
     style.save(fig, "figures/fig_soc")     # -> fig_soc.pdf + fig_soc.png
 """
 
 from __future__ import annotations
 
 import zlib
+from collections.abc import Iterable, Iterator, Sequence
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Iterator, Sequence
+from typing import Any
 
 __all__ = [
     "OKABE_ITO",
     "ALGORITHM_COLORS",
+    "ALGORITHM_COLORS_DARK",
     "ALGORITHM_MARKERS",
     "ALGORITHM_TITLES",
     "HEURISTICS",
@@ -49,6 +60,7 @@ __all__ = [
     "algorithm_marker",
     "algorithm_title",
     "algorithm_linestyle",
+    "algorithm_palette",
     "line_kw",
     "categorical",
     "figsize",
@@ -56,6 +68,7 @@ __all__ = [
     "configure",
     "apply",
     "paper",
+    "has_seaborn",
     "save",
     "terrain_cmap",
     "sequential_cmap",
@@ -75,31 +88,35 @@ OKABE_ITO: dict[str, str] = {
     "reddish_purple": "#CC79A7",
 }
 
-#: Stable colour per algorithm (registry name -> hex).  The pure Okabe-Ito
-#: yellow (#F0E442) has a contrast of only 1.3:1 on white paper, so CFP-A*
-#: uses a darkened yellow of the same hue; the naive baseline is a neutral
-#: grey because it is shown only to illustrate the problem.
+#: Stable colour per algorithm (registry name -> hex), identical to the
+#: light theme of the web viewer (``evroute.viz.export.ALGORITHM_COLORS``;
+#: ``tests/test_figures.py`` checks that the two tables agree).  The two
+#: exact label-setting methods share a hue family (BLS sky blue, BLS-A*
+#: blue), the continuous CFP is bluish green.  The pure Okabe-Ito yellow
+#: (#F0E442) has a contrast of only 1.3:1 on white paper, so CFP-A* uses a
+#: darkened yellow of the same hue; the naive baseline is a neutral grey
+#: because it is shown only to illustrate the problem.
 ALGORITHM_COLORS: dict[str, str] = {
     "naive": "#7F7F7F",
-    "greedy": OKABE_ITO["orange"],
-    "station-graph": OKABE_ITO["sky_blue"],
-    "genetic": OKABE_ITO["reddish_purple"],
-    "bls": OKABE_ITO["bluish_green"],
+    "greedy": OKABE_ITO["vermillion"],
+    "station-graph": OKABE_ITO["reddish_purple"],
+    "genetic": OKABE_ITO["orange"],
+    "bls": OKABE_ITO["sky_blue"],
     "bls-astar": OKABE_ITO["blue"],
-    "cfp": OKABE_ITO["vermillion"],
-    "cfp-astar": "#B59F00",
-    "pareto": OKABE_ITO["black"],
+    "cfp": OKABE_ITO["bluish_green"],
+    "cfp-astar": "#A89200",
+    "pareto": "#262626",
 }
 
 #: Lighter variants for dark backgrounds (slides, the viewer's dark theme).
 ALGORITHM_COLORS_DARK: dict[str, str] = {
     "naive": "#A3A3A3",
-    "greedy": "#F5B731",
-    "station-graph": "#7CC8F2",
-    "genetic": "#E191BE",
-    "bls": "#21C495",
+    "greedy": "#F0782E",
+    "station-graph": "#E191BE",
+    "genetic": "#F5B731",
+    "bls": "#7CC8F2",
     "bls-astar": "#3D9EE6",
-    "cfp": "#F0782E",
+    "cfp": "#21C495",
     "cfp-astar": "#F0E442",
     "pareto": "#ECECEC",
 }
@@ -117,7 +134,7 @@ ALGORITHM_MARKERS: dict[str, str] = {
     "pareto": "*",
 }
 
-#: Short labels for legends, table rows and the animated vehicles.
+#: Short labels for legends and table rows (same as the web viewer).
 ALGORITHM_TITLES: dict[str, str] = {
     "naive": "Naive",
     "greedy": "Greedy",
@@ -133,7 +150,8 @@ ALGORITHM_TITLES: dict[str, str] = {
 #: Algorithms without an optimality guarantee; drawn with dashed lines.
 HEURISTICS: frozenset[str] = frozenset({"naive", "greedy", "station-graph", "genetic"})
 
-#: Fallback colours for unknown algorithm names (chosen by a stable hash).
+#: Fallback colours for unknown algorithm names (chosen by a stable hash,
+#: the same table and hash as the web viewer).
 _FALLBACK: tuple[str, ...] = (
     OKABE_ITO["blue"],
     OKABE_ITO["vermillion"],
@@ -141,7 +159,7 @@ _FALLBACK: tuple[str, ...] = (
     OKABE_ITO["reddish_purple"],
     OKABE_ITO["orange"],
     OKABE_ITO["sky_blue"],
-    "#B59F00",
+    "#A89200",
 )
 _FALLBACK_MARKERS: tuple[str, ...] = ("o", "s", "D", "^", "v", "P", "X", "*")
 
@@ -154,7 +172,7 @@ CATEGORICAL: tuple[str, ...] = (
     OKABE_ITO["reddish_purple"],
     OKABE_ITO["orange"],
     OKABE_ITO["sky_blue"],
-    "#B59F00",
+    "#A89200",
     "#4D4D4D",
 )
 
@@ -198,8 +216,15 @@ WIDTHS: dict[str, float] = {
     "slide": 10.0,
 }
 
-#: Default style settings used by :func:`paper` (change with :func:`configure`).
-_CURRENT: dict[str, Any] = {"font": "sans", "base_size": 8.0}
+#: Default style settings used by :func:`paper` and :func:`apply` (change
+#: them with :func:`configure`): font family, body size [pt], seaborn style
+#: and seaborn context.
+_CURRENT: dict[str, Any] = {"font": "sans", "base_size": 8.0, "theme": "ticks", "context": "paper"}
+
+#: seaborn styles accepted by :func:`configure` (``seaborn.axes_style``).
+THEMES: tuple[str, ...] = ("ticks", "whitegrid", "white", "darkgrid", "dark")
+#: seaborn contexts accepted by :func:`configure` (``seaborn.plotting_context``).
+CONTEXTS: tuple[str, ...] = ("paper", "notebook", "talk", "poster")
 
 
 # ==================================================================== lookups
@@ -245,6 +270,20 @@ def line_kw(name: str, **overrides: Any) -> dict[str, Any]:
     return kw
 
 
+def algorithm_palette(names: Iterable[str], *, titles: bool = False, dark: bool = False) -> dict[str, str]:
+    """``{name: colour}`` for seaborn's ``palette=`` argument.
+
+    With ``titles=True`` the keys are the display titles
+    (:func:`algorithm_title`), for data frames whose hue column holds
+    ``"BLS-A*"`` rather than ``"bls-astar"``.  Unknown names get the same
+    stable fallback colour as in :func:`algorithm_color`.
+    """
+    out: dict[str, str] = {}
+    for n in names:
+        out[algorithm_title(n) if titles else n] = algorithm_color(n, dark=dark)
+    return out
+
+
 def categorical(i: int) -> str:
     """The ``i``-th colour of the non-algorithm categorical order (cycled
     only past 8 entities, which a single figure should never show)."""
@@ -258,19 +297,58 @@ def figsize(width: str | float = "single", aspect: float = 0.68, height: float |
 
 
 # ================================================================ rc settings
-def rc_params(font: str | None = None, base_size: float | None = None) -> dict[str, Any]:
+def has_seaborn() -> bool:
+    """``True`` if seaborn is installed (it is optional)."""
+    import importlib.util
+
+    return importlib.util.find_spec("seaborn") is not None
+
+
+def _seaborn_base(theme: str, context: str) -> dict[str, Any]:
+    """seaborn's ``axes_style(theme)`` + ``plotting_context(context)`` as a
+    plain dict (empty without seaborn)."""
+    try:
+        import seaborn as sns
+    except Exception:  # pragma: no cover - depends on the installation
+        return {}
+    rc: dict[str, Any] = dict(sns.axes_style(theme))
+    rc.update(sns.plotting_context(context))
+    return rc
+
+
+def rc_params(
+    font: str | None = None,
+    base_size: float | None = None,
+    *,
+    theme: str | None = None,
+    context: str | None = None,
+    seaborn: bool = True,
+) -> dict[str, Any]:
     """Matplotlib ``rcParams`` of the paper style.
+
+    The settings are layered: seaborn's ``axes_style(theme)`` and
+    ``plotting_context(context)`` first (when seaborn is installed and
+    ``seaborn`` is true), then the EVRoute overrides -- fonts, sizes, ink
+    colours, thin axes, no top/right spines, Type 42 fonts in PDF.  The
+    result is therefore the same clean look with or without seaborn, and
+    seaborn plot functions called under it pick up the EVRoute palette.
 
     ``font`` is ``"sans"`` (DejaVu Sans, matplotlib's bundled font, which
     covers Turkish and the symbols used in labels) or ``"serif"`` (DejaVu
     Serif with matching math text).  ``base_size`` is the body font size in
-    points (8 pt matches IEEE figure text at column width).
+    points (8 pt matches IEEE figure text at column width).  ``theme`` and
+    ``context`` default to the values set with :func:`configure`
+    (``"ticks"`` and ``"paper"``).
     """
     font = font or _CURRENT["font"]
     size = float(base_size if base_size is not None else _CURRENT["base_size"])
+    theme = theme or _CURRENT["theme"]
+    context = context or _CURRENT["context"]
     serif = font == "serif"
     small = size - 1.0
-    rc: dict[str, Any] = {
+    rc: dict[str, Any] = _seaborn_base(theme, context) if seaborn else {}
+    grid_on = theme in ("whitegrid", "darkgrid")
+    rc.update({
         "font.family": "serif" if serif else "sans-serif",
         "font.sans-serif": ["DejaVu Sans", "Arial", "Helvetica", "sans-serif"],
         "font.serif": ["DejaVu Serif", "STIXGeneral", "Times New Roman", "serif"],
@@ -291,7 +369,7 @@ def rc_params(font: str | None = None, base_size: float | None = None) -> dict[s
         "axes.linewidth": 0.6,
         "axes.spines.top": False,
         "axes.spines.right": False,
-        "axes.grid": False,
+        "axes.grid": grid_on,
         "axes.axisbelow": True,
         "axes.facecolor": SURFACE,
         "axes.labelpad": 3.0,
@@ -333,7 +411,18 @@ def rc_params(font: str | None = None, base_size: float | None = None) -> dict[s
         "svg.fonttype": "none",
         "image.cmap": "cividis",
         "hatch.linewidth": 0.5,
-    }
+        "patch.force_edgecolor": False,
+        "xtick.direction": "out",
+        "ytick.direction": "out",
+    })
+    if theme in ("darkgrid", "dark"):  # keep seaborn's grey canvas and white grid
+        for k in ("axes.facecolor", "grid.color", "axes.spines.top", "axes.spines.right"):
+            rc.pop(k, None)
+        if seaborn:
+            base = _seaborn_base(theme, context)
+            for k in ("axes.facecolor", "grid.color"):
+                if k in base:
+                    rc[k] = base[k]
     try:  # colour cycle (needs matplotlib; skipped when it is absent)
         from cycler import cycler
 
@@ -343,29 +432,71 @@ def rc_params(font: str | None = None, base_size: float | None = None) -> dict[s
     return rc
 
 
-def configure(*, font: str | None = None, base_size: float | None = None) -> None:
-    """Change the defaults used by :func:`paper` (and thus by every figure).
+def configure(
+    *,
+    font: str | None = None,
+    base_size: float | None = None,
+    theme: str | None = None,
+    context: str | None = None,
+) -> None:
+    """Change the defaults used by :func:`paper` and :func:`apply` (and thus
+    by every figure).
 
-    >>> configure(font="serif", base_size=9)   # doctest: +SKIP
+    >>> configure(font="serif", base_size=9, theme="whitegrid")   # doctest: +SKIP
     """
     if font is not None:
         if font not in ("sans", "serif"):
             raise ValueError("font must be 'sans' or 'serif'")
         _CURRENT["font"] = font
     if base_size is not None:
+        if not float(base_size) > 0:
+            raise ValueError("base_size must be positive")
         _CURRENT["base_size"] = float(base_size)
+    if theme is not None:
+        if theme not in THEMES:
+            raise ValueError(f"theme must be one of {THEMES}")
+        _CURRENT["theme"] = theme
+    if context is not None:
+        if context not in CONTEXTS:
+            raise ValueError(f"context must be one of {CONTEXTS}")
+        _CURRENT["context"] = context
 
 
-def apply(font: str | None = None, base_size: float | None = None) -> None:
-    """Install the paper style globally (``matplotlib.rcParams.update``)."""
+def apply(
+    font: str | None = None,
+    base_size: float | None = None,
+    *,
+    theme: str | None = None,
+    context: str | None = None,
+) -> None:
+    """Install the paper style globally.
+
+    With seaborn installed this calls :func:`seaborn.set_theme` with the
+    configured style (default ``"ticks"``), context (default ``"paper"``),
+    the EVRoute categorical palette and the EVRoute overrides of
+    :func:`rc_params`; every later matplotlib *and* seaborn plot uses them.
+    Without seaborn the same overrides are written to
+    ``matplotlib.rcParams``.
+    """
     import matplotlib
 
-    matplotlib.rcParams.update(rc_params(font, base_size))
+    theme = theme or _CURRENT["theme"]
+    context = context or _CURRENT["context"]
+    rc = rc_params(font, base_size, theme=theme, context=context)
+    try:
+        import seaborn as sns
+    except Exception:  # pragma: no cover - depends on the installation
+        matplotlib.rcParams.update(rc)
+        return
+    sns.set_theme(context=context, style=theme, palette=list(CATEGORICAL), rc=rc)
+    matplotlib.rcParams.update(rc)  # seaborn rescales a few sizes: ours win
 
 
 @contextmanager
 def paper(font: str | None = None, base_size: float | None = None, **extra: Any) -> Iterator[None]:
-    """Context manager: the paper style for everything created inside it."""
+    """Context manager: the paper style (seaborn theme + EVRoute overrides,
+    see :func:`rc_params`) for everything created inside it.  ``extra``
+    rcParams are applied last.  Global settings are restored on exit."""
     import matplotlib
 
     rc = rc_params(font, base_size)

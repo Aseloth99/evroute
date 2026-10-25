@@ -163,7 +163,9 @@ class _MetaSearch:
         key = (node, energy)
         tree = self.trees.get(key)
         if tree is None:
-            tree = fastest_feasible_tree(self.P, node, energy, t_start=0.0, min_arrival_energy=self.need)
+            tree = fastest_feasible_tree(
+                self.P, node, energy, t_start=0.0, min_arrival_energy=self.need, fastest_level_only=True
+            )
             self.trees[key] = tree
             self.tree_nodes += len(tree)
             trace_label_tree(self.trace, tree, offset=t_offset)

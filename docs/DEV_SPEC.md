@@ -7,9 +7,9 @@ beautiful animated viewer.  Read this file completely before writing code.
 
 ## 0. Ground rules
 
-* **Core is pure Python ≥ 3.10, zero dependencies.** `matplotlib` is allowed
-  only inside `evroute/viz/figures.py`, `evroute/viz/animate.py` and
-  experiment scripts, imported lazily.  `pytest` for tests.  Optional
+* **Core is pure Python ≥ 3.10, zero dependencies.** `matplotlib` and `seaborn`
+  are allowed only inside `evroute/viz/figures.py`, `evroute/viz/style.py`
+  and `evroute/experiments/`, imported lazily.  `pytest` for tests.  Optional
   third-party loaders (e.g. `osmnx`) must be imported lazily inside functions
   with a helpful error message.
 * Type hints, module and public-function docstrings, small functions.  Match

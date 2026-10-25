@@ -20,6 +20,7 @@
       this.ready = false;
       this.payload = payload;
       this.live = !!payload.live;
+      I.setLang(payload.lang === 'en' ? 'en' : 'tr');
       this.model = new EVR.model.Model(payload);
       this.layers = { terrain: true, stations: true, labels: true, others: true };
       this.visible = new Set(this.model.results.map((r, i) => i));
@@ -30,7 +31,6 @@
       this.themePref = U.storage.get('evroute.theme', 'auto');
       this._applyThemeAttr();
       this.theme = U.readTheme();
-      I.setLang(payload.lang === 'en' ? 'en' : 'tr');
 
       this.map = new EVR.map.MapView(this, U.$('#map'));
       this.anim = new EVR.anim.Animator(this);
@@ -174,6 +174,23 @@
       return [cx - hw, cy - hh, cx + hw, cy + hh];
     }
 
+    /**
+     * Area the camera fits by default: the visible routes, or in search
+     * replay the region explored by the replayed search(es).
+     */
+    defaultBBox() {
+      const a = this.anim;
+      let bb = this.visibleBBox();
+      if (a && a.enabled && a.mode === 'search') {
+        for (const r of a._searchRoutes()) {
+          const b = r._trace && r._trace.bbox;
+          if (!b) continue;
+          bb = bb ? [Math.min(bb[0], b[0]), Math.min(bb[1], b[1]), Math.max(bb[2], b[2]), Math.max(bb[3], b[3])] : b.slice();
+        }
+      }
+      return bb;
+    }
+
     /** Station shown in the 24-h queue chart: hovered > pinned > first stop. */
     waitStation() {
       if (this.waitHover >= 0) return this.waitHover;
@@ -289,10 +306,17 @@
 
     applyLang() {
       I.apply(document);
+      this.model.localizeTitles();
       for (const b of U.$$('#lang-seg button')) b.setAttribute('aria-pressed', String(b.dataset.lang === I.lang));
       for (const b of U.$$('#theme-seg button')) b.setAttribute('aria-pressed', String(b.dataset.themeChoice === this.themePref));
       const sc = this.model.scenario || {};
-      U.$('#title').textContent = this.payload.title || sc.name || 'EVRoute';
+      const q = this.currentQuery();
+      // live mode: the title follows the planned trip
+      const title = this.live && this.model.results.length
+        ? `${this.model.nodeLabel(q.origin)} → ${this.model.nodeLabel(q.destination)}`
+        : (this.payload.title || sc.name || 'EVRoute');
+      U.$('#title').textContent = title;
+      document.title = `${title} · EVRoute`;
       const veh = (sc.vehicle || {}).name;
       const parts = [sc.name, veh, `${I.t('departs')} ${I.clock(this.currentQuery().departure_s || 0, false)}`].filter(Boolean);
       U.$('#subtitle').textContent = parts.join(' · ');

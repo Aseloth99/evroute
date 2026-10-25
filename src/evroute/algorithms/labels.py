@@ -762,6 +762,7 @@ def _label_search(
     max_labels: int = 5_000_000,
     max_key: float = INF,
     trace: SearchTrace | None = None,
+    fastest_level_only: bool = False,
 ) -> _LabelSearch:
     """Run the battery-constrained label-setting search (see module docs).
 
@@ -801,7 +802,7 @@ def _label_search(
     # one tuple (head, d_primary, d_secondary, consumption, how) per edge and
     # speed level; heads that cannot reach the goal are left out entirely
     head = net.head
-    options = P.edge_options
+    options = [opts[:1] for opts in P.edge_options] if fastest_level_only else P.edge_options
     adj: list[tuple[tuple[int, float, float, float, int], ...]] = []
     for v in range(n):
         row = []
@@ -1115,6 +1116,7 @@ def fastest_feasible_tree(
     min_arrival_energy: Mapping[int, float] | None = None,
     targets: str = "grid+breaks",
     max_labels: int = 5_000_000,
+    fastest_level_only: bool = False,
 ) -> dict[int, tuple]:
     """Earliest battery-feasible arrival at every node reachable from ``source``.
 
@@ -1150,6 +1152,10 @@ def fastest_feasible_tree(
         requirement cannot be met are omitted.
     ``targets``, ``max_labels``
         as for :class:`LabelSettingPlanner`.
+    ``fastest_level_only``
+        drive every edge at its fastest speed level only.  The heuristic
+        baselines use this: with eco speeds the full tree can hold millions
+        of labels, and a navigator-style heuristic would not slow down anyway.
 
     Example (reachability of every station without charging)::
 
@@ -1168,6 +1174,7 @@ def fastest_feasible_tree(
         targets=targets,
         max_labels=max_labels,
         max_key=max_key,
+        fastest_level_only=fastest_level_only,
     )
     need = min_arrival_energy or {}
     out: dict[int, tuple] = {}

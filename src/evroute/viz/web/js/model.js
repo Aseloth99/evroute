@@ -133,6 +133,14 @@
       this.results = results.map((r, i) => prepareRoute(this, r, i, null));
     }
 
+    /** Re-translate the route titles after a language switch. */
+    localizeTitles() {
+      for (const r of this.results) {
+        r.title = localTitle(r);
+        for (const a of r.alternatives || []) if (a._tl) a.title = localTitle(a);
+      }
+    }
+
     /** Alternative `ai` of result `ri` (Pareto member), prepared lazily. */
     alternative(ri, ai) {
       const r = this.results[ri];
@@ -142,9 +150,18 @@
       return a;
     }
 
+    /** Name of node `v`, else "near <closest place>" (within 40 km), else "#v". */
     nodeLabel(v) {
       const nm = this.nodeName[v] !== undefined ? this.nodeName[v] : this.nodeName[String(v)];
-      return nm || `#${v}`;
+      if (nm) return nm;
+      if (v >= 0 && v < this.n && this.places.length) {
+        const hit = this.nearestNode(this.X[v], this.Y[v], true);
+        if (hit.node >= 0 && hit.dist <= 40000) {
+          const p = this.placeByNode.get(hit.node);
+          if (p) return EVR.i18n.t('near', { p: p.name });
+        }
+      }
+      return `#${v}`;
     }
 
     /** Nearest node to world point (x, y); `named` restricts to labelled places. */
@@ -172,9 +189,20 @@
   }
 
   /* ------------------------------------------------------------ routes */
+  /** Title in the current language; Pareto members keep their "#k" suffix. */
+  function localTitle(r) {
+    if (r._title0 === undefined) r._title0 = r.title || r.algorithm || '';
+    const I = EVR.i18n;
+    if (r._ai !== null && r._ai !== undefined && Number.isInteger(r.member)) {
+      return `${I.algoTitle(r.algorithm, r._title0.replace(/ #\d+$/, ''))} #${r.member + 1}`;
+    }
+    return I.algoTitle(r.algorithm, r._title0);
+  }
+
   function prepareRoute(model, r, ri, ai) {
     r._ri = ri;
     r._ai = ai;
+    r.title = localTitle(r);
     const nodes = r.nodes || [];
     const edges = r.edges || [];
     const L = nodes.length;
@@ -285,8 +313,14 @@
       }
       const kn = new Float32Array(N);
       const span = kmax > kmin ? kmax - kmin : 1;
-      for (let j = 0; j < N; j++) kn[j] = U.isNum(keys[j]) ? (keys[j] - kmin) / span : 0;
-      r._trace = { n: N, xy: pxy, key: kn, kmin, kmax };
+      let tx0 = Infinity, ty0 = Infinity, tx1 = -Infinity, ty1 = -Infinity;
+      for (let j = 0; j < N; j++) {
+        kn[j] = U.isNum(keys[j]) ? (keys[j] - kmin) / span : 0;
+        const x = pxy[2 * j], y = pxy[2 * j + 1];
+        if (x < tx0) tx0 = x; if (x > tx1) tx1 = x;
+        if (y < ty0) ty0 = y; if (y > ty1) ty1 = y;
+      }
+      r._trace = { n: N, xy: pxy, key: kn, kmin, kmax, bbox: [tx0, ty0, tx1, ty1] };
     } else {
       r._trace = null;
     }
@@ -412,5 +446,5 @@
     return p[p.length - 1][1];
   }
 
-  EVR.model = { Model, prepareRoute, stateAt, stopIndexAt, socAtDistance, waitAt, stationClass, CLASS_ORDER };
+  EVR.model = { Model, prepareRoute, localTitle, stateAt, stopIndexAt, socAtDistance, waitAt, stationClass, CLASS_ORDER };
 })(window.EVR = window.EVR || {});

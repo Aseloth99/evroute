@@ -115,6 +115,8 @@
       departs: 'Kalkış',
       stops: 'Durak',
       stops_n: '{n} durak',
+      stops_1: '1 durak',
+      near: '{p} yakını',
       energy: 'Enerji',
       charged: 'Şarj edilen',
       money: 'Ücret',
@@ -123,7 +125,7 @@
       arrival_soc: 'Varış şarjı',
       min_soc: 'En düşük şarj',
       runtime: 'Çalışma süresi',
-      settled: 'Kesinleşen etiket',
+      settled: 'Etiketler',
       drive: 'Sürüş',
       queue: 'Kuyruk',
       setup: 'Bağlanma',
@@ -224,6 +226,24 @@
       unit_kwh: 'kWh',
       unit_kw: 'kW',
       day_plus: '+{d}g',
+
+      reliability: 'Güvenilirlik',
+      p_strand_m: 'Yolda kalma',
+      p_short_m: 'Eksik varış',
+      th_p_strand: 'P(kalma)',
+      th_p_short: 'P(eksik)',
+      rel_title: '{n} Monte Carlo dünyası (belirsiz tüketim, rastgele kuyruklar): yolda kalma {s}, rezerv ihlali {b}, hedefin altında varış {a}',
+      rel_short_title: 'Varışta istenen şarjın altında kalma olasılığı ({n} Monte Carlo dünyası)',
+      rel_strand_title: 'Bataryanın yolda bitme olasılığı ({n} Monte Carlo dünyası)',
+      pareto_fastest: 'en hızlı',
+      pareto_cheapest: 'en ucuz',
+      pareto_members: '{n} Pareto-optimal rota',
+      pareto_dominated: 'domine edilen bölge',
+      pareto_front: 'Pareto cephesi',
+      pareto_returned: 'döndürülen plan',
+      off_axis: 'eksen dışında',
+      race_more: '+{n}',
+      now_marker: 'şimdi',
     },
     en: {
       skip_to_map: 'Skip to map',
@@ -249,7 +269,7 @@
       min_arrival: 'Arrival charge',
       objective: 'Objective',
       objective_time: 'Fastest',
-      objective_cost: 'Cheapest (generalised cost)',
+      objective_cost: 'Lowest cost',
       departure: 'Departure',
       value_of_time: 'Value of time',
       per_hour: '/h',
@@ -328,6 +348,8 @@
       departs: 'Departure',
       stops: 'Stops',
       stops_n: '{n} stops',
+      stops_1: '1 stop',
+      near: 'near {p}',
       energy: 'Energy',
       charged: 'Charged',
       money: 'Money',
@@ -437,6 +459,24 @@
       unit_kwh: 'kWh',
       unit_kw: 'kW',
       day_plus: '+{d}d',
+
+      reliability: 'Reliability',
+      p_strand_m: 'P(strand)',
+      p_short_m: 'P(arrive short)',
+      th_p_strand: 'P(strand)',
+      th_p_short: 'P(short)',
+      rel_title: '{n} Monte Carlo worlds (uncertain consumption, random queues): strand {s}, reserve breach {b}, arrive below target {a}',
+      rel_short_title: 'Probability of arriving below the required charge ({n} Monte Carlo worlds)',
+      rel_strand_title: 'Probability that the battery runs empty on the way ({n} Monte Carlo worlds)',
+      pareto_fastest: 'fastest',
+      pareto_cheapest: 'cheapest',
+      pareto_members: '{n} Pareto-optimal routes',
+      pareto_dominated: 'dominated region',
+      pareto_front: 'Pareto front',
+      pareto_returned: 'returned plan',
+      off_axis: 'off axis',
+      race_more: '+{n}',
+      now_marker: 'now',
     },
   };
 
@@ -453,6 +493,11 @@
       'cfp-astar': 'CFP ile aynı optimum; A* anahtarıyla çok daha az etiket.',
       pareto: 'Çok kriterli etiket belirleme: süre, ücret ve batarya yıpranması arasındaki Pareto cephesi.',
     },
+  };
+
+  /** Localised short titles of the baselines (the exact methods keep their acronyms). */
+  const ALGO_TITLE = {
+    tr: { naive: 'Naif', greedy: 'Açgözlü', 'station-graph': 'İstasyon grafı', genetic: 'Genetik' },
   };
 
   const LOCALE = { tr: 'tr-TR', en: 'en-GB' };
@@ -474,6 +519,17 @@
       if (s === undefined) s = key;
       if (params) s = s.replace(/\{(\w+)\}/g, (m, k) => (params[k] !== undefined ? String(params[k]) : m));
       return s;
+    },
+
+    /** Short title of algorithm `name` in the current language (`fallback` = payload title). */
+    algoTitle(name, fallback) {
+      const local = ALGO_TITLE[I.lang] && ALGO_TITLE[I.lang][name];
+      return local || fallback || name;
+    },
+
+    /** "1 stop" / "3 stops" (Turkish has no plural after numerals). */
+    stops(n) {
+      return n === 1 ? I.t('stops_1') : I.t('stops_n', { n: I.num(n, 0) });
     },
 
     algoDescription(info) {

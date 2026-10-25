@@ -40,17 +40,13 @@ def case_study_figures(
         traced = [p for p in routed if p.trace is not None and p.algorithm in ("bls", "bls-astar", "cfp", "cfp-astar")]
         if len(traced) >= 2:
             jobs.append(("fig_search", lambda: F.plot_search_space(scenario, traced[:4])))
-    import matplotlib.pyplot as plt
+    from ..viz import style
 
     for name, job in jobs:
         try:
             res = job()
             fig = res[0] if isinstance(res, tuple) else res
-            for ext in (".pdf", ".png"):
-                p = outdir / f"{name}{ext}"
-                fig.savefig(p, dpi=300 if ext == ".png" else None, bbox_inches="tight")
-                written.append(p)
-            plt.close(fig)
+            written += style.save(fig, outdir / name, close=True)
         except Exception as exc:
             print(f"  ! {name}: {exc}")
     return written

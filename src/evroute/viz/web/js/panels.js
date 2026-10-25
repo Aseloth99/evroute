@@ -20,10 +20,22 @@
     return wrap;
   }
 
-  /** Columns of the comparison table: [key, label, value(r), format(v, r), better]. */
+  /** Monte Carlo probability `k` of route `r` (null when not analysed). */
+  function relP(r, k) {
+    const rel = r.reliability;
+    return rel && U.isNum(rel[k]) ? rel[k] : null;
+  }
+
+  function fmtP(v) {
+    return I.pct(v, v > 0 && v < 0.095 ? 1 : 0);
+  }
+
+  /** Columns of the comparison table: [key, label, value(r), format(v, r), better, title]. */
   function columns(app) {
     const cur = app.model.currency;
     const T = (r) => (r.feasible ? r.total_time_s : null);
+    const nRel = (app.model.results.find((r) => r.reliability) || {}).reliability;
+    const relTitle = (key) => (nRel ? I.t(key, { n: I.num(nRel.n, 0) }) : '');
     return [
       ['title', 'th_algorithm', (r) => r.title, null, null],
       ['exact', 'th_guarantee', (r) => ({ exact: 0, grid: 1, heuristic: 2 }[r.exact] ?? 3), null, null],
@@ -37,6 +49,8 @@
       ['energy', 'th_energy', (r) => (r._ok ? r.energy_consumed_kwh - r.energy_regen_kwh : null), (v) => `${I.num(v, 1)} kWh`, 'min'],
       ['money', 'th_money', (r) => (r._ok ? r.money : null), (v) => I.money(v, cur), 'min'],
       ['soh', 'th_soh', (r) => (r._ok ? r.soh_drive_pct + r.soh_charge_pct : null), (v) => I.soh(v), 'min'],
+      ['pstrand', 'th_p_strand', (r) => relP(r, 'p_strand'), fmtP, 'min', relTitle('rel_strand_title')],
+      ['pshort', 'th_p_short', (r) => relP(r, 'p_arrival_short'), fmtP, 'min', relTitle('rel_short_title')],
       ['runtime', 'th_runtime', (r) => (r.stats ? r.stats.runtime_s * 1000 : null), (v) => I.num(v, v < 10 ? 2 : v < 100 ? 1 : 0), 'min'],
       ['settled', 'th_settled', (r) => (r.stats ? r.stats.settled : null), (v) => I.num(v, 0), null],
     ];
@@ -73,7 +87,7 @@
         vis.addEventListener('click', (ev) => ev.stopPropagation());
         vis.addEventListener('change', () => app.setVisible(ri, vis.checked));
         const meta = r._ok
-          ? `${I.t('stops_n', { n: (r.stops || []).length })} · ${I.km(r.distance_m, 0)} · ${I.num(r.stats ? r.stats.runtime_s * 1000 : NaN, 0)} ms`
+          ? `${I.stops((r.stops || []).length)} · ${I.km(r.distance_m, 0)} · ${I.num(r.stats ? r.stats.runtime_s * 1000 : NaN, 0)} ms`
           : (r.message || I.t('no_route'));
         const li = U.el('li', {
           class: `algo-item${r.feasible ? '' : ' infeasible'}`, role: 'option', tabindex: '0',
@@ -140,8 +154,17 @@
           ['min_soc', I.pct(r.min_soc, 0)],
           ['runtime', r.stats ? `${I.num(r.stats.runtime_s * 1000, r.stats.runtime_s < 0.01 ? 2 : 0)} ms` : '–'],
         ];
-        kids.push(U.el('div', { class: 'metrics' }, metrics.map(([k, v]) =>
-          U.el('div', { class: 'metric' }, U.el('small', { text: I.t(k) }), U.el('b', { text: v, title: v })))));
+        const rel = r.reliability;
+        if (rel) {
+          const tip = I.t('rel_title', { n: I.num(rel.n, 0), s: fmtP(rel.p_strand), b: fmtP(rel.p_reserve_breach), a: fmtP(rel.p_arrival_short) });
+          const level = (p, warn, bad) => (p >= bad ? 'bad' : p >= warn ? 'warn' : 'good');
+          metrics.push(['p_strand_m', fmtP(rel.p_strand), level(rel.p_strand, 1e-9, 0.01), tip]);
+          metrics.push(['p_short_m', fmtP(rel.p_arrival_short), level(rel.p_arrival_short, 0.05, 0.5), tip]);
+          metrics.push(['settled', r.stats ? I.num(r.stats.settled, 0) : '–']);
+        }
+        kids.push(U.el('div', { class: 'metrics' }, metrics.map(([k, v, cls, tip]) =>
+          U.el('div', { class: `metric${cls ? ' ' + cls : ''}`, title: tip || undefined },
+            U.el('small', { text: I.t(k) }), U.el('b', { text: v, title: tip ? undefined : v })))));
       }
       if (!r.feasible) {
         const msg = r._strand ? I.t('stranded_at', { km: I.km(r._strand.dist, 0) }) : (r.message || I.t('no_route'));
@@ -162,7 +185,7 @@
       const app = this.app;
       const r = app.selectedRoute();
       const stops = r && r._ok ? r._stops : [];
-      this.el.stopsCount.textContent = stops.length ? I.t('stops_n', { n: stops.length }) : '';
+      this.el.stopsCount.textContent = stops.length ? I.stops(stops.length) : '';
       if (!stops.length) {
         U.setChildren(this.el.stops, U.el('li', { class: 'stops-empty', text: r && r.feasible ? I.t('no_stops') : I.t('no_route') }));
         return;
@@ -203,7 +226,8 @@
     /* --------------------------------------------------------------- table */
     renderTable() {
       const app = this.app;
-      const cols = columns(app);
+      const anyRel = app.model.results.some((r) => r.reliability);
+      const cols = columns(app).filter((c) => anyRel || (c[0] !== 'pstrand' && c[0] !== 'pshort'));
       const res = app.model.results.slice();
       // best values among feasible results
       const best = {};
@@ -231,8 +255,8 @@
           return (typeof va === 'string' ? va.localeCompare(vb) : va - vb) * dir;
         });
       }
-      const head = U.el('tr', {}, cols.map(([key, label]) => {
-        const th = U.el('th', { scope: 'col', class: key === 'exact' || key === 'feasible' ? 'center' : '' },
+      const head = U.el('tr', {}, cols.map(([key, label, , , , title]) => {
+        const th = U.el('th', { scope: 'col', class: key === 'exact' || key === 'feasible' ? 'center' : '', title: title || undefined },
           U.el('button', { type: 'button' }, I.t(label), U.el('span', { class: 'arrow', 'aria-hidden': 'true', text: this.sort.key === key && this.sort.dir < 0 ? '▼' : '▲' })));
         th.setAttribute('aria-sort', this.sort.key === key ? (this.sort.dir > 0 ? 'ascending' : 'descending') : 'none');
         th.querySelector('button').addEventListener('click', () => {

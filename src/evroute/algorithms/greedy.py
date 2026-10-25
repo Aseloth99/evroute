@@ -188,7 +188,7 @@ def run_greedy(
         return run
 
     def make_tree(v: int, x: float, t: float) -> dict[int, tuple]:
-        tree = fastest_feasible_tree(P, v, x, t_start=t, min_arrival_energy=need)
+        tree = fastest_feasible_tree(P, v, x, t_start=t, min_arrival_energy=need, fastest_level_only=True)
         run.trees += 1
         run.settled += len(tree)
         trace_label_tree(trace, tree)

@@ -1,39 +1,52 @@
-"""Publication-quality static figures (matplotlib, imported lazily).
+"""Publication-quality static figures (matplotlib + seaborn, imported lazily).
 
 Every function takes evaluated :class:`~evroute.plan.RoutePlan` objects --
 i.e. numbers produced by the independent evaluator
 (:func:`evroute.evaluate.evaluate`), never by the algorithm that made the
 decision -- and returns a :class:`matplotlib.figure.Figure`.  Pass ``path=``
 to also write a vector PDF and a 300 dpi PNG (see :func:`evroute.viz.style.save`).
+All figures are drawn inside :func:`evroute.viz.style.paper` (seaborn
+``"ticks"`` theme, ``"paper"`` context, Okabe-Ito algorithm colours shared
+with the web viewer, IEEE column widths), which leaves global matplotlib
+settings untouched.
 
-==============================  =============================================
-function                        what it shows
-==============================  =============================================
-:func:`plot_map`                terrain (hill-shaded), roads by class, stations,
-                                routes per algorithm with stops, cities
-:func:`plot_soc_profile`        state of charge vs distance (or time), reserve,
-                                elevation along the route
-:func:`plot_time_breakdown`     trip time split into drive / charge / queue /
-                                plug-in, one bar per algorithm
-:func:`plot_comparison_table`   the key numbers as a figure table;
-                                :func:`latex_table` gives a booktabs table
-:func:`plot_pareto`             a Pareto front: time vs money, wear as colour
-:func:`plot_charging_curves`    vehicle charging power vs SoC and SoC vs minutes
-:func:`plot_consumption_vs_speed` kWh/100 km vs speed at several temperatures
-:func:`plot_wait_profiles`      expected queueing delay vs time of day
-:func:`plot_search_effort`      settled labels and runtime per algorithm
-:func:`plot_search_space`       settled nodes coloured by settle order
-                                (small multiples, e.g. BLS vs BLS-A*)
-:func:`plot_convergence`        convergence history of the genetic algorithm
-==============================  =============================================
+================================  ===========================================
+function                          what it shows
+================================  ===========================================
+:func:`plot_map`                  terrain (hill-shaded), roads by class,
+                                  stations, routes per algorithm with stops,
+                                  cities
+:func:`plot_soc_profile`          state of charge vs distance (or time),
+                                  reserve, elevation along the route
+:func:`plot_time_breakdown`       trip time split into drive / charge /
+                                  queue / plug-in, one bar per algorithm
+:func:`plot_comparison_table`     the key numbers as a figure table;
+                                  :func:`latex_table` gives a booktabs table
+:func:`plot_pareto`               a Pareto front: time vs money, wear as
+                                  colour (seaborn scatter)
+:func:`plot_charging_curves`      charging power vs SoC and SoC vs minutes
+:func:`plot_consumption_vs_speed` kWh/100 km vs speed, one panel per
+                                  temperature (seaborn lines)
+:func:`plot_wait_profiles`        expected queueing delay vs time of day
+:func:`plot_search_effort`        settled labels and runtime per algorithm
+                                  (dot plot; strip + mean/CI over runs)
+:func:`plot_search_space`         settled nodes coloured by settle order
+                                  (small multiples, e.g. BLS vs BLS-A*)
+:func:`plot_convergence`          convergence of the genetic algorithm
+:func:`plot_gap_distribution`     optimality gap over many instances
+                                  (seaborn box/violin + strip)
+:func:`plot_metric_heatmap`       instance x algorithm matrix (seaborn)
+:func:`make_gallery`              regenerates ``docs/img/fig_*.png``
+================================  ===========================================
 
 Terrain without SciPy
 ---------------------
 The hill-shaded background is interpolated from the node elevations only:
 the node coordinates are triangulated (Delaunay, via ``matplotlib.tri``),
 the elevation is interpolated linearly on a regular grid
-(``matplotlib.tri.LinearTriInterpolator``) and smoothed, areas far from
-every node and not enclosed by the network (open sea, unmapped land) fade to
+(``matplotlib.tri.LinearTriInterpolator``), smoothed and extended smoothly
+past the convex hull by normalised convolution; areas far from every node
+and not enclosed by the network (open sea, unmapped land) fade to
 transparent, and the result is shaded with
 :class:`matplotlib.colors.LightSource` (soft-light blend of a muted
 hypsometric tint).  Network nodes are the only elevation samples the
@@ -43,19 +56,24 @@ model knows, so the background shows exactly the relief the energy model
 Overlapping routes
 ------------------
 Algorithms often agree on (parts of) the route.  On the map, routes are
-drawn as parallel *lanes* (as on transit maps): each plan is offset sideways
+drawn as parallel *lanes* (as on transit maps): each lane is offset sideways
 by a fixed number of points, so every colour stays visible where routes
-coincide.  In the SoC profile, plans with identical profiles are drawn with
-interleaved dashes, one colour after the other.
+coincide; plans that drive the same edges and stop at the same nodes share
+one lane whose colours alternate along the route.  In the SoC profile,
+plans whose profiles coincide are drawn with interleaved dashes, one colour
+after the other.  Labels are placed greedily without overlaps (a uniform
+grid index of occupied display boxes); places under the route bundle may be
+labelled a little further away, clear of the lanes.
 """
 
 from __future__ import annotations
 
 import math
-from collections.abc import Mapping
+import warnings
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Iterable, Sequence
+from typing import Any
 
 from ..plan import RoutePlan
 from ..scenario import PreparedScenario, Scenario
@@ -75,12 +93,14 @@ __all__ = [
     "plot_search_effort",
     "plot_search_space",
     "plot_convergence",
+    "plot_gap_distribution",
+    "plot_metric_heatmap",
+    "gap_rows",
+    "make_gallery",
+    "draw_map",
     "map_extent",
     "soc_series",
 ]
-
-PathLike = "str | Path | None"
-
 
 # =============================================================== small helpers
 def _plt() -> Any:
@@ -139,7 +159,7 @@ def _hm(seconds: float) -> str:
     """``29234 -> "8:07"`` (hours:minutes, for tables)."""
     if not math.isfinite(seconds):
         return "--"
-    m = int(round(seconds / 60.0))
+    m = round(seconds / 60.0)
     return f"{m // 60}:{m % 60:02d}"
 
 
@@ -150,15 +170,6 @@ def _guarantee(name: str) -> str:
         return str(planner_class(name).exact)
     except Exception:  # unknown or broken planner module
         return ""
-
-
-def _nice_step(span: float, target_ticks: int = 5) -> float:
-    raw = span / max(target_ticks, 1)
-    mag = 10 ** math.floor(math.log10(raw)) if raw > 0 else 1.0
-    for m in (1, 2, 2.5, 5, 10):
-        if m * mag >= raw:
-            return m * mag
-    return 10 * mag
 
 
 def _plan_label(plan: RoutePlan, with_time: bool = True) -> str:
@@ -175,6 +186,8 @@ def soc_series(
     plan: RoutePlan,
     prepared: Scenario | PreparedScenario | None = None,
     x: str = "distance",
+    *,
+    clip_empty: bool = True,
 ) -> tuple[list[float], list[float]]:
     """State of charge [%] along a plan, as plotted by :func:`plot_soc_profile`.
 
@@ -185,6 +198,11 @@ def soc_series(
     (:meth:`evroute.charging.ChargingFunction.breakpoints_between`).  Between
     nodes the energy is linear, which is exact for the model's constant-rate
     edges.  All values come from the evaluated plan.
+
+    The evaluator keeps integrating an infeasible plan past an empty
+    battery; with ``clip_empty`` the series ends where the SoC first reaches
+    0 % (linear interpolation, the same rule the evaluator uses for
+    ``RoutePlan.stranded_at_m``).
     """
     if x not in ("distance", "time"):
         raise ValueError("x must be 'distance' or 'time'")
@@ -215,6 +233,15 @@ def soc_series(
                     ys.append(100.0 * b / q)
             xs.append(st.departure_s / 3600.0)
             ys.append(100.0 * st.energy_out_kwh / q)
+    if clip_empty:
+        for i in range(1, len(ys)):
+            if ys[i] < 0.0 <= ys[i - 1]:
+                f = ys[i - 1] / (ys[i - 1] - ys[i])
+                xe = xs[i - 1] + f * (xs[i] - xs[i - 1])
+                del xs[i:], ys[i:]
+                xs.append(xe)
+                ys.append(0.0)
+                break
     return xs, ys
 
 
@@ -279,9 +306,9 @@ def _support_distance(
 
     x0, x1, y0, y1 = extent
     c = max(radius / 8.0, max(x1 - x0, y1 - y0) / max_cells)
-    nx = int(math.ceil((x1 - x0) / c)) + 1
-    ny = int(math.ceil((y1 - y0) / c)) + 1
-    r = int(math.ceil(radius / c))
+    nx = math.ceil((x1 - x0) / c) + 1
+    ny = math.ceil((y1 - y0) / c) + 1
+    r = math.ceil(radius / c)
     pad = r
     big = radius
     occ = np.full((ny + 2 * pad, nx + 2 * pad), big)
@@ -303,19 +330,18 @@ def _support_distance(
 def _land_mask(x: Any, y: Any, support: float, max_cells: int = 420) -> tuple[Any, tuple[float, float, float, float], float]:
     """Soft "land" mask on a coarse grid over the whole network.
 
-    A cell is land if it lies within ``support`` of a node (alpha fades
-    linearly over the outer 35 %) or if it is a *hole* of the network --
-    an area enclosed by roads, i.e. not connected to the border of the grid
-    through cells far from every node (flood fill by repeated 4-neighbour
-    dilation).  Computing this on the full network, not on the map window,
-    keeps the mask independent of the zoom.
+    A cell is land if it lies within ``support`` of a node or if it is a
+    *hole* of the network -- an area enclosed by roads, i.e. not connected
+    to the border of the grid through cells far from every node (flood fill
+    by repeated 4-neighbour dilation).  The binary mask is feathered with a
+    small Gaussian blur.  Computing this on the full network, not on the
+    map window, keeps the mask independent of the zoom.
     """
     import numpy as np
 
     pad = 1.5 * support
     ext = (float(x.min()) - pad, float(x.max()) + pad, float(y.min()) - pad, float(y.max()) + pad)
     dist, c = _support_distance(x, y, ext, support, max_cells=max_cells)
-    soft = np.clip((support - dist) / (0.35 * support), 0.0, 1.0)
     far = dist >= support * 0.999
     outside = np.zeros_like(far)
     outside[0, :] = far[0, :]
@@ -336,7 +362,6 @@ def _land_mask(x: Any, y: Any, support: float, max_cells: int = 420) -> tuple[An
     # feather the coast-like boundary with a small blur
     land = (~outside).astype(float)
     land = np.clip(_blur(land, max(0.12 * support / c, 0.6)) * 1.15, 0.0, 1.0)
-    del soft
     return land, ext, c
 
 
@@ -344,11 +369,15 @@ def _blur(A: Any, sigma: float) -> Any:
     """Separable Gaussian blur (zero padding) of a 2-D array, numpy only."""
     import numpy as np
 
-    r = max(1, int(math.ceil(3.0 * sigma)))
+    r = max(1, math.ceil(3.0 * sigma))
     k = np.exp(-0.5 * (np.arange(-r, r + 1) / sigma) ** 2)
     k /= k.sum()
-    out = np.apply_along_axis(lambda v: np.convolve(v, k, mode="same"), 1, A)
-    return np.apply_along_axis(lambda v: np.convolve(v, k, mode="same"), 0, out)
+
+    def conv(v: Any) -> Any:  # "same" size even when the kernel is longer than v
+        return np.convolve(v, k, mode="full")[r: r + len(v)]
+
+    out = np.apply_along_axis(conv, 1, A)
+    return np.apply_along_axis(conv, 0, out)
 
 
 def _sample_bilinear(A: Any, fy: Any, fx: Any) -> Any:
@@ -383,11 +412,15 @@ def _terrain_rgba(
        regular grid of ``resolution`` cells along the longer side
        (``LinearTriInterpolator``), then smoothed with a Gaussian of
        ``0.35 * support`` (normalised convolution) so that the facets of
-       the sparse triangulation do not show up as artificial ridges.
-    2. Pixels farther than ``support`` metres from every node carry no
-       information (open sea, unmapped land) and fade to transparent; the
-       default ``support`` is half the 75th percentile of the longest edge
-       of the Delaunay triangles, i.e. it adapts to the sampling density.
+       the sparse triangulation do not show up as artificial ridges;
+       outside the convex hull the surface is continued smoothly.
+    2. Pixels farther than ``support`` metres from every node and not
+       enclosed by roads carry no information (open sea, unmapped land)
+       and fade to transparent (:func:`_land_mask`); the default
+       ``support`` is half the *area-weighted* 40th percentile of the
+       longest edge of the Delaunay triangles, i.e. it adapts to the gaps
+       between roads over most of the map (dense city grids would make a
+       plain percentile far too small).
     3. A muted hypsometric tint is shaded with
        :class:`matplotlib.colors.LightSource` (soft-light blend, light from
        the north-west); the vertical exaggeration is chosen so that the
@@ -395,8 +428,8 @@ def _terrain_rgba(
 
     Returns ``None`` when the nodes cannot be triangulated.
     """
-    import numpy as np
     import matplotlib.tri as mtri
+    import numpy as np
     from matplotlib.colors import LightSource, Normalize
 
     net = scenario.network
@@ -423,19 +456,30 @@ def _terrain_rgba(
     except Exception:  # degenerate (collinear) input
         return None
     if support is None:
+        # Area-weighted quantile of the longest triangle edge: what matters is
+        # the gap between roads over most of the *map area*, not over most
+        # triangles (dense city grids contribute thousands of tiny ones).
         ex = x[t] - x[np.roll(t, 1, axis=1)]
         ey = y[t] - y[np.roll(t, 1, axis=1)]
         longest = np.sqrt(ex * ex + ey * ey).max(axis=1)
-        support = 0.5 * float(np.percentile(longest, 75))
+        x_t, y_t = x[t], y[t]
+        area = 0.5 * np.abs((x_t[:, 1] - x_t[:, 0]) * (y_t[:, 2] - y_t[:, 0]) - (x_t[:, 2] - x_t[:, 0]) * (y_t[:, 1] - y_t[:, 0]))
+        order = np.argsort(longest)
+        cum = np.cumsum(area[order])
+        if cum[-1] > 0:
+            k = int(np.searchsorted(cum, 0.4 * cum[-1]))
+            support = 0.5 * float(longest[order][min(k, len(order) - 1)])
+        else:
+            support = 0.5 * float(np.percentile(longest, 75))
     support = max(float(support), 1.0)
     interp = mtri.LinearTriInterpolator(tri, z)
     x0, x1, y0, y1 = extent
     if (y1 - y0) > (x1 - x0):
         ny = int(resolution)
-        nx = max(2, int(round(ny * (x1 - x0) / (y1 - y0))))
+        nx = max(2, round(ny * (x1 - x0) / (y1 - y0)))
     else:
         nx = int(resolution)
-        ny = max(2, int(round(nx * (y1 - y0) / (x1 - x0))))
+        ny = max(2, round(nx * (y1 - y0) / (x1 - x0)))
     gx = np.linspace(x0, x1, nx)
     gy = np.linspace(y0, y1, ny)
     X, Y = np.meshgrid(gx, gy)
@@ -450,17 +494,30 @@ def _terrain_rgba(
     # Smooth away the facets of the sparse triangulation (normalised
     # convolution, so that pixels outside the hull do not leak in).
     sigma_px = 0.35 * support / max(dx, 1e-9)
+    w = inside.astype(float)
     if sigma_px > 0.75:
-        w = inside.astype(float)
         num = _blur(Zf * w, sigma_px)
         den = _blur(w, sigma_px)
         Zf = np.where(den > 1e-6, num / np.maximum(den, 1e-6), Zf)
-    Zf = np.where(inside, Zf, float(Zf[inside].mean()))
+    if not inside.all():
+        # Outside the convex hull of the nodes the triangulation says
+        # nothing; extend the surface smoothly (normalised convolution with
+        # a wide kernel) so that the band of land around boundary roads is
+        # shaded too instead of being cut off at the hull.
+        big = max(support / max(dx, 1e-9), 2.0)
+        num = _blur(Zf * w, big)
+        den = _blur(w, big)
+        fill = np.where(den > 1e-3, num / np.maximum(den, 1e-3), float(Zf[inside].mean()))
+        Zf = np.where(inside, Zf, fill)
+        # hide the rasterised seam along the hull (normalised, so the image
+        # border is not darkened by the zero padding of the blur)
+        s2 = max(0.5 * sigma_px, 1.5)
+        Zf = _blur(Zf, s2) / np.maximum(_blur(np.ones_like(Zf), s2), 1e-9)
     # land mask: near a node (soft edge) or enclosed by the network
     land, lext, c = _land_mask(x, y, support)
     fy = (gy - lext[2]) / c - 0.5
     fx = (gx - lext[0]) / c - 0.5
-    alpha = np.clip(_sample_bilinear(land, fy, fx), 0.0, 1.0) * inside
+    alpha = np.clip(_sample_bilinear(land, fy, fx), 0.0, 1.0)
     if not (alpha > 0).any():
         return None
     gyy, gxx = np.gradient(Zf, dy, dx)
@@ -514,7 +571,7 @@ def _offset_polyline(xs: Sequence[float], ys: Sequence[float], off: float) -> tu
 
 @dataclass
 class MapContext:
-    """Geometry of a drawn map, shared with :mod:`evroute.viz.animate`."""
+    """Geometry of a drawn map (axes, window, scale and route lanes)."""
 
     ax: Any
     extent: tuple[float, float, float, float]
@@ -523,7 +580,9 @@ class MapContext:
     #: plan index -> lane-offset polyline (metres) through ``plan.nodes``
     lanes: dict[int, tuple[list[float], list[float]]] = field(default_factory=dict)
     #: display-space boxes already occupied (labels, legend, markers)
-    occupied: "_Occupancy" = field(default_factory=lambda: _Occupancy())
+    occupied: _Occupancy = field(default_factory=lambda: _Occupancy())
+    #: display-space boxes covered by the route lanes only
+    lane_index: _Occupancy = field(default_factory=lambda: _Occupancy())
     route_artists: dict[int, list[Any]] = field(default_factory=dict)
 
 
@@ -603,7 +662,7 @@ def _draw_stations(ax: Any, scenario: Scenario, extent: tuple[float, float, floa
     if ac_x:
         ax.scatter(ac_x, ac_y, s=ac_s, marker="o", facecolors="white", edgecolors="#5E5E5E", linewidths=0.55, zorder=2.2)
     if dc_x:
-        ax.scatter(dc_x, dc_y, s=dc_s, marker="s", facecolors="#5E5E5E", edgecolors="white", linewidths=0.4, zorder=2.3)
+        ax.scatter(dc_x, dc_y, s=dc_s, marker="s", facecolors="#5E5E5E", edgecolors="white", linewidths=0.45, zorder=2.3)
 
 
 def _lane_offsets(n: int, gap_pt: float) -> list[float]:
@@ -626,6 +685,86 @@ def _resolve_highlight(plans: Sequence[RoutePlan], highlight: Any) -> int | None
     return None
 
 
+def _lane_groups(plans: Sequence[RoutePlan], highlight: int | None) -> list[list[int]]:
+    """Plans that would draw the *same picture* share one map lane.
+
+    Two plans share a lane if they drive the same edge sequence, stop at the
+    same positions and strand at the same point (if at all); exact methods
+    very often agree, and drawing them as separate parallel lanes would
+    only widen the bundle.  The highlighted plan always gets its own lane.
+    """
+    groups: list[list[int]] = []
+    index: dict[tuple[Any, ...], int] = {}
+    for i, p in enumerate(plans):
+        if i == highlight:
+            groups.append([i])
+            continue
+        key = (
+            tuple(p.edges),
+            tuple(s.position for s in p.stops),
+            None if p.stranded_at_m is None else round(p.stranded_at_m, 0),
+        )
+        if key in index:
+            groups[index[key]].append(i)
+        else:
+            index[key] = len(groups)
+            groups.append([i])
+    return groups
+
+
+def _pale(color: str, amount: float = 0.62) -> tuple[float, float, float]:
+    """``color`` mixed with ``amount`` of white."""
+    from matplotlib.colors import to_rgb
+
+    r, g, b = to_rgb(color)
+    return (r + (1 - r) * amount, g + (1 - g) * amount, b + (1 - b) * amount)
+
+
+def _interleaved_dashes(k: int, j: int, seg_pt: float, lw: float) -> tuple[float, tuple[float, float]]:
+    """Dash pattern so that ``k`` lines drawn on top of each other show
+    consecutive ``seg_pt``-long segments of each colour (line ``j`` first
+    at offset ``j * seg_pt``).  Matplotlib scales dashes by the line width,
+    so the pattern is given in units of ``lw``."""
+    u = seg_pt / max(lw, 1e-9)
+    return (((k - j) % k) * u, (u, (k - 1) * u))
+
+
+class _SharedLaneHandle:
+    """Legend placeholder for "several algorithms share this lane"."""
+
+    def __init__(self, label: str) -> None:
+        self._label = label
+
+    def get_label(self) -> str:
+        return self._label
+
+
+class _SharedLaneHandler:
+    """Legend handler drawing a short line of alternating colour segments
+    (duck-typed: matplotlib only needs ``legend_artist``)."""
+
+    def __init__(self, colors: Sequence[str], lw: float) -> None:
+        self.colors = list(colors) or [style.INK]
+        self.lw = lw
+
+    def legend_artist(self, legend: Any, orig_handle: Any, fontsize: float, handlebox: Any) -> Any:
+        from matplotlib.lines import Line2D
+
+        x0, y0 = -handlebox.xdescent, -handlebox.ydescent
+        w, h = handlebox.width, handlebox.height
+        k = len(self.colors)
+        segs = 2 * k
+        first = None
+        for s in range(segs):
+            a = x0 + w * s / segs
+            b = x0 + w * (s + 1) / segs
+            ln = Line2D([a, b], [y0 + h / 2, y0 + h / 2], color=self.colors[s % k], lw=self.lw,
+                        solid_capstyle="butt", transform=handlebox.get_transform())
+            handlebox.add_artist(ln)
+            first = first or ln
+        return first
+
+
 def _draw_routes(
     ctx: MapContext,
     scenario: Scenario,
@@ -636,48 +775,80 @@ def _draw_routes(
     gap_pt: float | None = None,
     stops: bool = True,
     faded: bool = False,
-) -> None:
+    share_lanes: bool = True,
+) -> list[list[int]]:
+    """Draw the routes as parallel lanes; return the lane groups.
+
+    Each lane is offset sideways by a fixed number of points (transit-map
+    style) so that coinciding routes stay distinguishable.  All casings
+    (white outlines) are drawn below all lanes, so neighbouring lanes touch
+    without white seams.  Plans that draw the same picture share a lane
+    (:func:`_lane_groups`) whose colours alternate along the route; a
+    heuristic drawn alone gets a dashed line over a pale tint of its
+    colour, which keeps the lane continuous.
+    """
     ax = ctx.ax
     n = len(plans)
-    gap = (lw + 0.35) if gap_pt is None else gap_pt
-    offsets = _lane_offsets(n, gap)
-    order = list(range(n))
-    if highlight is not None:
-        order.remove(highlight)
-        order.append(highlight)
-    for i in order:
-        p = plans[i]
-        xs, ys = _route_polyline(scenario, p)
-        ox, oy = _offset_polyline(xs, ys, offsets[i] * ctx.m_per_pt)
-        ctx.lanes[i] = (ox, oy)
-        col = style.algorithm_color(p.algorithm)
-        is_hi = highlight is not None and i == highlight
+    groups = _lane_groups(plans, highlight) if share_lanes else [[i] for i in range(n)]
+    gap = (lw + 0.3) if gap_pt is None else gap_pt
+    offsets = _lane_offsets(len(groups), gap)
+    order = list(range(len(groups)))
+    hi_group = next((g for g, members in enumerate(groups) if highlight in members), None)
+    if hi_group is not None:
+        order.remove(hi_group)
+        order.append(hi_group)
+    for g in order:
+        members = groups[g]
+        lead = plans[members[0]]
+        xs, ys = _route_polyline(scenario, lead)
+        ox, oy = _offset_polyline(xs, ys, offsets[g] * ctx.m_per_pt)
+        is_hi = g == hi_group
         width = lw * (1.45 if is_hi else 1.0)
-        alpha = 0.35 if faded else (1.0 if (highlight is None or is_hi) else 0.85)
-        z = 4.0 + (1.0 if is_hi else 0.0) + 0.01 * i
-        ls = style.algorithm_linestyle(p.algorithm)
-        arts = []
-        (casing,) = ax.plot(ox, oy, color="white", lw=width + 1.3, alpha=0.9 * alpha, zorder=z - 0.5, solid_capstyle="round", solid_joinstyle="round")
-        (line,) = ax.plot(ox, oy, color=col, lw=width, ls=ls, alpha=alpha, zorder=z, solid_capstyle="round", solid_joinstyle="round", dash_capstyle="butt")
-        arts += [casing, line]
-        if stops and p.stops:
-            sx = [ox[s.position] for s in p.stops]
-            sy = [oy[s.position] for s in p.stops]
-            arts.append(
-                ax.scatter(sx, sy, s=(3.3 + width) ** 2, marker="o", facecolors=col, edgecolors="white", linewidths=0.9, zorder=z + 0.3, alpha=alpha)
-            )
-        if not p.feasible and p.stranded_at_m is not None:
+        alpha = 0.35 if faded else (1.0 if (highlight is None or is_hi) else 0.9)
+        z = 4.0 + (1.0 if is_hi else 0.0) + 0.01 * g
+        arts: list[Any] = []
+        (casing,) = ax.plot(ox, oy, color="white", lw=width + 1.6, alpha=0.95 * alpha, zorder=(z - 0.5) if is_hi else 3.9,
+                            solid_capstyle="round", solid_joinstyle="round")
+        arts.append(casing)
+        k = len(members)
+        for j, i in enumerate(members):
+            ctx.lanes[i] = (ox, oy)
+            p = plans[i]
+            col = style.algorithm_color(p.algorithm)
+            if k > 1:
+                ls: Any = _interleaved_dashes(k, j, 5.0, width)
+            else:
+                ls = style.algorithm_linestyle(p.algorithm)
+                if ls != "-":
+                    (under,) = ax.plot(ox, oy, color=_pale(col), lw=width, alpha=alpha, zorder=z - 0.01,
+                                       solid_capstyle="round", solid_joinstyle="round")
+                    arts.append(under)
+            (line,) = ax.plot(ox, oy, color=col, lw=width, ls=ls, alpha=alpha, zorder=z, solid_capstyle="round",
+                              solid_joinstyle="round", dash_capstyle="butt")
+            arts.append(line)
+        if stops and lead.stops:
+            col = style.algorithm_color(lead.algorithm) if k == 1 else style.INK
+            sx = [ox[s.position] for s in lead.stops]
+            sy = [oy[s.position] for s in lead.stops]
+            arts.append(ax.scatter(sx, sy, s=(3.0 + width) ** 2, marker="o", facecolors=col, edgecolors="white",
+                                   linewidths=0.9, zorder=z + 0.3, alpha=alpha))
+        if not lead.feasible and lead.stranded_at_m is not None:
             # where the battery would be empty
-            k = 0
-            while k + 1 < len(p.node_dist_m) and p.node_dist_m[k + 1] < p.stranded_at_m:
-                k += 1
-            if k + 1 < len(ox):
-                seg = p.node_dist_m[k + 1] - p.node_dist_m[k]
-                f = (p.stranded_at_m - p.node_dist_m[k]) / seg if seg > 0 else 0.0
-                xx = ox[k] + f * (ox[k + 1] - ox[k])
-                yy = oy[k] + f * (oy[k + 1] - oy[k])
-                arts.append(ax.scatter([xx], [yy], s=42, marker="X", facecolors=col, edgecolors="white", linewidths=0.8, zorder=z + 0.4))
-        ctx.route_artists[i] = arts
+            dist = lead.node_dist_m
+            q = 0
+            while q + 1 < len(dist) and dist[q + 1] < lead.stranded_at_m:
+                q += 1
+            if q + 1 < len(ox):
+                seg = dist[q + 1] - dist[q]
+                f = (lead.stranded_at_m - dist[q]) / seg if seg > 0 else 0.0
+                xx = ox[q] + f * (ox[q + 1] - ox[q])
+                yy = oy[q] + f * (oy[q + 1] - oy[q])
+                col = style.algorithm_color(lead.algorithm) if k == 1 else style.INK
+                arts.append(ax.scatter([xx], [yy], s=46, marker="X", facecolors=col, edgecolors="white",
+                                       linewidths=0.8, zorder=z + 0.4))
+        for i in members:
+            ctx.route_artists[i] = arts
+    return groups
 
 
 class _Occupancy:
@@ -695,8 +866,8 @@ class _Occupancy:
 
     def _keys(self, b: tuple[float, float, float, float]) -> Iterable[tuple[int, int]]:
         c = self.cell
-        for gx in range(int(math.floor(b[0] / c)), int(math.floor(b[2] / c)) + 1):
-            for gy in range(int(math.floor(b[1] / c)), int(math.floor(b[3] / c)) + 1):
+        for gx in range(math.floor(b[0] / c), math.floor(b[2] / c) + 1):
+            for gy in range(math.floor(b[1] / c), math.floor(b[3] / c) + 1):
                 yield (gx, gy)
 
     def add(self, b: tuple[float, float, float, float]) -> None:
@@ -739,6 +910,15 @@ _WIDE_CANDIDATES: tuple[tuple[float, float, str, str], ...] = (
     (-5, -5, "right", "top"),
     (0, 7, "center", "bottom"),
     (0, -7, "center", "top"),
+)
+#: Last resort for places next to a route bundle: clear of the lanes.
+_FAR_CANDIDATES: tuple[tuple[float, float, str, str], ...] = (
+    (0, 10, "center", "bottom"),
+    (0, -10, "center", "top"),
+    (8, 8, "left", "bottom"),
+    (-8, 8, "right", "bottom"),
+    (8, -8, "left", "top"),
+    (-8, -8, "right", "top"),
 )
 
 
@@ -809,7 +989,13 @@ def _point_obstacles(ctx: MapContext, xs: Sequence[float], ys: Sequence[float], 
     if not len(xs):
         return
     pts = ctx.ax.transData.transform(list(zip(xs, ys)))
-    add = ctx.occupied.add
+    occ_add = ctx.occupied.add
+    lane_add = ctx.lane_index.add
+
+    def add(b: tuple[float, float, float, float]) -> None:
+        occ_add(b)
+        lane_add(b)
+
     for i in range(len(pts)):
         x, y = pts[i]
         add((x - r_px, y - r_px, x + r_px, y + r_px))
@@ -862,7 +1048,7 @@ def _scalebar(ctx: MapContext, corner: str, fontsize: float) -> None:
     bx = x0 + 0.04 * w if left else x1 - 0.04 * w - length
     by = (y1 - 0.08 * h) if upper else (y0 + 0.045 * h)
     tick = 0.012 * h
-    kw = dict(color=style.INK, lw=0.9, zorder=8, solid_capstyle="butt", path_effects=style.halo(2.2, "white", 0.85))
+    kw = {"color": style.INK, "lw": 0.9, "zorder": 8, "solid_capstyle": "butt", "path_effects": style.halo(2.2, "white", 0.85)}
     ax.plot([bx, bx + length], [by, by], **kw)
     ax.plot([bx, bx], [by - tick, by + tick], **kw)
     ax.plot([bx + length, bx + length], [by - tick, by + tick], **kw)
@@ -929,8 +1115,10 @@ def draw_map(
     faded_routes: bool = False,
     resolution: int | None = None,
     avoid: Sequence[tuple[float, float, float, float]] = (),
+    share_lanes: bool = True,
 ) -> MapContext:
-    """Draw every map layer into ``ax`` (used by :func:`plot_map` and the animations).
+    """Draw every map layer into ``ax`` (used by :func:`plot_map`; reusable for
+    custom map panels).
 
     ``avoid`` lists extra display-space boxes (e.g. inset axes) that labels
     and the legend must not cover.  Returns the :class:`MapContext` with
@@ -955,7 +1143,8 @@ def draw_map(
     if stations:
         _draw_stations(ax, scenario, extent)
     plans = list(plans)
-    _draw_routes(ctx, scenario, plans, highlight=highlight, lw=route_lw, stops=stops, faded=faded_routes)
+    groups = _draw_routes(ctx, scenario, plans, highlight=highlight, lw=route_lw, stops=stops, faded=faded_routes,
+                          share_lanes=share_lanes)
 
     net = scenario.network
     o, d = scenario.query.origin, scenario.query.destination
@@ -994,23 +1183,36 @@ def draw_map(
             if any(st.kind == "AC" for st in in_view):
                 handles.append(Line2D([], [], ls="none", marker="o", ms=3.4, mfc="white", mec="#5E5E5E", mew=0.55, label="AC charging site"))
         if stops and any(p.stops for p in plans):
-            handles.append(Line2D([], [], ls="none", marker="o", ms=4.6, mfc="#8C8C8C", mec="white", mew=0.9, label="charging stop"))
+            handles.append(Line2D([], [], ls="none", marker="o", ms=4.6, mfc=style.INK_MUTED, mec="white", mew=0.9, label="charging stop"))
+        if any(len(g) > 1 for g in groups):
+            handles.append(_SharedLaneHandle(label="shared route (colours alternate)"))
         handles.append(Line2D([], [], ls="none", marker="o", ms=6.2, mfc="white", mec=style.INK, mew=1.5, label="origin"))
         handles.append(Line2D([], [], ls="none", marker="o", ms=6.2, mfc=style.INK, mec="white", mew=1.2, label="destination"))
     legend_corner = None
     if handles:
-        if legend == "outside":
-            leg = ax.legend(handles=handles, loc="upper center", bbox_to_anchor=(0.5, -0.01), ncol=min(4, len(handles)),
-                            frameon=False, fontsize=fs + 0.5, handlelength=2.0)
-        else:
+        shared = [style.algorithm_color(plans[i].algorithm) for g in groups if len(g) > 1 for i in g][:4]
+        hmap = {_SharedLaneHandle: _SharedLaneHandler(shared or [style.INK], route_lw)}
+        axbb = ax.get_window_extent()
+        elongated = axbb.height < 0.42 * axbb.width
+        leg = None
+        if legend not in ("outside",) and not elongated:
             legend_corner = corners[0]
             ncol = 2 if len(handles) > 9 else 1
-            leg = ax.legend(handles=handles, loc=legend_corner, frameon=True, fancybox=False, framealpha=0.9,
+            leg = ax.legend(handles=handles, loc=legend_corner, frameon=True, fancybox=False, framealpha=0.92,
                             edgecolor="#BFBFBF", fontsize=fs + 0.5, handlelength=2.0, borderpad=0.5, ncol=ncol,
-                            columnspacing=1.0)
+                            columnspacing=1.0, handler_map=hmap)
             leg.get_frame().set_linewidth(0.5)
             bb = leg.get_window_extent(renderer)
-            ctx.occupied.add((bb.x0 - 3, bb.y0 - 3, bb.x1 + 3, bb.y1 + 3))
+            if legend == "auto" and (len(handles) > 10 or bb.width * bb.height > 0.12 * axbb.width * axbb.height):
+                leg.remove()  # too large for an inset: put it below the map
+                leg = None
+                legend_corner = None
+            else:
+                ctx.occupied.add((bb.x0 - 3, bb.y0 - 3, bb.x1 + 3, bb.y1 + 3))
+        if leg is None:
+            ncol = max(1, min(len(handles), int(axbb.width / (115.0 * fig.dpi / 72.0)) or 1))
+            leg = ax.legend(handles=handles, loc="upper center", bbox_to_anchor=(0.5, -0.012), ncol=ncol,
+                            frameon=False, fontsize=fs + 0.5, handlelength=2.0, columnspacing=1.4, handler_map=hmap)
         leg.set_zorder(20)
     if scalebar:
         free = [c for c in corners if c != legend_corner]
@@ -1025,6 +1227,7 @@ def draw_map(
             _place_label(ctx, renderer, net.x[v], net.y[v], nm, fontsize=fs + 1.0, weight="bold", force=True,
                          candidates=_WIDE_CANDIDATES)
         ann = annotate_stops if annotate_stops is not None else (highlight is not None or len(plans) == 1)
+        annotated: set[int] = set()
         if ann and plans:
             k = highlight if highlight is not None else 0
             p = plans[k]
@@ -1033,16 +1236,21 @@ def draw_map(
                 text = f"{s.station_name or 'stop'}\n{100 * s.soc_in:.0f}→{100 * s.soc_out:.0f} % · {format_duration(s.charge_s)}"
                 _place_label(ctx, renderer, ox[s.position], oy[s.position], text, fontsize=fs, color=style.INK, force=True,
                              candidates=_WIDE_CANDIDATES)
+                annotated.add(s.node)
         placed = 0
         dots: dict[str, tuple[list[float], list[float]]] = {}
         for v, name, kind in places:
             if placed >= max_labels:
                 break
-            if v in (o, d):
+            if v in (o, d) or v in annotated:  # named already (stop annotation)
                 continue
+            # a place under the route bundle may be labelled clear of it
+            px_, py_ = ax.transData.transform((net.x[v], net.y[v]))
+            on_route = ctx.lane_index.hits((px_ - 1.0, py_ - 1.0, px_ + 1.0, py_ + 1.0))
             t = _place_label(ctx, renderer, net.x[v], net.y[v], _short_name(name), fontsize=fs if kind == "city" else fs - 0.5,
                              color="#3A3A3A" if kind in ("city", "town") else style.INK_MUTED,
-                             fontstyle="italic" if kind in ("pass", "landmark") else "normal")
+                             fontstyle="italic" if kind in ("pass", "landmark") else "normal",
+                             candidates=(_CANDIDATES + _FAR_CANDIDATES) if on_route else _CANDIDATES)
             if t is not None:
                 placed += 1
                 dx_, dy_ = dots.setdefault("pass" if kind == "pass" else "city", ([], []))
@@ -1072,10 +1280,11 @@ def plot_map(
     *,
     extent: str | tuple[float, float, float, float] = "auto",
     roads: bool = True,
-    legend: bool | str = True,
+    legend: bool | str = "auto",
     scalebar: bool = True,
     annotate_stops: bool | None = None,
     max_labels: int = 24,
+    share_lanes: bool = True,
     width: str | float = "double",
     title: str | None = None,
     path: Any = None,
@@ -1090,17 +1299,25 @@ def plot_map(
     circle), place names placed greedily without overlaps (passes in
     italics), a legend with each plan's trip time, and a scale bar.
 
-    ``highlight`` (algorithm name, plan index or plan) draws one plan wider
-    and on top and annotates its stops (station, SoC in -> out, charging
-    time); with a single plan the stops are annotated too.  ``extent`` is
-    ``"auto"`` (fit the routes; a double-column map is kept landscape),
-    ``"network"`` or ``(x0, x1, y0, y1)`` in metres.  ``legend="outside"``
-    puts the legend below the map.
+    Plans that drive the same edges *and* stop at the same nodes share one
+    lane whose colours alternate along the route (``share_lanes=False``
+    gives every plan its own lane).  ``highlight`` (algorithm name, plan
+    index or plan) draws one plan in its own, wider lane on top and
+    annotates its stops (station, SoC in -> out, charging time); with a
+    single plan the stops are annotated too.  ``extent`` is ``"auto"``
+    (fit the routes; a double-column map is kept landscape unless the
+    instance itself is elongated), ``"network"`` or ``(x0, x1, y0, y1)``
+    in metres.  ``legend`` is ``"auto"`` (inside the emptiest corner if it
+    is small -- at most 10 entries covering at most 12 % of the map --,
+    otherwise below the map), ``"outside"`` (below), ``True`` (inside,
+    except on a thin strip map such as a corridor) or ``False``.
     """
     plans = _routed(_as_plans(plans))
     with style.paper():
         w_in = style.figsize(width)[0]
-        aspect_range = (0.5, 0.8) if w_in > 5.0 else (0.6, 1.25)
+        # landscape for a double-column map, but elongated instances (a
+        # corridor) keep their shape instead of being padded with empty land
+        aspect_range = (0.2, 0.8) if w_in > 5.0 else (0.45, 1.25)
         ext = map_extent(scenario, plans, extent, aspect_range=aspect_range)
         if ax is None:
             aspect = (ext[3] - ext[2]) / (ext[1] - ext[0])
@@ -1111,6 +1328,7 @@ def plot_map(
         draw_map(
             ax, scenario, plans, extent=ext, terrain=terrain, roads=roads, stations=stations, labels=labels,
             highlight=hi, annotate_stops=annotate_stops, max_labels=max_labels, scalebar=scalebar, legend=legend,
+            share_lanes=share_lanes,
         )
         if title:
             ax.set_title(title, loc="left")
@@ -1118,17 +1336,53 @@ def plot_map(
 
 
 # ============================================================== SoC profile
-def _interleave_groups(series: list[tuple[list[float], list[float]]], tol: float = 1e-6) -> list[list[int]]:
+def _interleave_groups(
+    series: list[tuple[list[float], list[float]]], xtol: float = 1e-6, ytol: float = 1e-6
+) -> list[list[int]]:
+    """Group series that coincide within ``(xtol, ytol)`` point by point
+    (same number of points required); such series are drawn with
+    interleaved dashes so that every colour stays visible."""
     groups: list[list[int]] = []
     for i, (xs, ys) in enumerate(series):
         for g in groups:
             gx, gy = series[g[0]]
-            if len(gx) == len(xs) and all(abs(a - b) <= tol for a, b in zip(gx, xs)) and all(abs(a - b) <= tol for a, b in zip(gy, ys)):
+            if (
+                len(gx) == len(xs)
+                and all(abs(a - b) <= xtol for a, b in zip(gx, xs))
+                and all(abs(a - b) <= ytol for a, b in zip(gy, ys))
+            ):
                 g.append(i)
                 break
         else:
             groups.append([i])
     return groups
+
+
+def _common_route(plans: Sequence[RoutePlan]) -> int:
+    """Index of the representative plan for "the route": among feasible
+    plans, the edge sequence driven by most plans; within it the first plan
+    with an optimality guarantee (so the label reads e.g. "BLS route")."""
+    cand = [i for i, p in enumerate(plans) if p.feasible] or list(range(len(plans)))
+    count: dict[tuple[int, ...], int] = {}
+    for i in cand:
+        key = tuple(plans[i].edges)
+        count[key] = count.get(key, 0) + 1
+    best = max(count.values())
+    members = [i for i in cand if count[tuple(plans[i].edges)] == best]
+    return next((i for i in members if plans[i].algorithm not in style.HEURISTICS), members[0])
+
+
+def _elevation_series(plan: RoutePlan, net: Any, x: str) -> tuple[list[float], list[float]]:
+    ex: list[float] = []
+    ez: list[float] = []
+    for i, v in enumerate(plan.nodes):
+        if x == "distance":
+            ex.append(plan.node_dist_m[i] / 1000.0)
+            ez.append(net.elevation[v])
+        else:
+            ex += [plan.node_arrive_s[i] / 3600.0, plan.node_depart_s[i] / 3600.0]
+            ez += [net.elevation[v], net.elevation[v]]
+    return ex, ez
 
 
 def plot_soc_profile(
@@ -1148,132 +1402,119 @@ def plot_soc_profile(
 
     SoC [%] against driven distance (``x="distance"``; charging stops are
     vertical jumps) or trip time (``x="time"``; queueing and plugging in are
-    flat, charging follows the exact charging function).  With a scenario the
-    figure also shows the driving reserve (hatched band) and the elevation
-    profile of the ``reference`` plan's route (default: the first feasible
-    plan) as a grey silhouette -- on a secondary axis (``elevation="twin"``),
-    in a small panel below (``"panel"``) or not at all (``None``).
+    flat, charging follows the exact charging function, see
+    :func:`soc_series`).  With a scenario the figure also shows the driving
+    reserve (tinted band below the dashed line) and the elevation profile
+    of the ``reference`` plan's route (default: the first feasible plan) as
+    a grey silhouette -- on a secondary axis (``elevation="twin"``), in a
+    small panel below (``"panel"``) or not at all (``None``).
 
-    Plans whose profiles coincide are drawn with interleaved dashes so that
-    every colour remains visible; infeasible plans are dashed and their
-    stranding point is marked with a cross.
+    Plans whose profiles coincide visually (within 0.4 % of the x range
+    and 0.8 % SoC at every point) are drawn with interleaved dashes, so
+    every colour stays visible; heuristics are dashed when drawn alone.  An
+    infeasible plan is drawn until its battery would be empty, where a
+    cross marks the stranding point.  The legend sits above the axes.
     """
     plans = _routed(_as_plans(plans))
     P = _prepared(scenario)
     with style.paper():
+        plt = _plt()
         ax_elev = None
         if ax is None:
+            w, h = style.figsize(width, aspect)
             if elevation == "panel" and P is not None:
-                plt = _plt()
-                w, h = style.figsize(width, aspect)
-                fig, (ax, ax_elev) = plt.subplots(2, 1, figsize=(w, h * 1.25), sharex=True,
-                                                  gridspec_kw={"height_ratios": [3.2, 1.0], "hspace": 0.08})
+                fig, (ax, ax_elev) = plt.subplots(2, 1, figsize=(w, h * 1.3), sharex=True,
+                                                  gridspec_kw={"height_ratios": [3.0, 1.0], "hspace": 0.08})
             else:
-                fig, ax = _new_fig(width, aspect)
+                fig, ax = plt.subplots(figsize=(w, h))
         fig = ax.figure
+        fs_small = _rc("font.size") - 1.5
         series = [soc_series(p, P, x) for p in plans]
-        groups = _interleave_groups(series)
-        handles: dict[int, Any] = {}
+        x_max = max((max(xs) for xs, _ in series if xs), default=1.0)
+        groups = _interleave_groups(series, xtol=0.004 * x_max, ytol=0.8)
         lw = 1.3
         for g in groups:
-            xs, ys = series[g[0]]
             k = len(g)
             for j, i in enumerate(g):
                 p = plans[i]
-                col = style.algorithm_color(p.algorithm)
-                if k == 1:
-                    ls: Any = style.algorithm_linestyle(p.algorithm) if p.feasible else (0, (2.0, 1.5))
-                else:
-                    L = 3.2
-                    ls = (((k - j) % k) * L, (L, (k - 1) * L))
-                (h,) = ax.plot(xs, ys, color=col, lw=lw, ls=ls, zorder=3 + 0.01 * i, solid_capstyle="butt",
-                               alpha=1.0 if p.feasible else 0.85)
-                handles[i] = h
-        # charging stops: algorithm marker at the arrival point of each stop
+                xs, ys = series[i]
+                ls: Any = style.algorithm_linestyle(p.algorithm) if k == 1 else _interleaved_dashes(k, j, 3.5, lw)
+                ax.plot(xs, ys, color=style.algorithm_color(p.algorithm), lw=lw, ls=ls, zorder=3 + 0.01 * i,
+                        solid_capstyle="butt", dash_capstyle="butt", solid_joinstyle="miter")
+        # where infeasible plans run out of energy
+        noted = False
         for i, p in enumerate(plans):
-            if not p.stops:
+            xs, ys = series[i]
+            if p.feasible or p.stranded_at_m is None or not xs:
                 continue
-            col = style.algorithm_color(p.algorithm)
-            q = p.capacity_kwh
-            if x == "distance":
-                sx = [p.node_dist_m[s.position] / 1000.0 for s in p.stops]
-            else:
-                sx = [s.arrival_s / 3600.0 for s in p.stops]
-            sy = [100.0 * s.energy_in_kwh / q for s in p.stops]
-            ax.scatter(sx, sy, s=14, marker=style.algorithm_marker(p.algorithm), facecolors=col, edgecolors="white",
-                       linewidths=0.5, zorder=5)
-        for i, p in enumerate(plans):
-            if not p.feasible and p.stranded_at_m is not None and x == "distance":
-                ax.scatter([p.stranded_at_m / 1000.0], [0.0], s=30, marker="X", facecolors=style.algorithm_color(p.algorithm),
-                           edgecolors="white", linewidths=0.6, zorder=6)
-                ax.annotate("battery empty", (p.stranded_at_m / 1000.0, 0.0), xytext=(0, 4), textcoords="offset points",
-                            ha="center", va="bottom", fontsize=_rc("font.size") - 1.5, color=style.INK_MUTED)
-        y_min = min((min(ys) for _, ys in series), default=0.0)
-        ax.set_ylim(min(0.0, y_min - 3.0), 102.0)
-        x_max = max((max(xs) for xs, _ in series), default=1.0)
+            ax.scatter([xs[-1]], [ys[-1]], s=30, marker="X", facecolors=style.algorithm_color(p.algorithm),
+                       edgecolors="white", linewidths=0.6, zorder=6, clip_on=False)
+            if not noted:
+                ax.annotate(f"{_title(p)}: battery empty", (xs[-1], ys[-1]), xytext=(5, 3), textcoords="offset points",
+                            ha="left", va="bottom", fontsize=fs_small, color=style.INK_MUTED,
+                            path_effects=style.halo(2.0, "white", 0.9), zorder=7)
+                noted = True
+        y_min = min((min(ys) for _, ys in series if ys), default=0.0)
+        ax.set_ylim(min(-2.0, y_min - 2.0), 103.0)
         ax.set_xlim(0.0, x_max * 1.005)
         if P is not None:
             pref = _scenario(scenario).preferences  # type: ignore[arg-type]
             res = 100.0 * pref.reserve_soc
-            ax.axhspan(ax.get_ylim()[0], res, facecolor="#F3E3DD", edgecolor="none", zorder=0.5)
+            ax.axhspan(ax.get_ylim()[0], res, facecolor="#F1DDD4", alpha=0.65, edgecolor="none", zorder=0.6)
             ax.axhline(res, color="#B5654A", lw=0.7, ls=(0, (3, 2)), zorder=1)
-            ax.annotate(f"reserve {res:.0f} %", (1.0, res), xycoords=("axes fraction", "data"), xytext=(-2, 2),
-                        textcoords="offset points", ha="right", va="bottom", fontsize=_rc("font.size") - 1.5, color="#9A4F37")
+            ax.annotate(f"reserve {res:.0f} %", (0.0, res), xycoords=("axes fraction", "data"), xytext=(3, -1.5),
+                        textcoords="offset points", ha="left", va="top", fontsize=fs_small, color="#9A4F37", zorder=2)
         ax.set_ylabel("State of charge [%]")
         if ax_elev is None:
             ax.set_xlabel("Distance [km]" if x == "distance" else "Trip time [h]")
-        ax.yaxis.set_major_locator(_plt().MultipleLocator(20))
-        ax.grid(axis="y", color=style.GRID, lw=0.5)
+        ax.yaxis.set_major_locator(plt.MultipleLocator(20))
+        ax.grid(axis="y", color=style.GRID, lw=0.5, zorder=0)
 
         # ---------------------------------------------------- elevation profile
         if P is not None and elevation and plans:
             ref_i = _resolve_highlight(plans, reference)
             if ref_i is None:
-                ref_i = next((i for i, p in enumerate(plans) if p.feasible), 0)
+                ref_i = _common_route(plans)
             rp = plans[ref_i]
-            net = P.net
-            ex: list[float] = []
-            ez: list[float] = []
-            for i, v in enumerate(rp.nodes):
-                if x == "distance":
-                    ex.append(rp.node_dist_m[i] / 1000.0)
-                    ez.append(net.elevation[v])
-                else:
-                    ex += [rp.node_arrive_s[i] / 3600.0, rp.node_depart_s[i] / 3600.0]
-                    ez += [net.elevation[v], net.elevation[v]]
+            ex, ez = _elevation_series(rp, P.net, x)
             distinct_routes = len({tuple(p.edges) for p in plans}) > 1
-            elabel = "Elevation [m]" if not distinct_routes else f"Elevation, {_title(rp)} route [m]"
             if elevation == "panel" and ax_elev is not None:
-                ax_elev.fill_between(ex, ez, color="#D6D6D6", lw=0, zorder=1)
-                ax_elev.plot(ex, ez, color="#9E9E9E", lw=0.6, zorder=2)
+                ax_elev.fill_between(ex, ez, color="#E0E0E0", lw=0, zorder=1)
+                ax_elev.plot(ex, ez, color="#8C8C8C", lw=0.6, zorder=2)
                 ax_elev.set_ylim(0, max(ez) * 1.15 + 1)
                 ax_elev.set_ylabel("Elev. [m]")
                 ax_elev.set_xlabel("Distance [km]" if x == "distance" else "Trip time [h]")
                 ax_elev.grid(axis="y", color=style.GRID, lw=0.5)
+                ax_elev.yaxis.set_major_locator(plt.MaxNLocator(3))
+                if distinct_routes:
+                    ax_elev.annotate(f"{_title(rp)} route", (0.0, 1.0), xycoords="axes fraction", xytext=(3, -2),
+                                     textcoords="offset points", ha="left", va="top", fontsize=fs_small,
+                                     color=style.INK_MUTED)
             elif elevation == "twin":
                 ax2 = ax.twinx()
-                ax2.fill_between(ex, ez, color="#DCDCDC", alpha=0.75, lw=0, zorder=1)
-                ax2.plot(ex, ez, color="#B3B3B3", lw=0.6, zorder=1.5)
-                ax2.set_ylim(0, max(max(ez) * 2.3, 1.0))
-                ax2.set_ylabel(elabel, color="#7A7A7A")
-                ax2.tick_params(axis="y", colors="#9A9A9A", labelcolor="#7A7A7A")
+                ax2.fill_between(ex, ez, color="#E4E4E4", lw=0, zorder=1)
+                ax2.plot(ex, ez, color="#BDBDBD", lw=0.6, zorder=1.5)
+                ax2.set_ylim(0, max(max(ez) * 2.6, 1.0))
+                ax2.set_ylabel("Elevation [m]" if not distinct_routes else f"Elevation, {_title(rp)} route [m]",
+                               color="#8C8C8C")
+                ax2.tick_params(axis="y", colors="#B3B3B3", labelcolor="#8C8C8C")
+                ax2.yaxis.set_major_locator(plt.MaxNLocator(4))
                 ax2.spines["right"].set_visible(True)
-                ax2.spines["right"].set_color("#B3B3B3")
+                ax2.spines["right"].set_color("#BFBFBF")
                 ax2.spines["top"].set_visible(False)
+                ax2.grid(False)
                 ax.set_zorder(ax2.get_zorder() + 1)
                 ax.patch.set_visible(False)
         if legend and plans:
-            hs = [handles[i] for i in range(len(plans))]
-            labels = [_plan_label(p, with_time=False) for p in plans]
             from matplotlib.lines import Line2D
 
             proxies = [Line2D([], [], color=style.algorithm_color(p.algorithm), lw=lw,
-                              ls=style.algorithm_linestyle(p.algorithm) if p.feasible else (0, (2.0, 1.5)),
-                              marker=style.algorithm_marker(p.algorithm), ms=3.6, mec="white", mew=0.4)
-                       for p, h in zip(plans, hs)]
-            ncol = 1 if len(plans) <= 4 else 2
-            ax.legend(proxies, labels, loc="upper right", ncol=ncol, fontsize=_rc("legend.fontsize"), handlelength=2.2,
-                      frameon=True, framealpha=0.9, edgecolor="none", borderpad=0.3)
+                              ls=style.algorithm_linestyle(p.algorithm)) for p in plans]
+            labels = [_plan_label(p, with_time=False) for p in plans]
+            w_in = fig.get_size_inches()[0]
+            ncol = max(1, min(len(plans), int(w_in / 1.15)))
+            ax.legend(proxies, labels, loc="lower left", bbox_to_anchor=(0.0, 1.01, 1.0, 0.1), mode="expand",
+                      ncol=ncol, borderaxespad=0.0, frameon=False, handlelength=2.0, columnspacing=0.8)
         return _finish(fig, path)
 
 
@@ -1344,10 +1585,10 @@ _COLUMNS: dict[str, tuple[str, str]] = {
     # key: (header, better)
     "algorithm": ("Algorithm", ""),
     "guarantee": ("Guarantee", ""),
-    "time": ("Trip time [h:mm]", "min"),
+    "time": ("Trip time [min]", "min"),
     "drive": ("Driving [h:mm]", ""),
     "charge": ("Charging [min]", ""),
-    "wait": ("Queue+plug [min]", ""),
+    "wait": ("Queue + plug-in [min]", ""),
     "stops": ("Stops", ""),
     "distance": ("Distance [km]", ""),
     "charged": ("Charged [kWh]", ""),
@@ -1355,7 +1596,7 @@ _COLUMNS: dict[str, tuple[str, str]] = {
     "gcost": ("Gen. cost [{cur}]", "min"),
     "arrival": ("Arrival SoC [%]", ""),
     "runtime": ("Runtime [ms]", "min"),
-    "settled": ("Settled", "min"),
+    "settled": ("Settled [labels]", "min"),
 }
 DEFAULT_COLUMNS: tuple[str, ...] = (
     "algorithm", "guarantee", "time", "charge", "wait", "stops", "distance", "charged", "money", "arrival", "runtime", "settled",
@@ -1363,7 +1604,10 @@ DEFAULT_COLUMNS: tuple[str, ...] = (
 
 
 def _cell(p: RoutePlan, key: str) -> tuple[str, float | None]:
-    """(formatted text, numeric value for 'best' detection) of one cell."""
+    """(formatted text, numeric value for 'best' detection) of one cell.
+
+    The value is rounded like the text, so that plans that *look* equal in
+    the table are marked best together."""
     feas = p.feasible
     stats = p.stats
     if key == "algorithm":
@@ -1373,7 +1617,7 @@ def _cell(p: RoutePlan, key: str) -> tuple[str, float | None]:
     if not feas and key not in ("runtime", "settled"):
         return ("infeasible", None) if key == "time" else ("--", None)
     if key == "time":
-        return _hm(p.total_time_s), p.total_time_s
+        return f"{p.total_time_s / 60:.1f}", round(p.total_time_s / 60, 1)
     if key == "drive":
         return _hm(p.drive_time_s), p.drive_time_s
     if key == "charge":
@@ -1387,15 +1631,15 @@ def _cell(p: RoutePlan, key: str) -> tuple[str, float | None]:
     if key == "charged":
         return f"{p.energy_charged_kwh:.1f}", p.energy_charged_kwh
     if key == "money":
-        return f"{p.money:.2f}", p.money
+        return f"{p.money:.2f}", round(p.money, 2)
     if key == "gcost":
-        return f"{p.generalized_cost:.2f}", p.generalized_cost
+        return f"{p.generalized_cost:.2f}", round(p.generalized_cost, 2)
     if key == "arrival":
         return f"{100 * p.arrival_soc:.1f}", p.arrival_soc
     if key == "runtime":
         if stats is None:
             return "--", None
-        return f"{1000 * stats.runtime_s:.1f}", stats.runtime_s
+        return f"{1000 * stats.runtime_s:.1f}", round(1000 * stats.runtime_s, 1)
     if key == "settled":
         if stats is None:
             return "--", None
@@ -1473,69 +1717,105 @@ def plot_comparison_table(
     columns: Sequence[str] = DEFAULT_COLUMNS,
     width: str | float = "double",
     bold_best: bool = True,
+    zebra: bool = True,
     path: Any = None,
 ) -> Any:
     """The key numbers of every plan as a booktabs-style figure table.
 
-    A coloured swatch identifies the algorithm; the best trip time, cost,
-    runtime and settled count are bold (see :func:`latex_table` for the
-    LaTeX version of the same numbers).
+    Columns are chosen from ``algorithm, guarantee, time, drive, charge,
+    wait, stops, distance, charged, money, gcost, arrival, runtime,
+    settled``.  A colour swatch identifies the algorithm; the best trip
+    time, cost, runtime and settled count among feasible plans are bold;
+    infeasible rows are muted.  The table is laid out from measured text
+    extents (two-line headers: name over unit) and spans the requested
+    width; if it does not fit, the font shrinks (down to 5.5 pt).  See
+    :func:`latex_table` for the LaTeX version of the same numbers.
     """
+    from matplotlib.patches import Rectangle
+
     plans = _as_plans(plans)
     headers, rows, best = _table_data(plans, columns)
+    heads = [h.replace(" [", "\n[") for h in headers]
+    left = [c in ("algorithm", "guarantee") for c in columns]
     with style.paper():
-        n = len(rows)
-        fig, ax = _new_fig(width, 0.0, height=0.32 + 0.205 * (n + 1))
+        plt = _plt()
+        w_in = style.figsize(width)[0]
+        fig = plt.figure(figsize=(w_in, 1.0))
+        renderer = fig.canvas.get_renderer()
+        k_pt = 72.0 / fig.dpi
+
+        def text_w(s: str, size: float, weight: str = "normal") -> float:
+            t = fig.text(0, 0, s, fontsize=size, fontweight=weight, linespacing=1.15)
+            w = t.get_window_extent(renderer).width * k_pt
+            t.remove()
+            return w
+
+        fs = float(_rc("font.size")) - 0.5
+        avail = w_in * 72.0 - 4.0
+        swatch = 1.0  # in units of fs
+        for _ in range(6):
+            pad = 0.9 * fs
+            col_w = []
+            for j in range(len(columns)):
+                cw = text_w(heads[j], fs, "bold")
+                for r, row in enumerate(rows):
+                    cw = max(cw, text_w(row[j], fs, "bold" if best[r][j] else "normal"))
+                col_w.append(cw)
+            natural = swatch * fs + 0.6 * fs + sum(col_w) + pad * (len(columns) - 1)
+            if natural <= avail or fs <= 5.5:
+                break
+            fs = max(5.5, fs * avail / natural * 0.98)
+        extra = max(avail - natural, 0.0) / max(len(columns) - 1, 1)
+        gap = pad + extra
+        row_h = 1.55 * fs
+        head_h = 2 * 1.2 * fs + 0.6 * fs
+        total_h = head_h + row_h * len(rows) + 0.5 * fs
+        fig.set_size_inches(w_in, (total_h + 4.0) / 72.0)
+        ax = fig.add_axes((0.0, 0.0, 1.0, 1.0))
+        ax.set_xlim(-2.0, w_in * 72.0 - 2.0)
+        ax.set_ylim(total_h + 2.0, -2.0)
         ax.axis("off")
-        cell_text = [["■"] + r for r in rows]
-        tab = ax.table(cellText=cell_text, colLabels=[""] + headers, loc="upper center", cellLoc="right", colLoc="right",
-                       bbox=(0.0, 0.0, 1.0, 1.0))
-        tab.auto_set_font_size(False)
-        fs = _rc("font.size") - 1.0
-        ncols = len(headers) + 1
-        for (r, c), cell in tab.get_celld().items():
-            cell.set_fontsize(fs)
-            cell.set_linewidth(0.0)
-            cell.PAD = 0.04
-            txt = cell.get_text()
-            if c <= 1 or (c - 1 < len(columns) and columns[c - 1] in ("algorithm", "guarantee")):
-                cell.set_text_props(ha="left")
-                cell._loc = "left"
-            if r == 0:
-                txt.set_fontweight("bold")
-                txt.set_color(style.INK)
-                cell.visible_edges = "B"
-                cell.set_linewidth(0.6)
-                txt.set_wrap(True)
-            else:
-                p = plans[r - 1]
-                if c == 0:
-                    txt.set_color(style.algorithm_color(p.algorithm))
-                    txt.set_fontsize(fs + 2)
-                elif best[r - 1][c - 1]:
-                    txt.set_fontweight("bold")
-                if not p.feasible and c > 0:
-                    txt.set_color(style.INK_MUTED)
-                if r == n:
-                    cell.visible_edges = "B"
-                    cell.set_linewidth(0.6)
-                else:
-                    cell.visible_edges = ""
-        # narrow swatch column, wider algorithm column
-        widths = [0.025] + [0.11 if columns[j] == "algorithm" else (0.085 if columns[j] == "guarantee" else 0.0) for j in range(len(columns))]
-        rest = [j for j in range(len(columns)) if widths[j + 1] == 0.0]
-        free = max(1.0 - sum(widths), 0.1)
-        for j in rest:
-            widths[j + 1] = free / max(len(rest), 1)
-        for (r, c), cell in tab.get_celld().items():
-            if c < ncols:
-                cell.set_width(widths[c])
-        top = ax.plot([0, 1], [1, 1], transform=ax.transAxes, color=style.INK, lw=0.9, clip_on=False)
-        del top
+        # column anchors (left edge for text columns, right edge for numbers)
+        x = swatch * fs + 0.6 * fs
+        anchors = []
+        for j in range(len(columns)):
+            anchors.append(x if left[j] else x + col_w[j])
+            x += col_w[j] + gap
+        x_end = x - gap
+        rule = {"color": style.INK, "solid_capstyle": "butt"}
+        ax.plot([0, x_end], [0, 0], lw=0.9, **rule)
+        ax.plot([0, x_end], [head_h, head_h], lw=0.5, **rule)
+        ax.plot([0, x_end], [total_h, total_h], lw=0.9, **rule)
+        for j, h in enumerate(heads):
+            ax.text(anchors[j], head_h - 0.35 * fs, h, ha="left" if left[j] else "right", va="bottom", fontsize=fs,
+                    fontweight="bold", color=style.INK, linespacing=1.15)
+        for r, (p, row) in enumerate(zip(plans, rows)):
+            y0 = head_h + r * row_h + 0.25 * fs
+            yc = y0 + row_h / 2.0
+            if zebra and r % 2 == 1:
+                ax.add_patch(Rectangle((0, y0 - 0.0), x_end, row_h, facecolor="#F4F4F4", edgecolor="none", zorder=0))
+            s = 0.8 * fs
+            ax.add_patch(Rectangle((0.1 * fs, yc - s / 2), s, s, facecolor=style.algorithm_color(p.algorithm),
+                                   edgecolor="none", zorder=2))
+            muted = not p.feasible
+            for j, t in enumerate(row):
+                ax.text(anchors[j], yc, t, ha="left" if left[j] else "right", va="center_baseline", fontsize=fs,
+                        fontweight="bold" if (bold_best and best[r][j]) else "normal",
+                        color=style.INK_MUTED if (muted and columns[j] != "algorithm") else style.INK, zorder=3)
         return _finish(fig, path)
 
 
 # =================================================================== Pareto
+def _wear_scale(wmax: float) -> tuple[float, str]:
+    """Factor and unit label that show wear values with 1-3 integer digits."""
+    if wmax <= 0:
+        return 1.0, "[%]"
+    exp = math.floor(math.log10(wmax))
+    if -1 <= exp <= 1:
+        return 1.0, "[%]"
+    return 10.0 ** (-exp), f"[$10^{{{exp}}}$ %]"
+
+
 def plot_pareto(
     plan: RoutePlan | Sequence[RoutePlan],
     scenario: Scenario | None = None,
@@ -1543,7 +1823,7 @@ def plot_pareto(
     others: Any = (),
     ax: Any = None,
     width: str | float = "single",
-    aspect: float = 0.72,
+    aspect: float = 0.78,
     path: Any = None,
 ) -> Any:
     """A Pareto front in the (trip time, money) plane, wear as colour.
@@ -1551,17 +1831,24 @@ def plot_pareto(
     ``plan`` is the result of the ``pareto`` planner (its ``alternatives``
     are the evaluated front members) or a list of member plans.  Marker
     colour encodes the battery wear (state-of-health loss, one-hue ramp),
-    marker size the number of charging stops; the grey staircase is the
-    time-money trade-off curve.  The member the planner selected (minimum
-    generalised cost) is ringed.  ``others`` adds plans of other algorithms
-    as reference points in their own colour and marker.
+    marker area the number of charging stops; the thin dark staircase is
+    the two-criteria (time, money) envelope -- members above it are
+    non-dominated only thanks to lower wear.  The member the planner
+    selected (minimum generalised cost) is ringed.  ``others`` adds plans
+    of other algorithms as reference points in their own colour and marker.
+    The scatter is drawn with :func:`seaborn.scatterplot` when seaborn is
+    installed.  A front cut short by the planner's label budget
+    (``stats.extra["complete"] is False``) is flagged in the corner.
     """
     if isinstance(plan, RoutePlan):
         members = list(plan.alternatives) or [plan]
-        selected = plan
+        selected: RoutePlan | None = plan
+        st = plan.stats
+        complete = (st.extra or {}).get("complete", True) if st else True
     else:
         members = list(plan)
         selected = None
+        complete = True
     members = [m for m in members if m.feasible]
     if not members:
         raise ValueError("no feasible front members to plot")
@@ -1573,13 +1860,14 @@ def plot_pareto(
         M = [m.money for m in members]
         W = [m.soh_total_pct for m in members]
         S = [m.num_stops for m in members]
-        wmax = max(W) if max(W) > 0 else 1.0
-        exp = math.floor(math.log10(wmax)) if wmax > 0 else 0
-        scale = 10.0 ** (-exp + (0 if wmax / 10 ** exp >= 2 else 1)) if wmax > 0 else 1.0
+        scale, unit = _wear_scale(max(W))
         Wd = [w * scale for w in W]
-        order = sorted(range(len(members)), key=lambda i: (T[i], M[i]))
+        big = len(members) > 150
         # staircase of the non-dominated (time, money) envelope
-        st_x, st_y, best_m = [], [], math.inf
+        order = sorted(range(len(members)), key=lambda i: (T[i], M[i]))
+        st_x: list[float] = []
+        st_y: list[float] = []
+        best_m = math.inf
         for i in order:
             if M[i] < best_m - 1e-12:
                 if st_x:
@@ -1588,38 +1876,65 @@ def plot_pareto(
                 st_x.append(T[i])
                 st_y.append(M[i])
                 best_m = M[i]
-        ax.plot(st_x, st_y, color="#A6A6A6", lw=0.8, zorder=1)
-        sizes = [10 + 9 * s for s in S]
+        ax.plot(st_x, st_y, color=style.INK, lw=0.6, alpha=0.7, zorder=2, solid_joinstyle="miter")
+        from matplotlib.colors import Normalize
+
         cmap = style.sequential_cmap()
-        sc = ax.scatter(T, M, c=Wd, s=sizes, cmap=cmap, edgecolors="white", linewidths=0.5, zorder=3)
-        cb = fig.colorbar(sc, ax=ax, pad=0.02, fraction=0.06, aspect=25)
-        unit = "" if scale == 1.0 else f" [×10$^{{{-int(round(math.log10(scale)))}}}$ %]"
-        cb.set_label(f"Battery wear (SoH loss){unit or ' [%]'}")
+        norm = Normalize(vmin=min(Wd), vmax=max(Wd) if max(Wd) > min(Wd) else min(Wd) + 1e-9)
+        s_lo, s_hi = (5.0, 26.0) if big else (14.0, 60.0)
+        stops_sorted = sorted(set(S))
+        smin, smax = stops_sorted[0], stops_sorted[-1]
+
+        def area(s: int) -> float:
+            return s_lo if smax == smin else s_lo + (s_hi - s_lo) * (s - smin) / (smax - smin)
+
+        edge = {"edgecolors": "none", "linewidths": 0.0} if big else {"edgecolors": "white", "linewidths": 0.4}
+        try:
+            import seaborn as sns
+
+            sns.scatterplot(x=T, y=M, hue=Wd, hue_norm=norm, palette=cmap, size=S, sizes=(area(smin), area(smax)),
+                            size_norm=(smin, smax) if smax > smin else None, legend=False, ax=ax, zorder=3,
+                            alpha=0.9 if big else 1.0, **edge)
+        except ImportError:  # pragma: no cover - plain matplotlib
+            ax.scatter(T, M, c=Wd, cmap=cmap, norm=norm, s=[area(s) for s in S], zorder=3, **edge)
+        from matplotlib.cm import ScalarMappable
+
+        sm = ScalarMappable(norm=norm, cmap=cmap)
+        cb = fig.colorbar(sm, ax=ax, pad=0.02, fraction=0.06, aspect=25)
+        cb.set_label(f"Battery wear (SoH loss) {unit}")
         cb.outline.set_linewidth(0.4)
         cb.ax.tick_params(width=0.5, length=2)
         if selected is not None:
             ax.scatter([selected.total_time_s / 3600.0], [selected.money], s=95, facecolors="none", edgecolors=style.INK,
-                       linewidths=0.9, zorder=4)
-            ax.annotate("selected", (selected.total_time_s / 3600.0, selected.money), xytext=(7, 7), textcoords="offset points",
-                        fontsize=_rc("font.size") - 1, color=style.INK, arrowprops=dict(arrowstyle="-", lw=0.5, color=style.INK_MUTED))
-        handles = []
+                       linewidths=0.9, zorder=5)
+            ax.annotate("selected", (selected.total_time_s / 3600.0, selected.money), xytext=(8, 8),
+                        textcoords="offset points", fontsize=_rc("font.size") - 1, color=style.INK,
+                        arrowprops={"arrowstyle": "-", "lw": 0.5, "color": style.INK_MUTED, "shrinkA": 0, "shrinkB": 4})
         from matplotlib.lines import Line2D
 
+        handles = []
         for o in _as_plans(others):
             if not o.feasible:
                 continue
-            ax.scatter([o.total_time_s / 3600.0], [o.money], s=34, marker=style.algorithm_marker(o.algorithm),
-                       facecolors=style.algorithm_color(o.algorithm), edgecolors="white", linewidths=0.6, zorder=5)
+            ax.scatter([o.total_time_s / 3600.0], [o.money], s=36, marker=style.algorithm_marker(o.algorithm),
+                       facecolors=style.algorithm_color(o.algorithm), edgecolors="white", linewidths=0.6, zorder=6)
             handles.append(Line2D([], [], ls="none", marker=style.algorithm_marker(o.algorithm), ms=5,
                                   mfc=style.algorithm_color(o.algorithm), mec="white", mew=0.5, label=_title(o)))
-        for s in sorted(set(S)):
-            handles.append(Line2D([], [], ls="none", marker="o", ms=math.sqrt(10 + 9 * s), mfc="#9E9E9E", mec="white",
-                                  mew=0.5, label=f"{s} stop{'s' if s != 1 else ''}"))
-        ax.legend(handles=handles, loc="upper right", frameon=False, ncol=1, handletextpad=0.3)
+        shown = stops_sorted if len(stops_sorted) <= 4 else [smin, stops_sorted[len(stops_sorted) // 2], smax]
+        for s in shown:
+            handles.append(Line2D([], [], ls="none", marker="o", ms=math.sqrt(area(s)), mfc="#A6A6A6", mec="white",
+                                  mew=0.4, label=f"{s} stop{'s' if s != 1 else ''}"))
+        ax.legend(handles=handles, loc="lower left", bbox_to_anchor=(0.0, 1.01, 1.0, 0.1), mode="expand",
+                  ncol=min(len(handles), 3), frameon=False, handletextpad=0.3, borderaxespad=0.0, columnspacing=0.6)
+        if not complete:
+            ax.annotate("front may be incomplete (label budget)", (1.0, 0.0), xycoords="axes fraction", xytext=(-3, 3),
+                        textcoords="offset points", ha="right", va="bottom", fontsize=_rc("font.size") - 1.5,
+                        color=style.INK_MUTED)
+        ax.margins(x=0.06, y=0.08)
         cur = members[0].currency
         ax.set_xlabel("Trip time [h]")
         ax.set_ylabel(f"Charging cost [{cur}]")
-        ax.grid(color=style.GRID, lw=0.5)
+        ax.grid(color=style.GRID, lw=0.5, zorder=0)
         return _finish(fig, path)
 
 
@@ -1634,6 +1949,26 @@ def _vehicles(vehicles: Any) -> list[Any]:
     return [get_vehicle(v) if isinstance(v, str) else v for v in vehicles]
 
 
+def _soc_vs_minutes(vehicle: Any, powers: Sequence[float], soc_from: float, soc_to: float) -> tuple[list[float], list[float], float | None]:
+    """SoC [%] vs minutes for piecewise-constant battery power (exact:
+    each bin is crossed in ``dSoC * battery / P`` hours); also the minutes
+    from ``soc_from`` to ``soc_to``."""
+    breaks = list(vehicle.dc_curve.soc_breaks)
+    ts, ss = [0.0], [100.0 * soc_from]
+    t = 0.0
+    t_target = None
+    for b0, b1, p in zip(breaks, breaks[1:], powers):
+        lo, hi = max(b0, soc_from), b1
+        if hi <= lo:
+            continue
+        if t_target is None and lo <= soc_to <= hi:
+            t_target = t + (soc_to - lo) * vehicle.battery_kwh / p * 60.0
+        t += (hi - lo) * vehicle.battery_kwh / p * 60.0
+        ts.append(t)
+        ss.append(100.0 * hi)
+    return ts, ss, t_target
+
+
 def plot_charging_curves(
     vehicle_or_keys: Any = None,
     *,
@@ -1645,52 +1980,51 @@ def plot_charging_curves(
 ) -> Any:
     """Charging behaviour of vehicle presets.
 
-    Left: maximum battery-side DC power vs SoC (the piecewise-constant bins
-    the exact algorithms use).  Right: SoC vs minutes at the charger,
-    starting from ``soc_from``, at a station that does not limit the power
-    (or at ``station_kw``).  The legend reports the classic ``soc_from`` ->
-    ``soc_to`` charging time.  Times are exact for the binned curve:
-    ``sum(dSoC * battery / P)``.
+    Left: maximum battery-side DC power vs SoC -- the piecewise-constant
+    bins the exact algorithms use; the resulting charging function (SoC vs
+    time) is piecewise linear and concave, as in Montoya et al. (2017,
+    Transp. Res. B) and Baum et al. (2019, Transp. Sci.).  Right: SoC vs minutes at
+    the charger, starting from ``soc_from``, at a station that does not
+    limit the power (or at ``station_kw``); the dot marks ``soc_to``.  Times
+    are exact for the binned curve, ``sum(dSoC * battery / P)``; the shared
+    legend below the panels reports the classic ``soc_from`` -> ``soc_to``
+    charging time of each vehicle.
     """
     vehicles = _vehicles(vehicle_or_keys)
     with style.paper():
         plt = _plt()
-        w, h = style.figsize(width, 0.36)
-        fig, (a1, a2) = plt.subplots(1, 2, figsize=(w, max(h, 2.2)), gridspec_kw={"wspace": 0.28})
+        w, h = style.figsize(width, 0.34)
+        fig, (a1, a2) = plt.subplots(1, 2, figsize=(w, max(h, 2.1)), gridspec_kw={"wspace": 0.24})
+        handles = []
         for k, v in enumerate(vehicles):
             col = style.categorical(k)
             breaks = list(v.dc_curve.soc_breaks)
             powers = [min(p, station_kw) if station_kw else p for p in v.dc_curve.power_kw]
-            a1.stairs(powers, [100 * b for b in breaks], color=col, lw=1.2, baseline=None, label=v.name)
-            # SoC vs minutes from soc_from
-            ts, ss = [0.0], [100 * soc_from]
-            t = 0.0
-            t_target = None
-            for b0, b1, p in zip(breaks, breaks[1:], powers):
-                lo, hi = max(b0, soc_from), b1
-                if hi <= lo:
-                    continue
-                if t_target is None and soc_to <= hi and soc_to >= lo:
-                    t_target = t + (soc_to - lo) * v.battery_kwh / p * 60.0
-                t += (hi - lo) * v.battery_kwh / p * 60.0
-                ts.append(t)
-                ss.append(100 * hi)
-            lab = f"{v.name}" + (f" — {100 * soc_from:.0f}→{100 * soc_to:.0f} %: {t_target:.0f} min" if t_target is not None else "")
-            a2.plot(ts, ss, color=col, lw=1.2, label=lab)
+            a1.stairs(powers, [100 * b for b in breaks], color=col, lw=1.2, baseline=None)
+            ts, ss, t_target = _soc_vs_minutes(v, powers, soc_from, soc_to)
+            (ln,) = a2.plot(ts, ss, color=col, lw=1.2)
             if t_target is not None:
-                a2.scatter([t_target], [100 * soc_to], s=12, color=col, edgecolors="white", linewidths=0.5, zorder=4)
+                a2.scatter([t_target], [100 * soc_to], s=13, color=col, edgecolors="white", linewidths=0.5, zorder=4)
+            ln.set_label(v.name + (f"  ({t_target:.0f} min)" if t_target is not None else ""))
+            handles.append(ln)
         a1.set_xlim(0, 100)
         a1.set_ylim(0, None)
         a1.set_xlabel("State of charge [%]")
         a1.set_ylabel("Max. charging power [kW]")
         a1.grid(color=style.GRID, lw=0.5)
-        a2.axhline(100 * soc_to, color="#B3B3B3", lw=0.6, zorder=0)
-        a2.set_ylim(100 * soc_from - 2, 101)
+        a2.axhline(100 * soc_to, color="#B3B3B3", lw=0.6, ls=(0, (3, 2)), zorder=0)
+        a2.annotate(f"{100 * soc_to:.0f} %", (1.0, 100 * soc_to), xycoords=("axes fraction", "data"), xytext=(-2, -2),
+                    textcoords="offset points", ha="right", va="top", fontsize=_rc("font.size") - 1.5,
+                    color=style.INK_MUTED)
+        a2.set_ylim(100 * soc_from - 2, 102)
         a2.set_xlim(0, None)
-        a2.set_xlabel("Minutes at the charger")
+        a2.set_xlabel(f"Minutes at the charger (from {100 * soc_from:.0f} % SoC)")
         a2.set_ylabel("State of charge [%]")
         a2.grid(color=style.GRID, lw=0.5)
-        a2.legend(loc="lower right", fontsize=_rc("legend.fontsize") - 0.5, frameon=True, framealpha=0.9, edgecolor="none")
+        ncol = 3 if len(handles) > 4 else max(len(handles), 1)
+        fig.legend(handles=handles, loc="upper center", bbox_to_anchor=(0.5, -0.03), ncol=ncol, frameon=False,
+                   title=f"vehicle (minutes from {100 * soc_from:.0f} to {100 * soc_to:.0f} % SoC)",
+                   columnspacing=1.2, handlelength=1.8)
         return _finish(fig, path)
 
 
@@ -1700,47 +2034,71 @@ def plot_consumption_vs_speed(
     *,
     speeds_kmh: Sequence[float] | None = None,
     grade: float = 0.0,
-    width: str | float = "single",
-    aspect: float = 0.8,
+    width: str | float = "double",
+    aspect: float = 0.36,
     path: Any = None,
 ) -> Any:
-    """Steady-state consumption [kWh/100 km] vs speed for each vehicle.
+    """Steady-state consumption [kWh/100 km] vs speed, one panel per temperature.
 
     Computed with the same physics model the planners use
-    (:func:`evroute.energy.consumption_curve`, a straight motorway edge at
-    ``grade``).  Colour = vehicle, line style = temperature (cold weather
-    adds heating load, heat adds cooling load; denser cold air adds drag).
-    Speeds above a vehicle's top speed are not drawn.
+    (:func:`evroute.energy.consumption_curve`: a straight motorway edge at
+    ``grade``).  Colour = vehicle; the panels share the y axis, so the
+    effect of temperature reads across (cold weather adds heating load and
+    denser air, heat adds cooling load -- most visible at low speed, where
+    the auxiliary load is spread over few kilometres).  Speeds above a
+    vehicle's top speed are not drawn.  Lines are drawn with
+    :func:`seaborn.lineplot` when seaborn is installed.
     """
     from ..energy import consumption_curve
     from ..scenario import Conditions
 
     vehicles = _vehicles(vehicles)
+    temps = list(temperatures) or [20.0]
     speeds = list(speeds_kmh or [float(s) for s in range(30, 165, 5)])
-    styles = ["-", (0, (4.0, 1.6)), (0, (1.2, 1.4)), (0, (5, 1.5, 1.2, 1.5))]
+    rows: list[tuple[str, float, float, float]] = []
+    for v in vehicles:
+        sp = [s for s in speeds if s <= v.max_speed_kmh + 1e-9]
+        for T in temps:
+            c = consumption_curve(v, Conditions(temperature_c=float(T)), sp, grade=grade)
+            rows += [(v.name, float(T), s, e) for s, e in zip(sp, c)]
+    palette = {v.name: style.categorical(k) for k, v in enumerate(vehicles)}
     with style.paper():
-        fig, ax = _new_fig(width, aspect)
+        plt = _plt()
+        w, h = style.figsize(width, aspect)
+        fig, axes = plt.subplots(1, len(temps), figsize=(w, max(h, 1.9)), sharey=True, squeeze=False,
+                                 gridspec_kw={"wspace": 0.08})
+        axes = axes[0]
+        try:
+            import seaborn as sns
+        except ImportError:  # pragma: no cover
+            sns = None
+        for ax, T in zip(axes, temps):
+            sel = [r for r in rows if r[1] == float(T)]
+            if sns is not None:
+                sns.lineplot(x=[r[2] for r in sel], y=[r[3] for r in sel], hue=[r[0] for r in sel], palette=palette,
+                             hue_order=list(palette), lw=1.2, ax=ax, legend=False, errorbar=None, sort=True)
+            else:  # pragma: no cover
+                for name, col in palette.items():
+                    pts = [(r[2], r[3]) for r in sel if r[0] == name]
+                    ax.plot([p[0] for p in pts], [p[1] for p in pts], color=col, lw=1.2)
+            ax.set_title(f"{float(T):g} °C", loc="left", fontweight="bold")
+            ax.set_xlim(min(speeds), max(speeds))
+            ax.set_xlabel("Speed [km/h]")
+            ax.grid(color=style.GRID, lw=0.5)
+        axes[0].set_ylabel("Consumption [kWh/100 km]")
+        axes[0].set_ylim(0, None)
         from matplotlib.lines import Line2D
 
-        for k, v in enumerate(vehicles):
-            sp = [s for s in speeds if s <= v.max_speed_kmh + 1e-9]
-            for j, T in enumerate(temperatures):
-                c = consumption_curve(v, Conditions(temperature_c=float(T)), sp, grade=grade)
-                ax.plot(sp, c, color=style.categorical(k), lw=1.1, ls=styles[j % len(styles)])
-        h1 = [Line2D([], [], color=style.categorical(k), lw=1.2, label=v.name) for k, v in enumerate(vehicles)]
-        h2 = [Line2D([], [], color=style.INK_MUTED, lw=1.0, ls=styles[j % len(styles)], label=f"{T:g} °C")
-              for j, T in enumerate(temperatures)]
-        leg1 = ax.legend(handles=h1, loc="upper left", fontsize=_rc("legend.fontsize") - 0.5)
-        ax.add_artist(leg1)
-        ax.legend(handles=h2, loc="lower right", fontsize=_rc("legend.fontsize") - 0.5)
-        ax.set_xlabel("Speed [km/h]")
-        ax.set_ylabel("Consumption [kWh/100 km]")
-        ax.set_xlim(min(speeds), max(speeds))
-        ax.grid(color=style.GRID, lw=0.5)
+        handles = [Line2D([], [], color=c, lw=1.2, label=n) for n, c in palette.items()]
+        fig.legend(handles=handles, loc="upper center", bbox_to_anchor=(0.5, -0.03),
+                   ncol=3 if len(handles) > 4 else len(handles), frameon=False, columnspacing=1.2, handlelength=1.8)
         return _finish(fig, path)
 
 
 # ============================================================ wait profiles
+_ARRIVAL_MARKERS: tuple[str, ...] = ("o", "s", "D", "^", "v", "P", "X", "*", "h", "<", ">")
+
+
 def plot_wait_profiles(
     scenario: Scenario,
     stations: Sequence[int] | None = None,
@@ -1748,16 +2106,18 @@ def plot_wait_profiles(
     plans: Any = (),
     top: int = 6,
     width: str | float = "single",
-    aspect: float = 0.66,
+    aspect: float = 0.62,
     path: Any = None,
 ) -> Any:
     """Expected queueing delay vs time of day at selected stations.
 
     The curves are the FIFO-safe Erlang-C profiles the planners use
-    (``PreparedScenario.wait_profiles``).  ``stations`` are station indices;
-    by default the stations used by ``plans`` are shown, otherwise the
-    ``top`` stations with the highest peak wait.  The departure time is
-    marked, and with ``plans`` each planned arrival is a dot on its curve.
+    (``PreparedScenario.wait_profiles``; M/M/c waits per hour, see
+    :mod:`evroute.queueing`).  ``stations`` are station indices; by default
+    the stations used by ``plans`` are shown, otherwise the ``top`` stations
+    with the highest peak wait.  The departure time is marked, and with
+    ``plans`` each planned arrival is a marker (the algorithm's shape) on
+    its station's curve.
     """
     P = scenario.prepare()
     plans = _routed(_as_plans(plans))
@@ -1773,21 +2133,42 @@ def plot_wait_profiles(
             peak = sorted(range(len(P.stations)), key=lambda s: -max(P.wait_profiles[s](h * 900.0) for h in range(96)))
             stations = peak[:top]
     stations = list(stations)
+    from matplotlib.lines import Line2D
+
     with style.paper():
         fig, ax = _new_fig(width, aspect)
         hours = [i / 12.0 for i in range(24 * 12 + 1)]
+        handles: list[Any] = []
+        marker_sets: dict[str, str] = {}  # legend label -> marker
         for k, s in enumerate(stations):
             st = P.stations[s]
             prof = P.wait_profiles[s]
             ys = [prof(h * 3600.0) / 60.0 for h in hours]
             name = st.name or f"station {st.id}"
-            ax.plot(hours, ys, color=style.categorical(k), lw=1.2, label=f"{name} ({st.power_kw:g} kW, {st.plugs} plugs)")
+            (ln,) = ax.plot(hours, ys, color=style.categorical(k), lw=1.2)
+            ln.set_label(f"{name} ({st.power_kw:g} kW, {st.plugs} plugs)")
+            handles.append(ln)
+            # arrivals: plans arriving within the same minute share a marker
+            arrivals: dict[int, tuple[float, float, list[str]]] = {}
             for p in plans:
                 for stop in p.stops:
                     if stop.station == s:
                         tod = P.time_of_day(stop.arrival_s) / 3600.0
-                        ax.scatter([tod], [stop.wait_s / 60.0], s=22, marker=style.algorithm_marker(p.algorithm),
-                                   facecolors=style.categorical(k), edgecolors="white", linewidths=0.6, zorder=4)
+                        key = round(tod * 60.0)
+                        if key not in arrivals:
+                            arrivals[key] = (tod, stop.wait_s / 60.0, [])
+                        if p.algorithm not in arrivals[key][2]:
+                            arrivals[key][2].append(p.algorithm)
+            for tod, wait_min, algos in arrivals.values():
+                label = ", ".join(style.algorithm_title(a) for a in algos)
+                if label not in marker_sets:  # one distinct shape per set of algorithms
+                    shape = style.algorithm_marker(algos[0]) if len(algos) == 1 else None
+                    if shape is None or shape in marker_sets.values():
+                        shape = next((m for m in _ARRIVAL_MARKERS if m not in marker_sets.values()), "o")
+                    marker_sets[label] = shape
+                mk = marker_sets[label]
+                ax.scatter([tod], [wait_min], s=22, marker=mk, facecolors=style.categorical(k), edgecolors=style.INK,
+                           linewidths=0.5, zorder=4)
         dep = (P.departure_s % 86400.0) / 3600.0
         ax.axvline(dep, color=style.INK_MUTED, lw=0.7, ls=(0, (3, 2)), zorder=1)
         ax.annotate("departure", (dep, 1.0), xycoords=("data", "axes fraction"), xytext=(2, -2), textcoords="offset points",
@@ -1798,12 +2179,20 @@ def plot_wait_profiles(
         ax.set_xlabel("Time of day [h]")
         ax.set_ylabel("Expected wait [min]")
         ax.grid(color=style.GRID, lw=0.5)
-        ax.legend(loc="upper left", fontsize=_rc("legend.fontsize") - 0.5, frameon=True, framealpha=0.9, edgecolor="none",
-                  bbox_to_anchor=(0.0, 0.93))
+        for label, mk in marker_sets.items():
+            handles.append(Line2D([], [], ls="none", marker=mk, ms=4.2, mfc="white", mec=style.INK, mew=0.6,
+                                  label=f"arrival: {label}"))
+        ax.legend(handles=handles, loc="upper left", bbox_to_anchor=(0.0, -0.2), ncol=1, frameon=False,
+                  handlelength=1.6, borderaxespad=0.0)
         return _finish(fig, path)
 
 
 # ============================================================ search effort
+def _geomean(values: Iterable[float]) -> float:
+    vals = [max(float(v), 1e-12) for v in values]
+    return math.exp(sum(math.log(v) for v in vals) / len(vals)) if vals else math.nan
+
+
 def plot_search_effort(
     plans: Any,
     *,
@@ -1812,37 +2201,96 @@ def plot_search_effort(
 ) -> Any:
     """Search effort per algorithm: settled labels and runtime (log scales).
 
-    ``settled`` is what each planner reports in ``stats.settled`` (labels
-    for the label-setting methods, evaluator calls for the genetic
-    algorithm, ...); runtime is wall-clock time of ``Planner.plan``.
+    A Cleveland dot plot (bars would be misleading on a log axis, where
+    their length depends on an arbitrary baseline).  ``settled`` is what
+    each planner reports in ``stats.settled`` (labels for the label-setting
+    methods, decoded individuals for the genetic algorithm, ...); runtime
+    is the wall-clock time of ``Planner.plan``.  ``plans`` may contain
+    several plans per algorithm (e.g. one per instance): each run is then
+    a small jittered dot (:func:`seaborn.stripplot`) and the big marker is
+    the geometric mean with its 95 % bootstrap confidence interval
+    (:func:`seaborn.pointplot`).
     """
     plans = [p for p in _as_plans(plans) if p.stats is not None]
+    if not plans:
+        raise ValueError("no plan carries search statistics")
+    order: list[str] = []
+    for p in plans:
+        if p.algorithm not in order:
+            order.append(p.algorithm)
+    titles = [style.algorithm_title(a) for a in order]
+    palette = style.algorithm_palette(order, titles=True)
+    data = {
+        "algorithm": [_title(p) for p in plans],
+        "settled": [max(float(p.stats.settled), 1.0) for p in plans],  # type: ignore[union-attr]
+        "runtime": [max(1000.0 * p.stats.runtime_s, 1e-3) for p in plans],  # type: ignore[union-attr]
+    }
+    repeated = len(plans) > len(order)
     with style.paper():
         plt = _plt()
-        n = max(len(plans), 1)
+        n = len(order)
         w = style.figsize(width)[0]
-        fig, (a1, a2) = plt.subplots(1, 2, figsize=(w, 0.5 + 0.22 * n), sharey=True, gridspec_kw={"wspace": 0.08})
-        ys = list(range(n))[::-1]
-        for ax, key, label in ((a1, "settled", "Settled labels"), (a2, "runtime", "Runtime [ms]")):
-            vals = []
-            for y, p in zip(ys, plans):
-                v = float(p.stats.settled) if key == "settled" else 1000.0 * p.stats.runtime_s  # type: ignore[union-attr]
-                v = max(v, 1e-3)
-                vals.append(v)
-                ax.barh(y, v, height=0.62, color=style.algorithm_color(p.algorithm), edgecolor="white", linewidth=0.6, zorder=2)
-                txt = f"{int(v):,}" if key == "settled" else (f"{v:.1f}" if v < 100 else f"{v:,.0f}")
-                ax.text(v * 1.12, y, txt, va="center", ha="left", fontsize=_rc("font.size") - 1.5, color=style.INK)
+        fig, axes = plt.subplots(1, 2, figsize=(w, 0.62 + 0.2 * n), sharey=True, gridspec_kw={"wspace": 0.16})
+        try:
+            import seaborn as sns
+        except ImportError:  # pragma: no cover
+            sns = None
+        for ax, key, label in ((axes[0], "settled", "Settled labels"), (axes[1], "runtime", "Runtime [ms]")):
             ax.set_xscale("log")
-            lo = min(vals) if vals else 1.0
-            hi = max(vals) if vals else 10.0
-            ax.set_xlim(10 ** math.floor(math.log10(lo)) if key == "settled" else max(lo / 3, 1e-3), hi * 12)
+            vals = data[key]
+            centre = {t: _geomean(v for a, v in zip(data["algorithm"], vals) if a == t) for t in titles}
+            for y, t in enumerate(titles):  # guide lines from the axis to the dot
+                ax.plot([1e-12, centre[t]], [y, y], color=style.GRID, lw=0.8, zorder=1, solid_capstyle="butt")
+            if sns is not None and repeated:
+                sns.stripplot(x=vals, y=data["algorithm"], hue=data["algorithm"], order=titles, hue_order=titles,
+                              palette=palette, size=2.0, alpha=0.4, jitter=0.2, legend=False, ax=ax, zorder=2,
+                              native_scale=True)
+                sns.pointplot(x=vals, y=data["algorithm"], hue=data["algorithm"], order=titles, hue_order=titles,
+                              palette=palette, estimator=_geomean, errorbar=("ci", 95), seed=0, linestyle="none",
+                              markers=[style.algorithm_marker(a) for a in order], markersize=4.0,
+                              markeredgecolor="white", markeredgewidth=0.5, err_kws={"linewidth": 1.2},
+                              capsize=0.0, legend=False, ax=ax, native_scale=True)
+            else:
+                for y, (a, t) in enumerate(zip(order, titles)):
+                    mk = style.algorithm_marker(a)
+                    ax.scatter([centre[t]], [y], s=48 if mk == "*" else 26, marker=mk, color=palette[t],
+                               edgecolors="white", linewidths=0.5, zorder=3)
+            lo = min(vals)
+            hi = max(vals)
+            lo_dec = math.floor(math.log10(lo))
+            hi_dec = math.log10(hi)
+            span = max(hi_dec - lo_dec, 1.0)
+            top = hi_dec + 0.62 * span
+            ax.set_xlim(10 ** lo_dec, 10 ** top)
+            from matplotlib.ticker import (
+                FixedLocator,
+                LogFormatterSciNotation,
+                NullLocator,
+            )
+
+            stride = 1 if top - lo_dec <= 4.5 else 2
+            ax.xaxis.set_major_locator(FixedLocator([10.0 ** e for e in range(lo_dec, math.floor(top) + 1, stride)]))
+            ax.xaxis.set_major_formatter(LogFormatterSciNotation())
+            ax.xaxis.set_minor_locator(NullLocator())
+            for y, t in enumerate(titles):  # value column, right-aligned at the axes edge
+                v = centre[t]
+                txt = f"{v:,.0f}" if key == "settled" else (f"{v:.1f}" if v < 100 else f"{v:,.0f}")
+                ax.annotate(txt, (1.0, y), xycoords=("axes fraction", "data"), xytext=(-1, 0),
+                            textcoords="offset points", va="center", ha="right", fontsize=_rc("font.size") - 1.5,
+                            color=style.INK)
             ax.set_xlabel(label)
-            ax.grid(axis="x", color=style.GRID, lw=0.5)
+            ax.grid(axis="x", color=style.GRID, lw=0.5, which="major")
             ax.spines["left"].set_visible(False)
             ax.tick_params(axis="y", length=0)
-        a1.set_yticks(ys)
-        a1.set_yticklabels([_title(p) for p in plans])
-        a1.set_ylim(-0.6, n - 0.4)
+            ax.set_ylabel("")
+        axes[0].set_yticks(range(n))
+        axes[0].set_yticklabels(titles)
+        axes[0].set_ylim(n - 0.5, -0.5)
+        if repeated:
+            runs = len(plans) / max(n, 1)
+            axes[1].annotate(f"dots: {runs:.0f} runs per algorithm · marker: geometric mean, 95 % CI", (1.0, 1.0),
+                             xycoords="axes fraction", xytext=(0, 4), textcoords="offset points", ha="right",
+                             va="bottom", fontsize=_rc("font.size") - 1.5, color=style.INK_MUTED, annotation_clip=False)
         return _finish(fig, path)
 
 
@@ -1863,7 +2311,10 @@ def plot_search_space(
     = early, dark = late); unsettled nodes are omitted, the route is drawn
     on top.  All panels share the same window (``extent="trace"`` fits the
     union of the traces) so the size of the explored region is directly
-    comparable -- e.g. Dijkstra-order BLS against goal-directed BLS-A*.
+    comparable -- e.g. Dijkstra-order BLS against goal-directed BLS-A*
+    (Hart, Nilsson & Raphael 1968).  Each panel reports the settled nodes
+    (share of the network) and the settled labels (``stats.settled``).
+    Four panels are laid out 2 x 2, otherwise up to three per row.
     """
     plans = [p for p in _as_plans(plans) if p.trace is not None and p.trace.nodes]
     if not plans:
@@ -1872,6 +2323,7 @@ def plot_search_space(
     if extent == "trace":
         nodes = [v for p in plans for v in p.trace.nodes]  # type: ignore[union-attr]
         nodes += [v for p in plans for v in p.nodes]
+        nodes += [scenario.query.origin, scenario.query.destination]
         xs = [net.x[v] for v in nodes]
         ys = [net.y[v] for v in nodes]
         x0, x1, y0, y1 = min(xs), max(xs), min(ys), max(ys)
@@ -1880,48 +2332,57 @@ def plot_search_space(
     else:
         ext = map_extent(scenario, plans, extent)
     n = len(plans)
-    cols = cols or min(n, 3)
+    cols = cols or (2 if n == 4 else min(n, 3))
     rows = math.ceil(n / cols)
     with style.paper():
         plt = _plt()
+        fs = float(_rc("font.size"))
         w = style.figsize(width)[0]
-        aspect = (ext[3] - ext[2]) / (ext[1] - ext[0])
-        panel_w = (w - 0.1) / cols
-        fig = plt.figure(figsize=(w, rows * panel_w * aspect + 0.62))
-        top_h = 0.25 / (rows * panel_w * aspect + 0.62)
-        bot_h = 0.37 / (rows * panel_w * aspect + 0.62)
+        aspect = (ext[3] - ext[2]) / max(ext[1] - ext[0], 1e-9)
+        gap_w, title_h, cbar_h, margin = 0.12, (fs * 1.9) / 72.0, 0.42, 0.03
+        panel_w = (w - 2 * margin - (cols - 1) * gap_w) / cols
+        panel_h = panel_w * aspect
+        if panel_h > 3.2:  # very tall instances: limit the height, keep the aspect
+            panel_h = 3.2
+            panel_w = panel_h / aspect
+        fig_h = rows * (panel_h + title_h) + cbar_h + margin
+        fig = plt.figure(figsize=(w, fig_h))
         cmap = style.sequential_cmap(style.OKABE_ITO["blue"], light="#C9E0F2")
         sc = None
+        o, d = scenario.query.origin, scenario.query.destination
+        x_off = (w - (cols * panel_w + (cols - 1) * gap_w)) / 2.0
         for k, p in enumerate(plans):
             r, c = divmod(k, cols)
-            hgt = (1.0 - top_h - bot_h) / rows
-            ax = fig.add_axes((c / cols + 0.004, 1.0 - top_h - (r + 1) * hgt + 0.004, 1.0 / cols - 0.008, hgt - 0.008 - top_h * 0.2))
+            left = x_off + c * (panel_w + gap_w)
+            top = fig_h - margin - r * (panel_h + title_h) - title_h
+            ax = fig.add_axes((left / w, (top - panel_h) / fig_h, panel_w / w, panel_h / fig_h))
             m_per_pt = _fix_axes(ax, ext)
             ax.set_facecolor("white")
-            _draw_roads(ax, scenario, ext, alpha=0.55, scale=0.8)
+            _draw_roads(ax, scenario, ext, alpha=0.5, scale=0.8)
             tr = p.trace
             assert tr is not None
             m = len(tr.nodes)
             order = [i / max(m - 1, 1) for i in range(m)]
-            sc = ax.scatter([net.x[v] for v in tr.nodes], [net.y[v] for v in tr.nodes], c=order, cmap=cmap, vmin=0, vmax=1,
-                            s=7, linewidths=0, zorder=3)
+            sc = ax.scatter([net.x[v] for v in tr.nodes], [net.y[v] for v in tr.nodes], c=order, cmap=cmap, vmin=0,
+                            vmax=1, s=6, linewidths=0, zorder=3)
             ctx = MapContext(ax=ax, extent=ext, m_per_pt=m_per_pt)
             if p.edges:
                 _draw_routes(ctx, scenario, [p], highlight=None, lw=1.4, stops=True)
-            o, d = scenario.query.origin, scenario.query.destination
-            ax.scatter([net.x[o]], [net.y[o]], s=30, marker="o", facecolors="white", edgecolors=style.INK, linewidths=1.2, zorder=9)
-            ax.scatter([net.x[d]], [net.y[d]], s=30, marker="o", facecolors=style.INK, edgecolors="white", linewidths=1.0, zorder=9)
+            ax.scatter([net.x[o]], [net.y[o]], s=28, marker="o", facecolors="white", edgecolors=style.INK, linewidths=1.2, zorder=9)
+            ax.scatter([net.x[d]], [net.y[d]], s=28, marker="o", facecolors=style.INK, edgecolors="white", linewidths=1.0, zorder=9)
             settled = p.stats.settled if p.stats else m
             frac = 100.0 * m / max(net.num_nodes, 1)
-            ax.set_title(f"{_title(p)}", loc="left", fontsize=_rc("font.size"), fontweight="bold", pad=3)
+            ax.set_title(_title(p), loc="left", fontsize=fs, fontweight="bold", pad=3,
+                         color=style.algorithm_color(p.algorithm) if p.algorithm != "pareto" else style.INK)
             ax.text(1.0, 1.0, f"{m:,} nodes ({frac:.0f} %) · {settled:,} labels", transform=ax.transAxes, ha="right",
-                    va="bottom", fontsize=_rc("font.size") - 1.5, color=style.INK_MUTED)
-        cax = fig.add_axes((0.3, 0.35 * bot_h, 0.4, 0.18 * bot_h))
+                    va="bottom", fontsize=fs - 1.5, color=style.INK_MUTED)
+        cw = min(2.6, w * 0.45)
+        cax = fig.add_axes(((w - cw) / 2 / w, (0.22) / fig_h, cw / w, 0.07 / fig_h))
         cb = fig.colorbar(sc, cax=cax, orientation="horizontal")
-        cb.set_ticks([0, 0.5, 1])
-        cb.set_ticklabels(["first", "settle order", "last"])
+        cb.set_ticks([0, 1])
+        cb.set_ticklabels(["settled first", "settled last"])
         cb.outline.set_linewidth(0.4)
-        cb.ax.tick_params(length=0, labelsize=_rc("font.size") - 1)
+        cb.ax.tick_params(length=0, labelsize=fs - 1)
         return _finish(fig, path)
 
 
@@ -1938,8 +2399,9 @@ def plot_convergence(
 
     Top: best feasible objective found so far after each generation (trip
     time in hours, or generalised cost), with the optimum of an exact
-    ``reference`` plan (or a number) as a horizontal line.  Bottom: share
-    of feasible individuals in the population.
+    ``reference`` plan (or a number) as a dashed line; the final gap to
+    it is written next to the last point.  Bottom: share of feasible
+    individuals in the population (``stats.extra["history_feasible"]``).
     """
     st = genetic_plan.stats
     hist = (st.extra or {}).get("history") if st else None
@@ -1952,17 +2414,19 @@ def plot_convergence(
         plt = _plt()
         w, h = style.figsize(width, aspect)
         if feas:
-            fig, (a1, a2) = plt.subplots(2, 1, figsize=(w, h), sharex=True, gridspec_kw={"height_ratios": [2.4, 1.0], "hspace": 0.1})
+            fig, (a1, a2) = plt.subplots(2, 1, figsize=(w, h), sharex=True,
+                                         gridspec_kw={"height_ratios": [2.4, 1.0], "hspace": 0.1})
         else:
             fig, a1 = plt.subplots(figsize=(w, h))
             a2 = None
+        fs_small = _rc("font.size") - 1.5
         gens = list(range(len(hist)))
         gx = [g for g, v in zip(gens, hist) if v is not None]
         gy = [conv(v) for v in hist if v is not None]
         col = style.algorithm_color(genetic_plan.algorithm or "genetic")
-        a1.step(gx, gy, where="post", color=col, lw=1.3, label="best feasible")
+        a1.step(gx, gy, where="post", color=col, lw=1.3, label=f"{_title(genetic_plan)}: best feasible")
         if gx:
-            a1.scatter([gx[-1]], [gy[-1]], s=14, color=col, zorder=4)
+            a1.scatter([gx[-1]], [gy[-1]], s=14, color=col, zorder=4, clip_on=False)
         ref_val = None
         ref_label = "optimum"
         if isinstance(reference, RoutePlan):
@@ -1973,8 +2437,15 @@ def plot_convergence(
             ref_val = conv(float(reference))
         if ref_val is not None:
             a1.axhline(ref_val, color=style.INK, lw=0.8, ls=(0, (3, 2)))
-            a1.annotate(ref_label, (1.0, ref_val), xycoords=("axes fraction", "data"), xytext=(-2, 2), textcoords="offset points",
-                        ha="right", va="bottom", fontsize=_rc("font.size") - 1.5, color=style.INK)
+            a1.annotate(ref_label, (0.0, ref_val), xycoords=("axes fraction", "data"), xytext=(3, 2),
+                        textcoords="offset points", ha="left", va="bottom", fontsize=fs_small, color=style.INK)
+            if gy and ref_val > 0:
+                gap = 100.0 * (gy[-1] - ref_val) / ref_val
+                a1.annotate(f"gap {gap:.2f} %", (gx[-1], gy[-1]), xytext=(-2, 4), textcoords="offset points",
+                            ha="right", va="bottom", fontsize=fs_small, color=col)
+            lo = min(min(gy, default=ref_val), ref_val)
+            hi = max(gy, default=ref_val)
+            a1.set_ylim(lo - 0.08 * (hi - lo + 1e-9), hi + 0.08 * (hi - lo + 1e-9))
         a1.set_ylabel("Trip time [h]" if time_obj else f"Gen. cost [{genetic_plan.currency}]")
         a1.grid(color=style.GRID, lw=0.5)
         a1.legend(loc="upper right")
@@ -1989,3 +2460,379 @@ def plot_convergence(
             a1.set_xlabel("Generation")
         a1.set_xlim(0, max(len(hist) - 1, 1))
         return _finish(fig, path)
+
+
+# ================================================ several instances (seaborn)
+def _results_table(results: Any) -> tuple[list[str], list[str], dict[tuple[str, str], RoutePlan]]:
+    """Normalise multi-instance results.
+
+    Accepts ``{instance: [plans]}``, ``{instance: {algorithm: plan}}`` or a
+    sequence of plan lists (instances are then numbered from 1).  Returns
+    ``(instances, algorithms, {(instance, algorithm): plan})`` with the
+    algorithms in order of first appearance.
+    """
+    if isinstance(results, Mapping):
+        items = [(str(k), v) for k, v in results.items()]
+    else:
+        items = [(str(i + 1), v) for i, v in enumerate(results)]
+    instances: list[str] = []
+    algos: list[str] = []
+    table: dict[tuple[str, str], RoutePlan] = {}
+    for name, plans in items:
+        instances.append(name)
+        for p in _as_plans(plans):
+            if p.algorithm not in algos:
+                algos.append(p.algorithm)
+            table[(name, p.algorithm)] = p
+    return instances, algos, table
+
+
+def _objective_of(p: RoutePlan, metric: str) -> float:
+    if metric == "time":
+        return p.total_time_s
+    if metric == "cost":
+        return p.generalized_cost
+    if metric == "money":
+        return p.money
+    if metric == "objective":
+        return p.objective_value
+    raise ValueError("metric must be 'time', 'cost', 'money' or 'objective'")
+
+
+def gap_rows(results: Any, *, reference: str | None = None, metric: str = "time") -> list[dict[str, Any]]:
+    """Long-form rows ``{instance, algorithm, title, feasible, value, gap_pct}``.
+
+    The gap of a feasible plan is ``100 * (value - ref) / ref`` where
+    ``ref`` is the ``reference`` algorithm's value on the same instance (an
+    exact method such as ``"cfp"``) or, without a reference, the best value
+    of any feasible plan on that instance.  Instances whose reference plan
+    is missing or infeasible are skipped.  ``gap_pct`` is ``nan`` for
+    infeasible plans.
+    """
+    instances, algos, table = _results_table(results)
+    rows: list[dict[str, Any]] = []
+    for inst in instances:
+        plans = [table[(inst, a)] for a in algos if (inst, a) in table]
+        if reference is not None:
+            ref_plan = table.get((inst, reference))
+            if ref_plan is None or not ref_plan.feasible:
+                continue
+            ref = _objective_of(ref_plan, metric)
+        else:
+            vals = [_objective_of(p, metric) for p in plans if p.feasible]
+            if not vals:
+                continue
+            ref = min(vals)
+        for p in plans:
+            v = _objective_of(p, metric) if p.feasible else math.nan
+            gap = 100.0 * (v - ref) / ref if (p.feasible and ref > 0) else math.nan
+            rows.append({"instance": inst, "algorithm": p.algorithm, "title": _title(p), "feasible": p.feasible,
+                         "value": v, "gap_pct": gap})
+    return rows
+
+
+def plot_gap_distribution(
+    results: Any,
+    *,
+    reference: str | None = None,
+    metric: str = "time",
+    kind: str = "box",
+    exclude: Sequence[str] = ("naive",),
+    width: str | float = "single",
+    path: Any = None,
+) -> Any:
+    """Distribution of the optimality gap of each algorithm over many instances.
+
+    ``results`` holds one set of plans per instance (see :func:`gap_rows`
+    for the accepted shapes and the gap definition).  One row per
+    algorithm: a box plot (``kind="box"``, median, quartiles, whiskers at
+    1.5 IQR) or a violin (``kind="violin"``, cut at the data range) in a
+    pale tint of the algorithm colour, with every instance as a jittered
+    dot on top (:func:`seaborn.boxplot` / :func:`seaborn.violinplot` +
+    :func:`seaborn.stripplot`).  The right margin reports how many
+    instances each algorithm solved; infeasible runs have no gap and are
+    only counted there.  The reference algorithm itself is omitted.
+    """
+    import seaborn as sns
+
+    rows = [r for r in gap_rows(results, reference=reference, metric=metric)
+            if r["algorithm"] not in exclude and r["algorithm"] != reference]
+    if not rows:
+        raise ValueError("no instance with a feasible reference")
+    order: list[str] = []
+    for r in rows:
+        if r["algorithm"] not in order:
+            order.append(r["algorithm"])
+    titles = [style.algorithm_title(a) for a in order]
+    pal = style.algorithm_palette(order, titles=True)
+    pale = {t: _pale(c, 0.68) for t, c in pal.items()}
+    feas_rows = [r for r in rows if r["feasible"] and math.isfinite(r["gap_pct"])]
+    x = [r["gap_pct"] for r in feas_rows]
+    y = [r["title"] for r in feas_rows]
+    with style.paper():
+        n = len(order)
+        fig, ax = _new_fig(width, 0.0, height=0.62 + 0.27 * n)
+        common = {"x": x, "y": y, "hue": y, "order": titles, "hue_order": titles, "legend": False, "ax": ax}
+        if kind == "violin":
+            sns.violinplot(**common, palette=pale, cut=0, inner=None, linewidth=0.6, density_norm="width", width=0.75,
+                           saturation=1.0)
+            for coll in ax.collections:
+                coll.set_edgecolor(style.INK_MUTED)
+        elif kind == "box":
+            with warnings.catch_warnings():  # seaborn 0.13 passes matplotlib's deprecated ``vert``
+                warnings.filterwarnings("ignore", message=".*vert: bool was deprecated.*")
+                sns.boxplot(**common, palette=pale, width=0.6, showfliers=False, linewidth=0.7, saturation=1.0,
+                            medianprops={"color": style.INK, "linewidth": 1.1}, whiskerprops={"color": style.INK_MUTED},
+                            capprops={"color": style.INK_MUTED}, boxprops={"edgecolor": style.INK_MUTED})
+        else:
+            raise ValueError("kind must be 'box' or 'violin'")
+        sns.stripplot(**common, palette=pal, size=2.6, alpha=0.75, jitter=0.2, linewidth=0.3, edgecolor="white")
+        n_inst = len({r["instance"] for r in rows})
+        for i, a in enumerate(order):
+            mine = [r for r in rows if r["algorithm"] == a]
+            ok = sum(r["feasible"] for r in mine)
+            ax.annotate(f"{ok}/{len(mine)}", (1.0, i), xycoords=("axes fraction", "data"), xytext=(4, 0),
+                        textcoords="offset points", ha="left", va="center", fontsize=_rc("font.size") - 1.5,
+                        color=style.INK if ok == len(mine) else "#B5654A", annotation_clip=False)
+        ax.annotate("solved", (1.0, 1.0), xycoords="axes fraction", xytext=(4, 2), textcoords="offset points",
+                    ha="left", va="bottom", fontsize=_rc("font.size") - 1.5, color=style.INK_MUTED,
+                    annotation_clip=False)
+        ax.axvline(0.0, color=style.INK, lw=0.6, zorder=0)
+        ref_name = style.algorithm_title(reference) if reference else "best plan"
+        what = {"time": "trip time", "cost": "generalised cost", "money": "charging cost", "objective": "objective"}[metric]
+        ax.set_xlabel(f"Gap in {what} to {ref_name} [%]  ({n_inst} instances)")
+        ax.set_ylabel("")
+        ax.set_xlim(left=min(-0.5, min(x, default=0.0) - 0.5))
+        ax.grid(axis="x", color=style.GRID, lw=0.5)
+        ax.spines["left"].set_visible(False)
+        ax.tick_params(axis="y", length=0)
+        return _finish(fig, path)
+
+
+def plot_metric_heatmap(
+    results: Any,
+    *,
+    metric: str = "gap",
+    reference: str | None = None,
+    annot: bool = True,
+    exclude: Sequence[str] = (),
+    width: str | float = "double",
+    path: Any = None,
+) -> Any:
+    """Instance x algorithm matrix of one metric (:func:`seaborn.heatmap`).
+
+    ``metric`` is ``"gap"`` (optimality gap in trip time [%], see
+    :func:`gap_rows`), ``"time"`` (trip time [min]), ``"runtime"`` [ms]
+    or ``"settled"`` (labels); the last two use a logarithmic colour
+    scale.  Infeasible runs are blank cells marked with a cross.  Light =
+    good, dark = bad, one sequential hue, so the matrix also reads in
+    grey-scale print.
+    """
+    import seaborn as sns
+    from matplotlib.colors import LogNorm
+
+    instances, algos, table = _results_table(results)
+    algos = [a for a in algos if a not in exclude]
+    gaps: dict[tuple[str, str], float] = {}
+    if metric == "gap":
+        for r in gap_rows(results, reference=reference, metric="time"):
+            gaps[(r["instance"], r["algorithm"])] = r["gap_pct"]
+    labels = {"gap": "gap [%]", "time": "trip time [min]", "runtime": "runtime [ms]", "settled": "settled labels"}
+    if metric not in labels:
+        raise ValueError(f"metric must be one of {sorted(labels)}")
+    M: list[list[float]] = []
+    for inst in instances:
+        row = []
+        for a in algos:
+            p = table.get((inst, a))
+            if p is None:
+                row.append(math.nan)
+            elif metric == "gap":
+                row.append(gaps.get((inst, a), math.nan))
+            elif metric == "time":
+                row.append(p.total_time_s / 60.0 if p.feasible else math.nan)
+            elif metric == "runtime":
+                row.append(1000.0 * p.stats.runtime_s if p.stats else math.nan)
+            else:
+                row.append(float(p.stats.settled) if p.stats else math.nan)
+        M.append(row)
+    finite = [v for row in M for v in row if math.isfinite(v)]
+    if not finite:
+        raise ValueError("nothing to plot")
+    log = metric in ("runtime", "settled")
+
+    def fmt(v: float) -> str:
+        if not math.isfinite(v):
+            return ""
+        if metric == "gap":
+            return f"{0.0 if abs(v) < 0.05 else v:.1f}"  # no "-0.0" from float noise
+        if metric == "time":
+            return f"{v:.0f}"
+        if metric == "runtime":
+            return f"{v:.0f}" if v >= 10 else f"{v:.1f}"
+        return f"{v / 1000:.0f}k" if v >= 10000 else f"{v:.0f}"
+
+    import numpy as np
+
+    data = np.array(M, dtype=float)
+    with style.paper():
+        w = style.figsize(width)[0]
+        cell_h = 0.2
+        fig, ax = _new_fig(w, 0.0, height=0.75 + cell_h * len(instances))
+        cmap = style.sequential_cmap(style.OKABE_ITO["blue"], light="#EEF5FB")
+        cmap = cmap.with_extremes(bad="white")
+        norm = LogNorm(vmin=max(min(finite), 1e-3), vmax=max(finite)) if log else None
+        vmin = None if log else (0.0 if metric == "gap" else min(finite))
+        sns.heatmap(data, ax=ax, cmap=cmap, norm=norm, vmin=vmin, annot=[[fmt(v) for v in row] for row in M] if annot else False,
+                    fmt="", annot_kws={"fontsize": _rc("font.size") - 1.5}, linewidths=0.6, linecolor="white",
+                    cbar_kws={"label": labels[metric], "shrink": 0.9, "pad": 0.015, "aspect": 30},
+                    xticklabels=[style.algorithm_title(a) for a in algos], yticklabels=instances,
+                    mask=~np.isfinite(data))
+        for i, row in enumerate(M):
+            for j, v in enumerate(row):
+                if not math.isfinite(v) and table.get((instances[i], algos[j])) is not None:
+                    ax.text(j + 0.5, i + 0.5, "×", ha="center", va="center", color="#B5654A",
+                            fontsize=_rc("font.size"))
+        ax.tick_params(axis="both", length=0)
+        ax.set_xlabel("")
+        ax.set_ylabel("")
+        ax.xaxis.tick_top()
+        plt_ = _plt()
+        plt_.setp(ax.get_xticklabels(), rotation=0)
+        plt_.setp(ax.get_yticklabels(), rotation=0)
+        cbar = ax.collections[0].colorbar
+        if cbar is not None:
+            cbar.outline.set_linewidth(0)
+            cbar.ax.tick_params(length=2, width=0.5)
+        return _finish(fig, path)
+
+
+# ================================================================== gallery
+def _plan_all(scenario: Scenario, options: Mapping[str, Mapping[str, Any]] | None = None, *, trace: bool = True,
+              algorithms: Sequence[str] | None = None) -> list[RoutePlan]:
+    """Run every registered planner (failures are skipped with a warning)."""
+    from ..algorithms import available
+    from ..algorithms import plan as run_plan
+
+    out: list[RoutePlan] = []
+    for name in algorithms or available():
+        try:
+            out.append(run_plan(scenario, name, trace=trace, **dict((options or {}).get(name, {}))))
+        except Exception as exc:  # a broken planner must not stop the gallery
+            warnings.warn(f"{name} failed on {scenario.name}: {exc!r}", stacklevel=2)
+    return out
+
+
+def make_gallery(
+    outdir: str | Path = "docs/img",
+    *,
+    quick: bool = False,
+    dpi: int = 200,
+    formats: Sequence[str] = ("png",),
+    instances: int = 16,
+) -> list[Path]:
+    """Regenerate the README / paper figure gallery (``fig_*.png``).
+
+    Uses the Turkey flagship preset (``turkey-karaman-istanbul``; falls back
+    to a grid instance if the presets are unavailable), the ``corridor``
+    preset, ``instances`` random origin/destination pairs on the Turkey
+    network (static waits, for the gap distribution) and the vehicle
+    presets.  Every registered algorithm is run; the Pareto planner uses the
+    web viewer's (time, money) settings on the large network.  ``quick``
+    shrinks the multi-instance study and the corridor front (for smoke
+    tests).  Run as ``python -m evroute.viz.figures [outdir] [--quick]``.
+    """
+    import random
+
+    outdir = Path(outdir)
+    outdir.mkdir(parents=True, exist_ok=True)
+    written: list[Path] = []
+    plt = _plt()
+
+    def emit(name: str, fig: Any) -> None:
+        fig = fig[0] if isinstance(fig, tuple) else fig
+        written.extend(style.save(fig, outdir / name, formats=formats, dpi=dpi, close=True))
+
+    budget = {"pareto": {"criteria": ("time", "money"), "max_labels": 1_000_000}}
+    try:
+        from ..generators.presets import get_scenario
+
+        turkey = get_scenario("turkey-karaman-istanbul")
+        corridor: Scenario | None = get_scenario("corridor")
+    except Exception:  # presets unavailable: a grid instance still shows every figure
+        from ..generators import grid_scenario
+
+        turkey = grid_scenario(12, 12, seed=3, initial_soc=0.35, spacing_m=15000.0)
+        corridor = None
+    plans = _plan_all(turkey, budget)
+    by = {p.algorithm: p for p in plans}
+    routed = [p for p in plans if p.edges]
+    emit("fig_map_turkey", plot_map(turkey, routed))
+    if "bls-astar" in by:
+        emit("fig_map_turkey_bls_astar", plot_map(turkey, routed, highlight="bls-astar"))
+    emit("fig_soc_turkey", plot_soc_profile(routed, turkey))
+    emit("fig_time_turkey", plot_time_breakdown(routed))
+    emit("fig_table_turkey", plot_comparison_table(plans))
+    exact = [by[a] for a in ("bls", "bls-astar", "cfp", "cfp-astar") if a in by]
+    if exact:
+        emit("fig_search_space_turkey", plot_search_space(turkey, exact))
+    if "pareto" in by and by["pareto"].feasible:
+        emit("fig_pareto_turkey", plot_pareto(by["pareto"], others=[by[a] for a in ("genetic", "bls-astar", "cfp") if a in by]))
+    shown = [by[a] for a in ("greedy", "station-graph", "genetic", "bls-astar") if a in by]
+    emit("fig_wait_turkey", plot_wait_profiles(turkey, plans=shown))
+    if "genetic" in by:
+        ref = by.get("cfp") or by.get("bls")
+        try:
+            emit("fig_convergence_turkey", plot_convergence(by["genetic"], reference=ref))
+        except ValueError:
+            pass
+
+    # several origin/destination pairs on the same network
+    base = turkey.with_preferences(time_dependent_waits=False)
+    net = base.network
+    rng = random.Random(42)
+    named = sorted(net.node_name) or list(range(net.num_nodes))
+    n_inst = 4 if quick else instances
+    results: dict[str, list[RoutePlan]] = {}
+    algos = [a for a in by if a != "pareto"]
+    tries = 0
+    while len(results) < n_inst and tries < 200 * n_inst:
+        tries += 1
+        o, d = rng.sample(named, 2)
+        if net.euclidean(o, d) < 300_000.0:
+            continue
+        name = f"{_short_name(net.node_name.get(o, str(o)))} → {_short_name(net.node_name.get(d, str(d)))}"
+        if name in results:
+            continue
+        sc = base.with_query(origin=o, destination=d, initial_soc=round(rng.uniform(0.3, 0.9), 2))
+        results[name] = _plan_all(sc, trace=False, algorithms=algos)
+    if results:
+        ref = "cfp" if "cfp" in algos else None
+        emit("fig_gap_turkey", plot_gap_distribution(results, reference=ref))
+        emit("fig_gap_heatmap_turkey", plot_metric_heatmap(results, metric="gap", reference=ref))
+        emit("fig_search_effort_turkey", plot_search_effort([p for ps in results.values() for p in ps]))
+
+    if corridor is not None:
+        cplans = _plan_all(corridor, budget if quick else None)
+        cby = {p.algorithm: p for p in cplans}
+        crouted = [p for p in cplans if p.edges]
+        emit("fig_map_corridor", plot_map(corridor, crouted))
+        emit("fig_soc_corridor", plot_soc_profile(crouted, corridor, x="time", elevation="panel"))
+        if "pareto" in cby and cby["pareto"].feasible:
+            emit("fig_pareto_corridor", plot_pareto(cby["pareto"], others=[cby[a] for a in ("greedy", "cfp") if a in cby]))
+    emit("fig_charging_curves", plot_charging_curves())
+    emit("fig_consumption", plot_consumption_vs_speed())
+    plt.close("all")
+    return written
+
+
+if __name__ == "__main__":  # pragma: no cover - manual gallery rebuild
+    import sys
+
+    import matplotlib
+
+    matplotlib.use("Agg")
+    args = [a for a in sys.argv[1:] if not a.startswith("--")]
+    paths = make_gallery(args[0] if args else "docs/img", quick="--quick" in sys.argv)
+    for p in paths:
+        print(p)

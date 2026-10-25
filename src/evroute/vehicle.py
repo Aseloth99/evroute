@@ -267,7 +267,7 @@ VEHICLES: dict[str, Vehicle] = {
         ),
         _v(
             "togg_t10x_lr",
-            "Turkish C-SUV 88.5 kWh (T10X-like, approx.)",
+            "Turkish C-SUV 85 kWh usable (T10X-like, approx.)",
             [(0.0, 110), (0.1, 150), (0.45, 140), (0.6, 110), (0.75, 75), (0.85, 45), (0.95, 20), (1.0, 8)],
             battery_kwh=85.0,
             mass_kg=2150,

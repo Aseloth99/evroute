@@ -22,7 +22,13 @@ computed here, exactly, from the prepared scenario:
   instant of a stop (power is constant between breakpoints);
 * ``stations[s]["wait_profile"]`` -- the FIFO-safe expected-wait profile the
   planners used (:class:`~evroute.queueing.WaitProfile`);
-* ``pareto_points`` -- the criteria vectors of every Pareto front member.
+* ``pareto_points`` -- the criteria vectors of every Pareto front member;
+* ``reliability`` -- a Monte Carlo estimate of how often the route strands or
+  arrives short under uncertain consumption and random queues
+  (:func:`evroute.robustness.monte_carlo`, 200 replays by default).
+
+The served live viewer (:mod:`evroute.server`) uses the same page and
+:func:`results_payload` for its ``POST /api/plan`` answers.
 
 Quick start::
 
@@ -61,6 +67,7 @@ __all__ = [
     "build_viewer_html",
     "dumps_for_html",
     "render_viewer_html",
+    "results_payload",
     "run_all",
     "viewer_payload",
 ]
@@ -283,6 +290,38 @@ def _thin_indices(n: int, keep: int, must: Iterable[int] = ()) -> list[int]:
     return sorted(picked)
 
 
+def _reliability(P: PreparedScenario, plan: RoutePlan, runs: int) -> dict[str, Any] | None:
+    """Monte Carlo reliability of ``plan`` (:func:`evroute.robustness.monte_carlo`).
+
+    ``runs`` replays of the plan's decision under uncertain consumption
+    (log-normal trip and edge factors) and random queues, with the module's
+    default uncertainty model and seed 0 -- the same worlds for every
+    algorithm (common random numbers), so the badges of two routes are a
+    paired comparison.  ``None`` when the plan has no origin-destination
+    route to replay or the analysis is unavailable.
+    """
+    if runs <= 0 or plan.decision is None or not plan.edges:
+        return None
+    try:
+        from ..robustness import monte_carlo
+
+        rep = monte_carlo(P, plan, n=runs, seed=0)
+    except Exception as exc:  # noqa: BLE001 - a missing badge must not break the viewer
+        log.debug("reliability of %s skipped: %r", plan.algorithm, exc)
+        return None
+    return {
+        "n": rep.n,
+        "p_strand": rep.p_strand,
+        "p_reserve_breach": rep.p_reserve_breach,
+        "p_arrival_short": rep.p_arrival_short,
+        "ci95": {k: [round(v[0], 5), round(v[1], 5)] for k, v in rep.ci95.items()},
+        "trip_cv": rep.trip_cv,
+        "edge_cv": rep.edge_cv,
+        "wait_model": rep.wait_model,
+        "policy": rep.policy,
+    }
+
+
 def _result_dict(
     P: PreparedScenario,
     plan: RoutePlan,
@@ -290,6 +329,7 @@ def _result_dict(
     trace_events: int | None,
     max_alternatives: int,
     options: Mapping[str, Any] | None,
+    robustness_runs: int = 0,
 ) -> dict[str, Any]:
     name = plan.algorithm
     info = infos.get(name, {})
@@ -302,6 +342,7 @@ def _result_dict(
         long_title=info.get("title", name),
         exact=info.get("exact", "heuristic"),
         options=dict(options or {}),
+        reliability=_reliability(P, plan, robustness_runs),
     )
     extra = plan.stats.extra if plan.stats else {}
     d["complete"] = bool(extra.get("complete", True))
@@ -427,6 +468,7 @@ def results_payload(
     trace_events: int | None = 20000,
     max_alternatives: int = 48,
     options: Mapping[str, Mapping[str, Any]] | None = None,
+    robustness_runs: int = 200,
 ) -> dict[str, Any]:
     """The part of the payload that changes when a trip is re-planned.
 
@@ -443,7 +485,8 @@ def results_payload(
     return {
         "scenario": _scenario_block(scenario, P),
         "results": [
-            _result_dict(P, p, infos, trace_events, max_alternatives, opts_all.get(p.algorithm)) for p in plans
+            _result_dict(P, p, infos, trace_events, max_alternatives, opts_all.get(p.algorithm), robustness_runs)
+            for p in plans
         ],
         "wait_profiles": [_clean(prof.to_dict()) for prof in P.wait_profiles],
     }
@@ -461,6 +504,7 @@ def viewer_payload(
     max_alternatives: int = 48,
     options: Mapping[str, Mapping[str, Any]] | None = None,
     extra: Mapping[str, Any] | None = None,
+    robustness_runs: int = 200,
 ) -> dict[str, Any]:
     """The ``evroute-viewer/1`` payload for ``scenario`` and its ``plans``.
 
@@ -488,6 +532,11 @@ def viewer_payload(
         Planner options that produced the plans (shown in the viewer).
     extra:
         Additional top-level keys (e.g. the preset list in live mode).
+    robustness_runs:
+        Monte Carlo replays per result for the reliability badge
+        (``result["reliability"]``, see :func:`evroute.robustness.monte_carlo`;
+        about 20 ms per route for 200 runs on the Turkey case study); ``0``
+        switches the analysis off.
     """
     if lang not in ("tr", "en"):
         raise ValueError(f"lang must be 'tr' or 'en', not {lang!r}")
@@ -523,7 +572,8 @@ def viewer_payload(
         "stations": _stations_block(P),
         "places": _places(scenario),
         "results": [
-            _result_dict(P, p, infos, trace_events, max_alternatives, opts_all.get(p.algorithm)) for p in plans
+            _result_dict(P, p, infos, trace_events, max_alternatives, opts_all.get(p.algorithm), robustness_runs)
+            for p in plans
         ],
         "algorithms": _clean(algorithms),
         "vehicles": [
@@ -553,8 +603,8 @@ def dumps_for_html(payload: Any) -> str:
         text.replace("<", "\\u003c")
         .replace(">", "\\u003e")
         .replace("&", "\\u0026")
-        .replace(" ", "\\u2028")
-        .replace(" ", "\\u2029")
+        .replace("\u2028", "\\u2028")
+        .replace("\u2029", "\\u2029")
     )
 
 
@@ -596,12 +646,14 @@ def build_viewer_html(
     trace_events: int | None = 20000,
     max_alternatives: int = 48,
     options: Mapping[str, Mapping[str, Any]] | None = None,
+    robustness_runs: int = 200,
 ) -> Path:
     """Write the single-file viewer for ``scenario`` and ``plans``; return its path.
 
     The file embeds everything (no ``http(s)`` references), so it can be
     e-mailed, archived with a paper's supplementary material or opened from a
-    USB stick without network access.
+    USB stick without network access.  Keyword arguments are those of
+    :func:`viewer_payload`.
     """
     payload = viewer_payload(
         scenario,
@@ -613,6 +665,7 @@ def build_viewer_html(
         trace_events=trace_events,
         max_alternatives=max_alternatives,
         options=options,
+        robustness_runs=robustness_runs,
     )
     out = Path(out_path)
     if out.parent and not out.parent.exists():
@@ -643,6 +696,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     ap.add_argument("--lang", default="tr", choices=["tr", "en"])
     ap.add_argument("--title", default=None)
     ap.add_argument("--trace-events", type=int, default=20000, help="max search-trace events per algorithm")
+    ap.add_argument("--robustness-runs", type=int, default=200,
+                    help="Monte Carlo replays per route for the reliability badge (0: off)")
     args = ap.parse_args(argv)
 
     sc = _load_scenario(args.scenario)
@@ -662,6 +717,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         lang=args.lang,
         animate=not args.no_animate,
         trace_events=args.trace_events,
+        robustness_runs=max(0, args.robustness_runs),
     )
     print(f"wrote {out} ({out.stat().st_size / 1024:.0f} KiB; open it in any browser, works offline)")
     return 0

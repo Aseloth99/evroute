@@ -124,6 +124,14 @@
   }
 
   /* ============================================================ SoC chart */
+  /**
+   * State of charge (left axis, %) against distance for every visible
+   * route, with the elevation profile of the selected route as a shaded
+   * area on the right axis.  Charging stops are vertical jumps (numbered on
+   * the selected route), an infeasible route ends in a cross where the
+   * battery runs empty, and the reserve is a dashed line.  The animated
+   * car(s) are mirrored as dots; the selected car also gets a "now" guide.
+   */
   class SocChart extends Chart {
     constructor(app, host) { super(app, host, 'chart_soc'); }
 
@@ -133,66 +141,91 @@
       const sel = app.selectedRoute();
       if (!routes.length) { this.empty(I.t('no_route')); return; }
       this.empty(null);
-      const pad = { l: 46, r: 54, t: 14, b: 34 };
+      const narrow = w < 480;
+      const pad = { l: narrow ? 40 : 48, r: narrow ? 46 : 56, t: 16, b: 36 };
       const x0 = pad.l, x1 = w - pad.r, y0 = pad.t, y1 = h - pad.b;
+      if (x1 - x0 < 40 || y1 - y0 < 40) return;
       let dmax = 0;
       for (const r of routes) dmax = Math.max(dmax, r._soc[r._soc.length - 1][0]);
-      dmax = Math.max(dmax, 1);
-      const xt = U.niceTicks(0, dmax, Math.max(3, Math.floor((x1 - x0) / 90)));
-      const xmax = Math.max(dmax, xt[xt.length - 1]);
+      const xd = U.niceDomain(0, Math.max(dmax, 1), Math.max(3, Math.floor((x1 - x0) / 90)));
+      const xmax = xd.hi;
       const X = (d) => x0 + (d / xmax) * (x1 - x0);
       const Y = (s) => y1 - s * (y1 - y0);
 
-      // elevation (secondary axis)
+      // elevation (secondary axis), scaled to the lower 85 % of the plot
       const er = (sel && sel._elev && sel._elev.length > 1) ? sel : routes[0];
       let zmin = Infinity, zmax = -Infinity;
       for (const p of er._elev) { zmin = Math.min(zmin, p[1]); zmax = Math.max(zmax, p[1]); }
-      const zt = U.niceTicks(Math.max(0, zmin - 50), zmax + 50, 4);
-      const zlo = Math.min(zt[0], zmin), zhi = Math.max(zt[zt.length - 1], zmax);
-      const Z = (z) => y1 - ((z - zlo) / Math.max(1, zhi - zlo)) * (y1 - y0) * 0.9;
+      const zd = U.niceDomain(Math.min(0, zmin), Math.max(zmax, zmin + 100), 4);
+      const Z = (z) => y1 - ((z - zd.lo) / Math.max(1, zd.hi - zd.lo)) * (y1 - y0) * 0.85;
 
       gridY(ctx, th, [0, 0.2, 0.4, 0.6, 0.8, 1], Y, x0, x1, (v) => I.num(v * 100, 0));
-      gridX(ctx, th, xt.filter((v) => v <= xmax + 1e-9), X, y0, y1, (v) => I.num(v, 0));
+      gridX(ctx, th, xd.ticks, X, y0, y1, (v) => I.num(v, 0));
       axisText(ctx, th);
       ctx.textAlign = 'left';
       ctx.textBaseline = 'middle';
-      for (const z of zt) if (z >= zlo && z <= zhi) ctx.fillText(I.num(z, 0), x1 + 7, Z(z));
-      axisTitle(ctx, th, I.t('ax_soc'), 12, (y0 + y1) / 2, -Math.PI / 2);
-      axisTitle(ctx, th, I.t('ax_elev'), w - 10, (y0 + y1) / 2, Math.PI / 2);
+      for (const z of zd.ticks) ctx.fillText(I.num(z, 0), x1 + 7, Z(z));
+      axisTitle(ctx, th, I.t('ax_soc'), 11, (y0 + y1) / 2, -Math.PI / 2);
+      axisTitle(ctx, th, I.t('ax_elev'), w - 9, (y0 + y1) / 2, Math.PI / 2);
       axisTitle(ctx, th, I.t('ax_dist'), x1, h - 6, 0, 'right');
 
-      // elevation area
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(x0, y0 - 6, x1 - x0, y1 - y0 + 6);
+      ctx.clip();
+
+      // elevation area with a soft vertical gradient
+      const eg = ctx.createLinearGradient(0, Z(zd.hi), 0, y1);
+      eg.addColorStop(0, th.elevFill);
+      eg.addColorStop(1, U.rgba(th.elevFill, 0.04));
       ctx.beginPath();
       ctx.moveTo(X(er._elev[0][0]), y1);
       for (const p of er._elev) ctx.lineTo(X(p[0]), Z(p[1]));
       ctx.lineTo(X(er._elev[er._elev.length - 1][0]), y1);
       ctx.closePath();
-      ctx.fillStyle = th.elevFill;
+      ctx.fillStyle = eg;
       ctx.fill();
       ctx.beginPath();
       er._elev.forEach((p, k) => (k ? ctx.lineTo(X(p[0]), Z(p[1])) : ctx.moveTo(X(p[0]), Z(p[1]))));
       ctx.strokeStyle = th.elevLine;
-      ctx.lineWidth = 1.2;
+      ctx.lineWidth = 1.1;
+      ctx.lineJoin = 'round';
       ctx.stroke();
 
-      // reserve and arrival requirement
+      // reserve line
       const prefs = app.currentPrefs();
       const res = prefs.reserve_soc || 0;
       ctx.save();
       ctx.setLineDash([5, 4]);
       ctx.strokeStyle = th.reserve;
-      ctx.globalAlpha = 0.8;
+      ctx.globalAlpha = 0.85;
       ctx.lineWidth = 1.3;
-      ctx.beginPath(); ctx.moveTo(x0, Y(res) + 0.5); ctx.lineTo(x1, Y(res) + 0.5); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(x0, Math.round(Y(res)) + 0.5); ctx.lineTo(x1, Math.round(Y(res)) + 0.5); ctx.stroke();
       ctx.restore();
-      ctx.font = `600 10.5px ${th.font}`;
+      ctx.font = `650 10.5px ${th.font}`;
       ctx.fillStyle = th.reserve;
       ctx.textAlign = 'left';
       ctx.textBaseline = 'bottom';
       ctx.fillText(I.t('reserve_line'), x0 + 6, Y(res) - 3);
 
-      // routes, selected last
+      // selected route: gradient area under its SoC line
       const ordered = routes.filter((r) => r !== sel).concat(routes.includes(sel) ? [sel] : []);
+      if (sel && routes.includes(sel)) {
+        const c = app.colorOf(sel);
+        const g = ctx.createLinearGradient(0, y0, 0, y1);
+        g.addColorStop(0, U.rgba(c, th.dark ? 0.30 : 0.20));
+        g.addColorStop(1, U.rgba(c, 0));
+        ctx.beginPath();
+        const p0 = sel._soc[0], pn = sel._soc[sel._soc.length - 1];
+        ctx.moveTo(X(p0[0]), y1);
+        for (const p of sel._soc) ctx.lineTo(X(p[0]), Y(U.clamp(p[1], 0, 1)));
+        ctx.lineTo(X(pn[0]), y1);
+        ctx.closePath();
+        ctx.fillStyle = g;
+        ctx.fill();
+      }
+
+      // routes, selected last (on top)
       for (const r of ordered) {
         const isSel = r === sel;
         const c = app.colorOf(r);
@@ -201,41 +234,60 @@
         r._soc.forEach((p, k) => (k ? ctx.lineTo(X(p[0]), Y(p[1])) : ctx.moveTo(X(p[0]), Y(p[1]))));
         ctx.lineJoin = 'round';
         ctx.lineCap = 'round';
-        ctx.globalAlpha = isSel ? 1 : 0.55;
         if (!r.feasible) ctx.setLineDash([5, 4]);
+        if (isSel) {
+          ctx.strokeStyle = th.surface;
+          ctx.lineWidth = 5.2;
+          ctx.stroke();
+        }
+        ctx.globalAlpha = isSel ? 1 : 0.5;
         ctx.strokeStyle = c;
-        ctx.lineWidth = isSel ? 2.6 : 1.6;
+        ctx.lineWidth = isSel ? 2.6 : 1.5;
         ctx.stroke();
         ctx.restore();
-        if (r._strand) {
-          const p = r._soc[r._soc.length - 1];
-          drawCross(ctx, X(p[0]), Y(p[1]), 5, th.bad);
-        }
       }
-      // charging markers of the selected route
-      if (sel && sel._stops) {
+      ctx.restore();
+      // where infeasible routes run empty (outside the clip: on the axis)
+      for (const r of ordered) {
+        if (!r._strand) continue;
+        const p = r._soc[r._soc.length - 1];
+        drawCross(ctx, X(p[0]), Y(Math.max(0, p[1])), 4.5, th.bad);
+      }
+
+      // charging markers of the selected route: in/out dots and the stop number
+      if (sel && sel._stops && routes.includes(sel)) {
+        const c = app.colorOf(sel);
         for (const s of sel._stops) {
           const d = (sel.node_dist_m[s.position] || 0) / 1000;
           const xa = X(d), ya = Y(s.soc_in), yb = Y(s.soc_out);
           ctx.fillStyle = th.surface;
-          ctx.strokeStyle = app.colorOf(sel);
+          ctx.strokeStyle = c;
           ctx.lineWidth = 2;
-          for (const yy of [ya, yb]) { ctx.beginPath(); ctx.arc(xa, yy, 3.2, 0, Math.PI * 2); ctx.fill(); ctx.stroke(); }
-          badge(ctx, xa, Math.max(y0 + 9, yb - 13), String(s._num), app.colorOf(sel), th);
+          for (const yy of [ya, yb]) { ctx.beginPath(); ctx.arc(xa, yy, 3.3, 0, Math.PI * 2); ctx.fill(); ctx.stroke(); }
+          badge(ctx, xa, Math.max(y0 + 2, yb - 14), String(s._num), c, th);
         }
       }
 
-      // animated car(s)
+      // animated car(s); the selected one also gets a "now" guide line
       for (const cs of app.anim.carStates()) {
         if (!cs.r._soc) continue;
         const x = X(cs.st.dist / 1000), y = Y(U.clamp(cs.st.soc, 0, 1));
+        const c = app.colorOf(cs.r);
+        if (cs.r === sel) {
+          ctx.save();
+          ctx.strokeStyle = U.rgba(c, 0.55);
+          ctx.setLineDash([2, 3]);
+          ctx.lineWidth = 1;
+          ctx.beginPath(); ctx.moveTo(Math.round(x) + 0.5, y0); ctx.lineTo(Math.round(x) + 0.5, y1); ctx.stroke();
+          ctx.restore();
+        }
         ctx.beginPath();
-        ctx.arc(x, y, 6.5, 0, Math.PI * 2);
-        ctx.fillStyle = U.rgba(app.colorOf(cs.r), 0.22);
+        ctx.arc(x, y, 8, 0, Math.PI * 2);
+        ctx.fillStyle = U.rgba(c, 0.22);
         ctx.fill();
         ctx.beginPath();
-        ctx.arc(x, y, 4, 0, Math.PI * 2);
-        ctx.fillStyle = app.colorOf(cs.r);
+        ctx.arc(x, y, 4.4, 0, Math.PI * 2);
+        ctx.fillStyle = c;
         ctx.fill();
         ctx.lineWidth = 2;
         ctx.strokeStyle = th.surface;
@@ -254,9 +306,12 @@
           const v = M.socAtDistance(r, d);
           if (v === null) continue;
           ctx.beginPath();
-          ctx.arc(m.x, Y(U.clamp(v, 0, 1)), 3.5, 0, Math.PI * 2);
+          ctx.arc(m.x, Y(U.clamp(v, 0, 1)), 3.6, 0, Math.PI * 2);
           ctx.fillStyle = app.colorOf(r);
           ctx.fill();
+          ctx.lineWidth = 1.5;
+          ctx.strokeStyle = th.surface;
+          ctx.stroke();
           rows.push([app.colorOf(r), r.title, I.pct(v, 1)]);
         }
         const z = interp(er._elev, d);
@@ -425,14 +480,25 @@
   }
 
   /* ========================================================= Pareto chart */
+  /**
+   * Trip time vs money of the Pareto front (point area ~ battery wear).
+   *
+   * The axes are fitted to the *front*: another algorithm's result is drawn
+   * inside the plot when it does not squeeze the front into a corner (it may
+   * widen each axis to at most 2.5 times the front's own span), otherwise it
+   * is pinned to the plot border with an arrow pointing to where it lies.
+   * The region dominated by the front (slower *and* dearer) is shaded, the
+   * two extremes are labelled, and the member that is shown as a route is
+   * ringed with guide lines to both axes.  Clicking a member selects it.
+   */
   class ParetoChart extends Chart {
     constructor(app, host) {
       super(app, host, 'chart_pareto');
       this.onClick = (x, y) => {
         const p = this._pick(x, y);
         if (!p) return;
-        if (p.ai !== undefined && p.ai >= 0) app.select(p.ri, p.ai);
-        else if (p.ai === undefined) app.select(p.ri, -1);
+        if (p.kind === 'front') { if (p.ai >= 0) app.select(p.ri, p.ai); else app.select(p.ri, -1); }
+        else app.select(p.ri, -1);
       };
     }
 
@@ -449,93 +515,225 @@
       const app = this.app;
       const res = app.model.results;
       const owner = res.find((r) => r.pareto_points && r.pareto_points.length > 1);
+      this._pts = [];
       if (!owner) { this.empty(''); return; }
       this.empty(null);
-      const pts = owner.pareto_points.filter((p) => p[0] !== null && p[1] !== null);
-      const others = res.filter((r) => r !== owner && r.feasible && U.isNum(r.total_time_s));
-      let tmin = Infinity, tmax = -Infinity, mmin = Infinity, mmax = -Infinity, smin = Infinity, smax = -Infinity;
-      for (const p of pts) {
-        tmin = Math.min(tmin, p[0]); tmax = Math.max(tmax, p[0]);
-        mmin = Math.min(mmin, p[1]); mmax = Math.max(mmax, p[1]);
-        smin = Math.min(smin, p[2]); smax = Math.max(smax, p[2]);
-      }
-      for (const r of others) {
-        tmin = Math.min(tmin, r.total_time_s); tmax = Math.max(tmax, r.total_time_s);
-        mmin = Math.min(mmin, r.money); mmax = Math.max(mmax, r.money);
-      }
-      const tPad = Math.max((tmax - tmin) * 0.08, 300), mPad = Math.max((mmax - mmin) * 0.1, 1);
-      const pad = { l: 64, r: 18, t: 14, b: 36 };
-      const x0 = pad.l, x1 = w - pad.r, y0 = pad.t, y1 = h - pad.b;
-      const xt = U.niceTicks((tmin - tPad) / 3600, (tmax + tPad) / 3600, Math.max(3, Math.floor((x1 - x0) / 80)));
-      const yt = U.niceTicks(Math.max(0, mmin - mPad), mmax + mPad, 5);
-      const xa = xt[0], xb = xt[xt.length - 1], ya = yt[0], yb = yt[yt.length - 1];
-      const X = (t) => x0 + ((t / 3600 - xa) / (xb - xa || 1)) * (x1 - x0);
-      const Y = (mo) => y1 - ((mo - ya) / (yb - ya || 1)) * (y1 - y0);
       const cur = app.model.currency;
-      gridY(ctx, th, yt, Y, x0, x1, (v) => I.money(v, cur, 0));
-      gridX(ctx, th, xt, (v) => x0 + ((v - xa) / (xb - xa || 1)) * (x1 - x0), y0, y1, (v) => I.num(v, 1));
-      axisTitle(ctx, th, I.t('ax_time_h'), x1, h - 6, 0, 'right');
+      const pts = owner.pareto_points.filter((p) => U.isNum(p[0]) && U.isNum(p[1]));
+      const front = pts.slice().sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+
+      // ------------------------------------------------------------ domain
+      let t0 = Infinity, t1 = -Infinity, m0 = Infinity, m1 = -Infinity, s0 = Infinity, s1 = -Infinity;
+      for (const p of front) {
+        t0 = Math.min(t0, p[0]); t1 = Math.max(t1, p[0]);
+        m0 = Math.min(m0, p[1]); m1 = Math.max(m1, p[1]);
+        const s = U.isNum(p[2]) ? p[2] : 0;
+        s0 = Math.min(s0, s); s1 = Math.max(s1, s);
+      }
+      const tSpan = Math.max(t1 - t0, 600, 0.02 * t0), mSpan = Math.max(m1 - m0, 1, 0.03 * Math.abs(m0));
+      const others = res.filter((r) => r !== owner && r.feasible && U.isNum(r.total_time_s) && U.isNum(r.money))
+        .sort((a, b) => Math.hypot((a.total_time_s - t0) / tSpan, (a.money - m0) / mSpan) - Math.hypot((b.total_time_s - t0) / tSpan, (b.money - m0) / mSpan));
+      let T0 = t0, T1 = t1, M0 = m0, M1 = m1;
+      for (const r of others) {
+        const nt0 = Math.min(T0, r.total_time_s), nt1 = Math.max(T1, r.total_time_s);
+        const nm0 = Math.min(M0, r.money), nm1 = Math.max(M1, r.money);
+        if (nt1 - nt0 <= 2.5 * tSpan && nm1 - nm0 <= 2.5 * mSpan) { T0 = nt0; T1 = nt1; M0 = nm0; M1 = nm1; }
+      }
+      const tp = Math.max((T1 - T0) * 0.08, 120), mp = Math.max((M1 - M0) * 0.1, 0.5);
+      const narrow = w < 420;
+      const pad = { l: narrow ? 58 : 66, r: 16, t: 16, b: 40 };
+      const x0 = pad.l, x1 = w - pad.r, y0 = pad.t, y1 = h - pad.b;
+      if (x1 - x0 < 60 || y1 - y0 < 60) return;
+      const xd = timeDomain(T0 - tp, T1 + tp, Math.max(3, Math.floor((x1 - x0) / 84)));
+      const yd = U.niceDomain(Math.max(0, M0 - mp), M1 + mp, Math.max(3, Math.floor((y1 - y0) / 46)));
+      const X = (t) => x0 + ((t - xd.lo) / (xd.hi - xd.lo)) * (x1 - x0);
+      const Y = (mo) => y1 - ((mo - yd.lo) / (yd.hi - yd.lo)) * (y1 - y0);
+      const mDigits = yd.step < 1 ? 2 : 0;
+      gridY(ctx, th, yd.ticks, Y, x0, x1, (v) => I.money(v, cur, mDigits));
+      gridX(ctx, th, xd.ticks, X, y0, y1, (v) => I.hm(v));
+      frame(ctx, th, x0, y0, x1, y1);
+      axisTitle(ctx, th, I.t('total_time'), x1, h - 6, 0, 'right');
 
       const color = app.colorOf(owner);
       const sel = app.selection;
-      // front staircase
-      const sorted = pts.slice().sort((a, b) => a[0] - b[0]);
+      const ownerRi = owner._ri;
+
       ctx.save();
       ctx.beginPath();
-      sorted.forEach((p, k) => {
-        const x = X(p[0]), y = Y(p[1]);
-        if (!k) ctx.moveTo(x, y); else { ctx.lineTo(x, Y(sorted[k - 1][1])); ctx.lineTo(x, y); }
-      });
-      ctx.strokeStyle = U.rgba(color, 0.35);
-      ctx.lineWidth = 1.5;
-      ctx.stroke();
-      ctx.restore();
+      ctx.rect(x0, y0, x1 - x0, y1 - y0);
+      ctx.clip();
 
-      this._pts = [];
-      const rad = (s) => 3 + 8 * Math.sqrt(smax > smin ? (s - smin) / (smax - smin) : 0.4);
-      const ownerRi = owner._ri;
-      for (const p of pts) {
+      // ------------------------------- dominated region and staircase front
+      const stair = [];
+      front.forEach((p, k) => {
+        if (k) stair.push([X(p[0]), Y(front[k - 1][1])]);
+        stair.push([X(p[0]), Y(p[1])]);
+      });
+      ctx.beginPath();
+      ctx.moveTo(stair[0][0], y0 - 2);
+      for (const [x, y] of stair) ctx.lineTo(x, y);
+      ctx.lineTo(x1 + 2, stair[stair.length - 1][1]);
+      ctx.lineTo(x1 + 2, y0 - 2);
+      ctx.closePath();
+      const grad = ctx.createLinearGradient(x0, y1, x1, y0);
+      grad.addColorStop(0, U.rgba(color, th.dark ? 0.16 : 0.10));
+      grad.addColorStop(1, U.rgba(color, 0.02));
+      ctx.fillStyle = grad;
+      ctx.fill();
+      ctx.beginPath();
+      stair.forEach(([x, y], k) => (k ? ctx.lineTo(x, y) : ctx.moveTo(x, y)));
+      ctx.strokeStyle = U.rgba(color, 0.7);
+      ctx.lineWidth = 1.6;
+      ctx.lineJoin = 'round';
+      ctx.stroke();
+
+      // ----------------------------------------------------------- members
+      const dense = front.length > 60;   // large fronts: smaller dots so the staircase stays visible
+      const rad = (s) => (dense ? 2.1 : 2.8) + (dense ? 3.4 : 5.4) * Math.sqrt(s1 > s0 && U.isNum(s) ? (s - s0) / (s1 - s0) : 0.35);
+      let selPt = null;
+      for (const p of front) {
         const x = X(p[0]), y = Y(p[1]), r = rad(p[2]);
-        const isSel = sel.ri === ownerRi && sel.ai >= 0 && sel.ai === p[3];
+        const hasRoute = p[3] >= 0;
         ctx.beginPath();
         ctx.arc(x, y, r, 0, Math.PI * 2);
-        ctx.fillStyle = U.rgba(color, p[3] >= 0 ? 0.72 : 0.28);
+        ctx.fillStyle = U.rgba(color, hasRoute ? (dense ? 0.7 : 0.78) : 0.3);
         ctx.fill();
-        ctx.lineWidth = 1.2;
+        ctx.lineWidth = dense ? 1 : 1.4;
         ctx.strokeStyle = th.surface;
         ctx.stroke();
-        if (isSel) {
-          ctx.beginPath();
-          ctx.arc(x, y, r + 4, 0, Math.PI * 2);
-          ctx.lineWidth = 2;
-          ctx.strokeStyle = th.accent;
-          ctx.stroke();
-        }
+        if (sel.ri === ownerRi && sel.ai >= 0 && sel.ai === p[3]) selPt = { x, y, r, t: p[0], m: p[1] };
         this._pts.push({ x, y, ri: ownerRi, ai: p[3], p, kind: 'front' });
       }
-      // the plan the Pareto planner returned (min objective) and the other algorithms
+      // the member the planner returned (minimum generalised cost)
+      const ret = U.isNum(owner.total_time_s) ? front.reduce((b, p) => (Math.abs(p[0] - owner.total_time_s) + Math.abs(p[1] - owner.money) < Math.abs(b[0] - owner.total_time_s) + Math.abs(b[1] - owner.money) ? p : b), front[0]) : null;
+      if (sel.ri === ownerRi && sel.ai < 0 && ret) selPt = { x: X(ret[0]), y: Y(ret[1]), r: rad(ret[2]), t: ret[0], m: ret[1] };
+      ctx.restore();
+
+      // ------------------------------------------------- labels
+      // greedy placement: every label tries a few positions around its
+      // anchor and is skipped when all of them collide with something
+      const boxes = front.map((p) => { const x = X(p[0]), y = Y(p[1]), r = rad(p[2]); return [x - r, y - r, x + r, y + r]; });
+      const place = (text, ax, ay, r, fill, font, cands) => {
+        ctx.font = font;
+        const tw = ctx.measureText(text).width;
+        const d = r + 5;
+        const at = cands || [
+          [ax + d, ay], [ax - d - tw, ay], [ax - tw / 2, ay - r - 9], [ax - tw / 2, ay + r + 9],
+          [ax + d, ay - r - 8], [ax - d - tw, ay - r - 8], [ax + d, ay + r + 8], [ax - d - tw, ay + r + 8],
+          [ax - tw / 2, ay - r - 22], [ax + d, ay - r - 22],
+        ];
+        for (const [lx, ly] of at) {
+          const bb = [lx - 2, ly - 7, lx + tw + 2, ly + 7];
+          if (bb[0] < x0 + 2 || bb[2] > x1 - 2 || bb[1] < y0 + 1 || bb[3] > y1 - 1) continue;
+          if (boxes.some((o) => bb[0] < o[2] && bb[2] > o[0] && bb[1] < o[3] && bb[3] > o[1])) continue;
+          boxes.push(bb);
+          ctx.textAlign = 'left';
+          ctx.textBaseline = 'middle';
+          ctx.lineWidth = 3;
+          ctx.lineJoin = 'round';
+          ctx.strokeStyle = th.surface;
+          ctx.strokeText(text, lx, ly);
+          ctx.fillStyle = fill;
+          ctx.fillText(text, lx, ly);
+          return true;
+        }
+        return false;
+      };
+      const small = `600 10.5px ${th.font}`;
+
+      // --------------------------------------------- other algorithms
+      // results at the same spot (e.g. BLS, BLS-A* and the Pareto pick) share one label
+      const groups = [];
       for (const r of others) {
         const x = X(r.total_time_s), y = Y(r.money);
-        ctx.save();
-        ctx.translate(x, y);
-        ctx.rotate(Math.PI / 4);
-        ctx.fillStyle = th.surface;
-        ctx.strokeStyle = app.colorOf(r);
-        ctx.lineWidth = 2.2;
-        const isSel = sel.ri === r._ri && sel.ai < 0;
-        ctx.fillRect(-4, -4, 8, 8);
-        ctx.strokeRect(-4, -4, 8, 8);
-        if (isSel) { ctx.strokeStyle = th.accent; ctx.lineWidth = 1.6; ctx.strokeRect(-7.5, -7.5, 15, 15); }
-        ctx.restore();
-        this._pts.push({ x, y, ri: r._ri, r, kind: 'other' });
+        const out = x < x0 || x > x1 || y < y0 || y > y1;
+        const cx = U.clamp(x, x0 + 7, x1 - 7), cy = U.clamp(y, y0 + 7, y1 - 7);
+        let g = groups.find((q) => Math.abs(q.cx - cx) + Math.abs(q.cy - cy) < 5);
+        if (!g) { g = { x, y, cx, cy, out, members: [] }; groups.push(g); }
+        g.members.push(r);
       }
-      const m = this.mouse;
-      if (m) {
-        const p = this._pick(m.x, m.y);
+      for (const g of groups) {
+        for (const r of g.members.slice().reverse()) {
+          const c = app.colorOf(r);
+          const isSel = sel.ri === r._ri && sel.ai < 0;
+          ctx.save();
+          ctx.translate(g.cx, g.cy);
+          if (g.out) {
+            // arrow towards the true position
+            ctx.rotate(Math.atan2(g.y - g.cy, g.x - g.cx));
+            ctx.beginPath();
+            ctx.moveTo(7, 0); ctx.lineTo(-4, -5.5); ctx.lineTo(-1.5, 0); ctx.lineTo(-4, 5.5);
+            ctx.closePath();
+            ctx.fillStyle = c;
+            ctx.fill();
+          } else {
+            ctx.rotate(Math.PI / 4);
+            ctx.fillStyle = th.surface;
+            ctx.strokeStyle = c;
+            ctx.lineWidth = 2.2;
+            ctx.fillRect(-4.2, -4.2, 8.4, 8.4);
+            ctx.strokeRect(-4.2, -4.2, 8.4, 8.4);
+            if (isSel) { ctx.strokeStyle = th.accent; ctx.lineWidth = 1.6; ctx.strokeRect(-7.5, -7.5, 15, 15); }
+          }
+          ctx.restore();
+          this._pts.push({ x: g.cx, y: g.cy, ri: r._ri, r, kind: 'other' });
+        }
+        boxes.push([g.cx - 7, g.cy - 7, g.cx + 7, g.cy + 7]);
+      }
+      // corner notes: the dominated region (top right) and the front size
+      // (bottom left: nothing on the grid is both faster and cheaper there)
+      ctx.font = small;
+      const txtDom = I.t('pareto_dominated');
+      const wDom = ctx.measureText(txtDom).width;
+      place(txtDom, 0, 0, 0, th.text3, small, [[x1 - 8 - wDom, y0 + 12], [x1 - 8 - wDom, y0 + 28], [x1 - 8 - wDom, (y0 + y1) / 2]]);
+      const txtN = I.t('pareto_members', { n: I.num(owner.alternatives_total || front.length, 0) });
+      place(txtN, 0, 0, 0, th.text3, small, [[x0 + 8, y1 - 12], [x0 + 8, y1 - 28]]);
+      const bold = `650 10.5px ${th.font}`;
+      for (const g of groups) {
+        const names = g.members.map((r) => r.title).join(' · ');
+        const text = g.out ? `${names} · ${I.t('off_axis')}` : names;
+        place(text, g.cx, g.cy, 7, app.colorOf(g.members[0]), bold);
+      }
+      // extremes of the front
+      const fst = front[0], chp = front[front.length - 1];
+      place(I.t('pareto_fastest'), X(fst[0]), Y(fst[1]), rad(fst[2]) + 1, th.text2, small);
+      if (chp !== fst) place(I.t('pareto_cheapest'), X(chp[0]), Y(chp[1]), rad(chp[2]) + 1, th.text2, small);
+
+      // ------------------------------------- selected member + guides
+      if (selPt) {
+        ctx.save();
+        ctx.setLineDash([3, 3]);
+        ctx.strokeStyle = U.rgba(th.accent, 0.7);
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(selPt.x + 0.5, selPt.y + selPt.r + 3); ctx.lineTo(selPt.x + 0.5, y1);
+        ctx.moveTo(selPt.x - selPt.r - 3, selPt.y + 0.5); ctx.lineTo(x0, selPt.y + 0.5);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.beginPath();
+        ctx.arc(selPt.x, selPt.y, selPt.r + 4, 0, Math.PI * 2);
+        ctx.lineWidth = 2.2;
+        ctx.strokeStyle = th.accent;
+        ctx.stroke();
+        ctx.restore();
+        axisPill(ctx, th, I.hm(selPt.t), selPt.x, y1 + 12, 'center');
+        axisPill(ctx, th, I.money(selPt.m, cur, mDigits), x0 - 4, selPt.y, 'right');
+      }
+
+      // ------------------------------------------------------------ hover
+      const mouse = this.mouse;
+      if (mouse) {
+        const p = this._pick(mouse.x, mouse.y);
         if (p) {
+          ctx.beginPath();
+          ctx.arc(p.x, p.y, (p.kind === 'front' ? rad(p.p[2]) : 6) + 3, 0, Math.PI * 2);
+          ctx.lineWidth = 1.5;
+          ctx.strokeStyle = th.crosshair;
+          ctx.stroke();
           if (p.kind === 'front') {
             const v = p.p;
-            this.setTip(`${owner.title} · ${p.ai >= 0 ? '#' + (owner.alternatives[p.ai].member + 1) : ''}`, [
+            const alt = p.ai >= 0 ? owner.alternatives[p.ai] : null;
+            this.setTip(`${owner.title}${alt ? ' #' + (alt.member + 1) : ''}`, [
               [color, I.t('total_time'), I.duration(v[0])],
               [color, I.t('money'), I.money(v[1], cur)],
               [color, I.t('soh_short'), I.soh(v[2])],
@@ -552,6 +750,44 @@
         } else this.canvas.style.cursor = 'default';
       }
     }
+  }
+
+  /** Time axis in seconds with ticks on whole minutes/hours: {lo, hi, step, ticks}. */
+  function timeDomain(lo, hi, n) {
+    const steps = [60, 120, 300, 600, 900, 1800, 3600, 7200, 10800, 21600, 43200, 86400];
+    const span = Math.max(hi - lo, 60);
+    const step = steps.find((s) => span / s <= n) || 86400;
+    const a = Math.floor(lo / step) * step, b = Math.ceil(hi / step) * step;
+    const ticks = [];
+    for (let v = a; v <= b + 1e-6; v += step) ticks.push(v);
+    return { lo: a, hi: b, step, ticks };
+  }
+
+  /** Thin plot frame on the left and bottom axes. */
+  function frame(ctx, th, x0, y0, x1, y1) {
+    ctx.strokeStyle = th.chartAxis;
+    ctx.globalAlpha = 0.55;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(x0 + 0.5, y0); ctx.lineTo(x0 + 0.5, y1 + 0.5); ctx.lineTo(x1, y1 + 0.5);
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+  }
+
+  /** Value pill on an axis (highlighted coordinate of the selection). */
+  function axisPill(ctx, th, text, x, y, align) {
+    ctx.save();
+    ctx.font = `700 10.5px ${th.font}`;
+    const w = ctx.measureText(text).width + 10, hh = 17;
+    const bx = align === 'right' ? x - w : x - w / 2;
+    U.roundRect(ctx, bx, y - hh / 2, w, hh, 6);
+    ctx.fillStyle = th.accent;
+    ctx.fill();
+    ctx.fillStyle = th.dark ? '#0b1020' : '#fff';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(text, bx + w / 2, y + 0.5);
+    ctx.restore();
   }
 
   /* =========================================================== wait chart */

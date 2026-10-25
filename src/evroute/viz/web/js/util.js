@@ -101,6 +101,23 @@
     return out;
   };
 
+  /**
+   * Axis domain that *contains* [lo, hi] and ends on nice ticks:
+   * {lo, hi, step, ticks}.  (niceTicks alone only returns the ticks inside
+   * [lo, hi], so the outermost data could fall outside the axis.)
+   */
+  U.niceDomain = function (lo, hi, n) {
+    if (!(hi > lo)) { const d = Math.abs(lo) * 0.1 || 1; lo -= d; hi += d; }
+    const raw = (hi - lo) / Math.max(1, n);
+    const mag = Math.pow(10, Math.floor(Math.log10(raw)));
+    const f = raw / mag;
+    const step = (f < 1.5 ? 1 : f < 3 ? 2 : f < 7 ? 5 : 10) * mag;
+    const a = Math.floor(lo / step + 1e-9) * step, b = Math.ceil(hi / step - 1e-9) * step;
+    const ticks = [];
+    for (let k = 0, v = a; v <= b + step * 1e-6 && k < 200; k++, v = a + k * step) ticks.push(+v.toFixed(10));
+    return { lo: a, hi: b, step, ticks };
+  };
+
   /* --------------------------------------------------------------- colour */
   const _rgbCache = new Map();
   /** '#rrggbb' | '#rgb' | 'rgb(a)(...)' -> [r, g, b, a] (0-255, alpha 0-1). */

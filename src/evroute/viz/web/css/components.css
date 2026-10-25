@@ -416,6 +416,10 @@ input[type="range"]:focus-visible::-webkit-slider-thumb { box-shadow: var(--focu
 }
 .metric small { display: block; font-size: 11px; color: var(--text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .metric b { display: block; font-size: 15px; font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.metric.good b { color: var(--ok); }
+.metric.warn b { color: var(--warn); }
+.metric.bad b { color: var(--bad); }
+.metric[title] { cursor: help; }
 .summary-warn {
   margin-top: 10px; padding: 9px 11px;
   border-radius: 11px;
@@ -672,7 +676,8 @@ input[type="range"]:focus-visible::-webkit-slider-thumb { box-shadow: var(--focu
 .chart-time .chart { min-height: 0; flex: none; }
 .chart-pareto .chart { min-height: 260px; }
 .chart canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
-.chart-legend { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 4px 12px; font-size: 11.5px; color: var(--text-2); min-width: 0; }
+.chart-legend { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 4px 12px; font-size: 11.5px; color: var(--text-2); min-width: 0; flex: 1 1 0; }
+.chart-card .card-head h2 { flex: 0 0 auto; }
 .chart-legend span { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
 .chart-legend i { width: 14px; height: 3px; border-radius: 2px; background: var(--algo); display: inline-block; }
 .chart-legend i.sq { width: 9px; height: 9px; border-radius: 2px; }
@@ -747,6 +752,10 @@ table.cmp { width: 100%; border-collapse: separate; border-spacing: 0; font-size
 
 /* ------------------------------------------------------------- phones */
 @media (max-width: 760px) {
+  .card-head { flex-wrap: wrap; row-gap: 6px; }
+  .card-head h2 { flex: 1 0 auto; max-width: 100%; }
+  .card-head .hint, .chart-legend { flex: 0 1 auto; margin-left: auto; white-space: normal; text-align: right; }
+  .chart-legend { gap: 3px 10px; }
   .switch { height: 34px; padding: 0 10px 0 6px; }
   .switch-state { display: none; }
   .hud { left: 10px; top: 10px; width: 214px; padding: 9px 11px; border-radius: 14px; }
@@ -762,7 +771,13 @@ table.cmp { width: 100%; border-collapse: separate; border-spacing: 0; font-size
   .mode-seg button kbd { display: none; }
   .mode-seg button { padding: 0 7px; }
   .speed select { max-width: 92px; }
-  .search-panel { right: 54px; left: auto; width: calc(100% - 80px); top: 10px; }
+  .search-panel { right: 54px; left: auto; width: calc(100% - 80px); top: 10px; padding: 8px 10px; }
+  .search-head { margin-bottom: 4px; gap: 6px; }
+  .search-head strong, .sc-row .meta, .colormap { display: none; }
+  .search-counters { gap: 3px; }
+  .leaderboard { gap: 2px; }
+  .leaderboard .prog { display: none; }
+  .leaderboard li.more { color: var(--text-3); font-weight: 600; display: block; padding-left: 26px; }
   .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .summary-hero .big { font-size: 28px; }
   .kbd-help { display: none; }

@@ -71,7 +71,7 @@
         else this.t = f * this.tMax();
         this.frame();
       });
-      el.cmp.addEventListener('change', () => { this.compare = el.cmp.checked; this._applySplit(); this.app.map.fitDefault(false); this.frame(); });
+      el.cmp.addEventListener('change', () => { this.compare = el.cmp.checked; this._applySplit(); this.frame(); });
       el.cmpWith.addEventListener('change', () => { this.compareRi = +el.cmpWith.value; this._acc = [null, null]; this._applySplit(); this.frame(); });
     }
 
@@ -94,6 +94,8 @@
         this._applyModeUI();
         if (user) this.restart(); else this.seek(this.t);
       }
+      // the playbar and the HUD change the free map area
+      if (this.app.ready && !this.app.map.userMoved) this.app.map.fitDefault(!!user);
       this.app.onAnimationChanged();
       if (user) this.app.toast(I.t(on ? 'toast_anim_on' : 'toast_anim_off'));
     }
@@ -109,12 +111,16 @@
       if (mode === 'search') {
         this.sp = 0;
         this._acc = [null, null];
+        this._activeStop = -1;
+        this.app.panels.highlightStop(-1);
         if (user) this.app.toast(I.t('toast_search', { a: this.app.selectedRoute().title }));
         this.play();
       } else if (prev === 'search' || user) {
         if (mode === 'race' && user) this.app.toast(I.t('toast_race'));
         this.restart();
       }
+      // fit after the HUD shows its final content (the race leaderboard is tall)
+      if (prev !== mode && !this.app.map.userMoved) this.app.map.fitDefault(true);
       this.app.onAnimationChanged();
     }
 
@@ -134,7 +140,9 @@
       const want = this.enabled && this.mode === 'search' && this.compare && this._compareRoute() !== null;
       if (want !== this.app.map.split) {
         this.app.map.split = want;
+        if (want) this.app.map.chooseSplit(this.app.defaultBBox());
         this._acc = [null, null];
+        if (!this.app.map.userMoved) this.app.map.fitDefault(false);
         this.app.map.invalidate();
         this.buildTimeline();
       }
@@ -387,7 +395,10 @@
         if (a.r.feasible !== b.r.feasible) return a.r.feasible ? -1 : 1;
         return b.prog - a.prog;
       });
-      const items = rows.map((x, k) => {
+      // phones: the top four only, so the map stays visible
+      const maxRows = window.innerWidth < 560 ? 4 : rows.length;
+      const hidden = rows.length - maxRows;
+      const items = rows.slice(0, maxRows).map((x, k) => {
         let txt, cls = 'st';
         if (x.done) { txt = `✓ ${I.hm(x.end)}`; cls += ' done'; }
         else if (x.st.kind === 'stranded') { txt = `✕ ${I.km(x.st.dist, 0)}`; cls += ' bad'; }
@@ -400,6 +411,7 @@
           U.el('span', { class: cls, text: txt }),
           U.el('span', { class: 'prog' }, U.el('i', { style: { width: `${(U.clamp(x.prog, 0, 1) * 100).toFixed(1)}%` } })));
       });
+      if (hidden > 0) items.push(U.el('li', { class: 'more', text: I.t('race_more', { n: hidden }) }));
       U.setChildren(this.el.race, items);
     }
 
@@ -508,7 +520,9 @@
       const cars = this.carStates();
       const race = this.mode === 'race';
       if (phase === 'under') {
-        for (const { r, st } of cars) {
+        // trails; the selected route last, so it stays on top where routes coincide
+        const sel0 = app.selectedRoute();
+        for (const { r, st } of cars.slice().sort((a, b) => (a.r === sel0) - (b.r === sel0))) {
           if (st.kind === 'start') continue;
           const tip = st.kind === 'drive' || st.kind === 'stranded' ? [st.x, st.y] : null;
           map.strokeRoute(ctx, r, T, {
@@ -549,12 +563,41 @@
         drawCar(ctx, x, y, -st.heading, app.colorOf(r), st, th, race ? 0.85 : 1);
       }
       if (race) {
-        for (const { r, st } of order) {
+        // cars closer than 18 px share one name tag (all routes often
+        // coincide for long stretches): colour dots + "first +n"
+        const clusters = [];
+        for (const { r, st } of order.slice().reverse()) {
           const x = T.ox + st.x * T.s, y = T.oy - st.y * T.s;
-          drawTag(ctx, x, y, r.title, app.colorOf(r), th, boxes);
+          let c = clusters.find((q) => Math.abs(q.x - x) + Math.abs(q.y - y) < 18);
+          if (!c) { c = { x, y, members: [] }; clusters.push(c); }
+          c.members.push(r);
+        }
+        for (const c of clusters) {
+          const n = c.members.length;
+          const text = n === 1 ? c.members[0].title
+            : n === 2 ? `${c.members[0].title} · ${c.members[1].title}`
+              : `${c.members[0].title} ${I.t('race_more', { n: n - 1 })}`;
+          drawTag(ctx, c.x, c.y, text, app.colorOf(c.members[0]), th, boxes, false, c.members.slice(0, 9).map((r) => app.colorOf(r)));
         }
       } else if (cars.length) {
         const { st } = cars[0];
+        if (st.kind === 'charge') {
+          // charge progress ring around the car: SoC as an arc
+          const x = T.ox + st.x * T.s, y = T.oy - st.y * T.s;
+          ctx.save();
+          ctx.lineCap = 'round';
+          ctx.beginPath();
+          ctx.arc(x, y, 16.5, 0, Math.PI * 2);
+          ctx.strokeStyle = U.rgba(th.surface, 0.85);
+          ctx.lineWidth = 4.5;
+          ctx.stroke();
+          ctx.beginPath();
+          ctx.arc(x, y, 16.5, -Math.PI / 2, -Math.PI / 2 + 2 * Math.PI * U.clamp(st.soc, 0, 1));
+          ctx.strokeStyle = th.cCharge;
+          ctx.lineWidth = 3.2;
+          ctx.stroke();
+          ctx.restore();
+        }
         if (st.kind === 'charge' || st.kind === 'wait') {
           const x = T.ox + st.x * T.s, y = T.oy - st.y * T.s;
           const txt = st.kind === 'charge'
@@ -582,14 +625,14 @@
         g.scale(dpr, dpr);
         const rgb = `${c[0] | 0},${c[1] | 0},${c[2] | 0}`;
         const rg = g.createRadialGradient(R, R, 0, R, R, R);
-        rg.addColorStop(0, `rgba(${rgb},${th.dark ? 0.55 : 0.4})`);
-        rg.addColorStop(0.4, `rgba(${rgb},${th.dark ? 0.22 : 0.14})`);
+        rg.addColorStop(0, `rgba(${rgb},${th.dark ? 0.6 : 0.5})`);
+        rg.addColorStop(0.45, `rgba(${rgb},${th.dark ? 0.24 : 0.18})`);
         rg.addColorStop(1, `rgba(${rgb},0)`);
         g.fillStyle = rg;
         g.fillRect(0, 0, 2 * R, 2 * R);
         // crisp core
         g.beginPath();
-        g.arc(R, R, R * 0.26, 0, Math.PI * 2);
+        g.arc(R, R, R * 0.3, 0, Math.PI * 2);
         g.fillStyle = `rgb(${rgb})`;
         g.fill();
         g.lineWidth = R * 0.07;
@@ -666,7 +709,9 @@
       ctx.font = `700 13px ${th.font}`;
       const label = `${r.title} · ${I.num(k, 0)} ${I.t('sc_explored')}`;
       const w = ctx.measureText(label).width + 34;
-      const x = 14, y = vp.h - app.map._insets().b - 58;
+      const map = app.map;
+      const bottomPanel = !map.splitRows || vp.i === 1;   // the playbar covers the bottom viewport only
+      const x = 14, y = bottomPanel ? vp.h - map._insets().b - 50 : vp.h - 44;
       ctx.shadowColor = 'rgba(0,0,0,.18)';
       ctx.shadowBlur = 8;
       U.roundRect(ctx, x, y, w, 30, 15);
@@ -727,11 +772,16 @@
     ctx.restore();
   }
 
-  /** Label pill above a point, avoiding previously placed pills. */
-  function drawTag(ctx, x, y, text, color, th, boxes, strong) {
+  /**
+   * Label pill above a point, avoiding previously placed pills; `dots`
+   * (colours) are drawn as small discs before the text (race clusters).
+   */
+  function drawTag(ctx, x, y, text, color, th, boxes, strong, dots) {
     ctx.save();
     ctx.font = `${strong ? 700 : 650} ${strong ? 12 : 11.5}px ${th.font}`;
-    const w = ctx.measureText(text).width + 16, h = strong ? 24 : 21;
+    const nd = dots && dots.length > 1 ? dots.length : 0;
+    const dw = nd ? 6 + (nd - 1) * 5 + 6 : 0;
+    const w = ctx.measureText(text).width + 16 + dw, h = strong ? 24 : 21;
     const offsets = [-34, -58, -82, 22, 46, 70];
     let bx = x - w / 2, by = y + offsets[0] - h / 2;
     for (const off of offsets) {
@@ -748,10 +798,19 @@
     ctx.lineWidth = 1.5;
     ctx.strokeStyle = color;
     ctx.stroke();
+    for (let k = nd - 1; k >= 0; k--) {
+      ctx.beginPath();
+      ctx.arc(bx + 11 + k * 5, by + h / 2, 3.6, 0, Math.PI * 2);
+      ctx.fillStyle = dots[k];
+      ctx.fill();
+      ctx.lineWidth = 1.2;
+      ctx.strokeStyle = th.surface;
+      ctx.stroke();
+    }
     ctx.fillStyle = th.text;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillText(text, bx + w / 2, by + h / 2 + 0.5);
+    ctx.fillText(text, bx + dw + (w - dw) / 2, by + h / 2 + 0.5);
     ctx.restore();
   }
 

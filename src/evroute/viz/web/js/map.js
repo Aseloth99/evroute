@@ -32,11 +32,14 @@
       this.w = 1; this.h = 1; this.dpr = 1;
       this.static = document.createElement('canvas');   // base: terrain, roads, routes, stations
       this.labels = document.createElement('canvas');   // pins and place names (above trails)
+      this.staticB = document.createElement('canvas');  // lower half of the stacked split view
+      this.labelsB = document.createElement('canvas');
       this.staticDirty = true;
       this.terrainImg = null;
       this.stationHits = [];       // [sx, sy, node] in viewport 0 coordinates
       this.hoverNode = -1;
       this.split = false;
+      this.splitRows = false;      // split into top/bottom halves instead of left/right
       this.overlay = null;         // function (ctx, vp, T) set by the animator
       this._raf = 0;
       this._fly = null;
@@ -65,18 +68,58 @@
 
     viewports() {
       if (!this.split) return [{ x: 0, y: 0, w: this.w, h: this.h, i: 0 }];
+      if (this.splitRows) {
+        // the playbar covers the bottom of the lower half: its content is
+        // centred in the free part (cyOff), so both halves show the same area
+        const hh = Math.floor(this.h / 2);
+        return [{ x: 0, y: 0, w: this.w, h: hh, i: 0, cyOff: this._splitTopPad() / 2 },
+          { x: 0, y: hh, w: this.w, h: this.h - hh, i: 1, cyOff: -this._splitBottomPad() / 2 }];
+      }
       const hw = Math.floor(this.w / 2);
       return [{ x: 0, y: 0, w: hw, h: this.h, i: 0 }, { x: hw, y: 0, w: this.w - hw, h: this.h, i: 1 }];
+    }
+
+    /** Viewport under screen point (sx, sy). */
+    viewportAt(sx, sy) {
+      const vps = this.viewports();
+      if (vps.length === 1) return vps[0];
+      return this.splitRows ? vps[sy >= vps[1].y ? 1 : 0] : vps[sx >= vps[1].x ? 1 : 0];
+    }
+
+    /**
+     * Side-by-side or stacked comparison: choose the orientation that shows
+     * `bbox` at the larger scale (wide regions stack, tall regions sit side
+     * by side).
+     */
+    chooseSplit(bbox) {
+      if (!bbox) { this.splitRows = false; return; }
+      const bw = Math.max(bbox[2] - bbox[0], 1), bh = Math.max(bbox[3] - bbox[1], 1);
+      const cols = Math.min((this.w / 2 - 40) / bw, (this.h - 280) / bh);
+      const rows = Math.min((this.w - 48) / bw, (this.h / 2 - 90) / bh);
+      this.splitRows = rows > cols;
     }
 
     /** Transform constants for a viewport: sx = ox + x * s, sy = oy - y * s. */
     T(vp) {
       const s = this.cam.s;
-      return { s, ox: vp.w / 2 - this.cam.cx * s, oy: vp.h / 2 + this.cam.cy * s, w: vp.w, h: vp.h };
+      return { s, ox: vp.w / 2 - this.cam.cx * s, oy: vp.h / 2 + (vp.cyOff || 0) + this.cam.cy * s, w: vp.w, h: vp.h };
+    }
+
+    /** Height hidden by the playbar at the bottom of the map (stacked split view). */
+    _splitBottomPad() {
+      const pb = document.getElementById('playbar');
+      return pb && !pb.hidden ? pb.offsetHeight + 22 : 20;
+    }
+
+    /** Height hidden by a full-width search panel at the top (phones; stacked split view). */
+    _splitTopPad() {
+      const sp = document.getElementById('search-panel');
+      if (!sp || sp.hidden || sp.offsetWidth < 0.6 * this.w) return 0;
+      return sp.offsetTop + sp.offsetHeight + 6;
     }
 
     screenToWorld(sx, sy) {
-      const vp = this.viewports()[this.split && sx > this.w / 2 ? 1 : 0];
+      const vp = this.viewportAt(sx, sy);
       const t = this.T(vp);
       return [(sx - vp.x - t.ox) / t.s, (t.oy - (sy - vp.y)) / t.s];
     }
@@ -104,9 +147,15 @@
     }
 
     camFor(bbox, vpw, vph) {
-      const ins = this._insets(bbox);
-      const pad = this.split ? { l: 20, r: 20, t: 150, b: ins.b } : ins;
       const bw = Math.max(bbox[2] - bbox[0], 1000), bh = Math.max(bbox[3] - bbox[1], 1000);
+      if (this.split && this.splitRows) {
+        // stacked halves share one camera; the lower half loses the playbar strip
+        const free = vph - Math.max(this._splitBottomPad(), this._splitTopPad()) - 36;
+        const s = Math.min((vpw - 48) / bw, Math.max(60, free) / bh);
+        return { s, cx: (bbox[0] + bbox[2]) / 2, cy: (bbox[1] + bbox[3]) / 2 };
+      }
+      const ins = this._insets(bbox);
+      const pad = !this.split ? ins : { l: 20, r: 20, t: 150, b: ins.b };
       const aw = Math.max(80, vpw - pad.l - pad.r), ah = Math.max(80, vph - pad.t - pad.b);
       const s = Math.min(aw / bw, ah / bh);
       // centre of the padded area, mapped back to world coordinates
@@ -123,7 +172,7 @@
 
     /** Fit all visible routes (or the network when there is none). */
     fitDefault(animate) {
-      const bb = this.app.visibleBBox() || this.model.bbox;
+      const bb = this.app.defaultBBox() || this.model.bbox;
       this.fitBounds(bb, animate);
     }
 
@@ -173,10 +222,10 @@
       const [wx, wy] = this.screenToWorld(sx, sy);
       const c = this._limits({ cx: this.cam.cx, cy: this.cam.cy, s: this.cam.s * factor });
       // keep the world point under the cursor fixed
-      const vp = this.viewports()[this.split && sx > this.w / 2 ? 1 : 0];
+      const vp = this.viewportAt(sx, sy);
       const lx = sx - vp.x, ly = sy - vp.y;
       c.cx = wx - (lx - vp.w / 2) / c.s;
-      c.cy = wy + (ly - vp.h / 2) / c.s;
+      c.cy = wy + (ly - vp.h / 2 - (vp.cyOff || 0)) / c.s;
       this.setCam(c);
     }
 
@@ -199,15 +248,20 @@
 
     render() {
       const vps = this.viewports();
-      if (this.staticDirty) this._renderStatic(vps[0]);
+      if (this.staticDirty) {
+        // the lower stacked half is offset (cyOff): it needs its own cached layers
+        if (this._ownLayer(vps, vps[1])) this._renderStatic(vps[1], this.staticB, this.labelsB);
+        this._renderStatic(vps[0], this.static, this.labels);
+      }
       const ctx = this.ctx, dpr = this.dpr;
       ctx.setTransform(1, 0, 0, 1, 0, 0);
       ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
       for (const vp of vps) {
         const T = this.T(vp);
+        const own = this._ownLayer(vps, vp);
         // 1. cached base layer
         ctx.setTransform(1, 0, 0, 1, 0, 0);
-        ctx.drawImage(this.static, Math.round(vp.x * dpr), Math.round(vp.y * dpr));
+        ctx.drawImage(own ? this.staticB : this.static, Math.round(vp.x * dpr), Math.round(vp.y * dpr));
         ctx.setTransform(dpr, 0, 0, dpr, vp.x * dpr, vp.y * dpr);
         ctx.save();
         ctx.beginPath();
@@ -217,7 +271,7 @@
         if (this.overlay) this.overlay(ctx, vp, T, 'under');
         // 3. cached labels and pins
         ctx.setTransform(1, 0, 0, 1, 0, 0);
-        ctx.drawImage(this.labels, Math.round(vp.x * dpr), Math.round(vp.y * dpr));
+        ctx.drawImage(own ? this.labelsB : this.labels, Math.round(vp.x * dpr), Math.round(vp.y * dpr));
         ctx.setTransform(dpr, 0, 0, dpr, vp.x * dpr, vp.y * dpr);
         // 4. dynamic layer on top: stop badges, cars, name tags, hover
         if (this.overlay) this.overlay(ctx, vp, T, 'over');
@@ -226,10 +280,15 @@
       }
       if (this.split) {
         ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-        const x = vps[1].x;
         ctx.fillStyle = this.app.theme.border;
-        ctx.fillRect(x - 1, 0, 2, this.h);
+        if (this.splitRows) ctx.fillRect(0, vps[1].y - 1, this.w, 2);
+        else ctx.fillRect(vps[1].x - 1, 0, 2, this.h);
       }
+    }
+
+    /** True when viewport `vp` is offset differently from the first one (needs its own cached layers). */
+    _ownLayer(vps, vp) {
+      return !!vp && vp.i === 1 && (vp.cyOff || 0) !== (vps[0].cyOff || 0);
     }
 
     _layer(c, vp) {
@@ -243,11 +302,11 @@
       return ctx;
     }
 
-    _renderStatic(vp) {
+    _renderStatic(vp, staticCanvas, labelCanvas) {
       this.staticDirty = false;
       const T = this.T(vp);
       const app = this.app, th = app.theme, L = app.layers;
-      const ctx = this._layer(this.static, vp);
+      const ctx = this._layer(staticCanvas, vp);
 
       // background: water + shaded relief (fading to flat land when zoomed in
       // beyond the resolution of the interpolated elevation grid), or flat land
@@ -275,10 +334,33 @@
       if (L.stations) this._drawStations(ctx, T);
       app.drawStaticMarkers(ctx, T);
 
-      const lc = this._layer(this.labels, vp);
-      const boxes = [this._drawScale(lc, T)];
+      const lc = this._layer(labelCanvas, vp);
+      const panels = this.split ? [] : this.overlayBoxes();
+      const boxes = panels.concat([this._drawScale(lc, T, panels)]);
       this._drawPins(lc, T);
       if (L.labels) this._drawLabels(lc, T, boxes);
+    }
+
+    /**
+     * Screen boxes [x0, y0, x1, y1] (map CSS pixels) covered by the floating
+     * panels -- HUD, map tools, search panel, playbar -- so that labels and
+     * the scale bar are not placed underneath them.
+     */
+    overlayBoxes() {
+      const host = this.canvas.getBoundingClientRect();
+      const out = [];
+      for (const id of ['hud', 'search-panel', 'playbar']) {
+        const el = document.getElementById(id);
+        if (!el || el.hidden) continue;
+        const r = el.getBoundingClientRect();
+        if (r.width && r.height) out.push([r.left - host.left - 4, r.top - host.top - 4, r.right - host.left + 4, r.bottom - host.top + 4]);
+      }
+      const tools = document.querySelector('.map-tools');
+      if (tools) {
+        const r = tools.getBoundingClientRect();
+        out.push([r.left - host.left - 4, r.top - host.top - 4, r.right - host.left + 4, r.bottom - host.top + 4]);
+      }
+      return out;
     }
 
     zoomFactor() {
@@ -397,7 +479,7 @@
 
     stationRadius() {
       const pxPerKm = this.cam.s * 1000;
-      return U.clamp(2.4 + pxPerKm * 1.1, 2.6, 8.5);
+      return U.clamp(1.4 + pxPerKm * 1.9, 2.3, 8.5);
     }
 
     /** Station icon: AC circle, DC rounded square, HPC diamond; bolt when large. */
@@ -405,7 +487,7 @@
       const th = this.app.theme;
       ctx.fillStyle = this.stationColor(cls);
       ctx.strokeStyle = th.stStroke;
-      ctx.lineWidth = r > 5 ? 1.6 : 1.1;
+      ctx.lineWidth = r > 5 ? 1.6 : r > 3.2 ? 1.1 : 0.9;
       if (cls === 'AC') {
         ctx.beginPath();
         ctx.arc(x, y, r * 0.92, 0, Math.PI * 2);
@@ -434,6 +516,8 @@
       ctx.save();
       ctx.shadowColor = 'rgba(0,0,0,.18)';
       ctx.shadowBlur = r > 5 ? 3 : 0;
+      // overview zoom: small and slightly translucent, the network stays readable
+      ctx.globalAlpha = U.clamp(0.55 + (r - 2.3) * 0.25, 0.55, 1);
       for (const sn of this._stationNodes()) {
         const x = ox + m.X[sn.node] * s, y = oy - m.Y[sn.node] * s;
         if (x < -10 || y < -10 || x > T.w + 10 || y > T.h + 10) continue;
@@ -514,6 +598,8 @@
         const tries = od
           ? [[x + off, y - 18, 'left'], [x - off, y - 18, 'right'], [x - tw / 2, y + 12, 'left']]
           : [[x + off, y, 'left'], [x - off, y, 'right'], [x - tw / 2, y - 12, 'left'], [x - tw / 2, y + 12, 'left']];
+        // the place dot itself must be free too (e.g. not on the scale bar)
+        if (dot && collide([x - 4, y - 4, x + 4, y + 4])) continue;
         let placed = null;
         for (const [tx, ty, align] of tries) {
           const bx0 = align === 'left' ? tx : tx - tw;
@@ -541,14 +627,16 @@
       }
     }
 
-    _drawScale(ctx, T) {
+    /** Scale bar at the bottom left, above the playbar when it is shown. */
+    _drawScale(ctx, T, panels) {
       const th = this.app.theme;
       const target = 90 / T.s;            // metres in ~90 px
       const pow = Math.pow(10, Math.floor(Math.log10(target)));
       const nice = [1, 2, 5, 10].map((k) => k * pow).filter((v) => v <= target).pop() || pow;
       const px = nice * T.s;
-      const ins = this._insets();
-      const x = 16, y = T.h - (this.app.anim && this.app.anim.enabled ? ins.b - 6 : 20);
+      let y = T.h - 16;
+      for (const b of panels || []) if (b[0] < 16 + px && b[2] > 16 && b[3] > T.h - 40) y = Math.min(y, b[1] - 8);
+      const x = 16;
       ctx.save();
       ctx.lineWidth = 4;
       ctx.strokeStyle = th.labelHalo;
