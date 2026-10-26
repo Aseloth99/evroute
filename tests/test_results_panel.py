@@ -325,6 +325,24 @@ def test_scalability_mismatch_is_stated_not_hidden(tmp_path):
     assert "same optimum" in next(k for k in p["kpis"] if k["id"] == "speedup-cfp")["sub"]["en"]
 
 
+def test_scalability_label_budget_is_not_a_mismatch(tmp_path):
+    root = make_results(tmp_path / "r")
+    path = root / "scalability" / "results.csv"
+    rows = read_rows(path)
+    for r in rows:  # BLS runs out of its label budget on one pair of the largest size
+        r["status"] = ""
+        if r["algorithm"] == "bls" and r["nodes"] == "4000" and r["pair"] == "1":
+            r.update(feasible=0, time_min="nan", status="limit")
+    write_csv(path, rows)
+    p = R.results_payload(root)
+    sc = section(p, "scalability")
+    assert all(g["passed"] == g["total"] for g in p["checks"]["groups"])  # "not solved" is no disagreement
+    assert sc["facts"]["mismatches"]["bls-astar"] == [0, 3]
+    assert sc["data"]["budget"] == [{"algorithm": "bls", "nodes": 4000, "unsolved": 1, "total": 2}]
+    assert "BLS ran out of its label budget on 1 of 2 instances at 4,000 nodes" in sc["finding"]["en"]
+    assert "etiket bütçesini 4.000 düğümde 2 örneğin 1 tanesinde aştı" in sc["finding"]["tr"]
+
+
 def test_speedup_is_a_labelled_geometric_mean(tmp_path):
     root = make_results(tmp_path / "r")
     path = root / "scalability" / "results.csv"

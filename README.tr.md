@@ -441,9 +441,9 @@ evroute gallery -o docs/img                        # bu README'deki seaborn graf
 ```
 
 Tam bir koşudan öne çıkanlar (ölçeklenebilirlik dışındaki tüm deneyler
-yukarıdaki makinede 3 dakika sürer; ölçeklenebilirlik tek başına yaklaşık 5
-saat sürer ve bunun neredeyse tamamı en büyük ağlardaki Dijkstra sıralı
-temel yöntemlere gider):
+yukarıdaki makinede 3 dakika sürer; ölçeklenebilirlik tek başına 2 saatlik
+planlama süresi gerektirir ve bunun %99'u istasyon grafına ve Dijkstra
+sıralı temel yöntemlere gider):
 
 | deney | bulgu |
 |---|---|

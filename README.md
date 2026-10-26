@@ -418,8 +418,8 @@ evroute gallery -o docs/img                        # the seaborn figures of this
 ```
 
 Highlights of a full run (all experiments except scalability: 3 minutes on
-the machine above; scalability alone takes about 5 hours, almost all of it
-in the Dijkstra-order baselines on the largest networks):
+the machine above; scalability alone needs 2 hours of planner time, 99 % of
+it in the station graph and the Dijkstra-order baselines):
 
 | experiment | finding |
 |---|---|

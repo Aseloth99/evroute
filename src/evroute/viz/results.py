@@ -334,6 +334,11 @@ def _feasible(row: Mapping[str, Any]) -> bool:
     return bool(v) and v not in ("0", "False")
 
 
+def _limit(row: Mapping[str, Any]) -> bool:
+    """The search ran out of its label budget: "not solved", not "no route exists"."""
+    return str(row.get("status") or "").strip().lower() == "limit"
+
+
 def _num(row: Mapping[str, Any], key: str) -> float | None:
     v = row.get(key)
     return float(v) if _finite(v) else None
@@ -544,15 +549,20 @@ def _sec_scalability(exp: Mapping[str, Any], checks: _Checks, ctx: Mapping[str, 
     algos = _ordered_algos(str(r.get("algorithm")) for r in rows)
     sizes = sorted({int(r["nodes"]) for r in rows if _finite(r.get("nodes"))})
     series = []
+    budget: list[dict[str, Any]] = []  # searches stopped by their label budget, per algorithm and size
     for a in algos:
         pts = []
         for n in sizes:
-            sel = [r for r in rows if r.get("algorithm") == a and r.get("nodes") == n and _feasible(r)]
+            at = [r for r in rows if r.get("algorithm") == a and r.get("nodes") == n]
+            sel = [r for r in at if _feasible(r)]
+            unsolved = sum(_limit(r) for r in at)
+            if unsolved:
+                budget.append({"algorithm": a, "nodes": n, "unsolved": unsolved, "total": len(at)})
             rt = [x for x in (_num(r, "runtime_ms") for r in sel) if x is not None]
             st = [x for x in (_num(r, "settled") for r in sel) if x is not None]
             if not rt:
                 continue
-            pts.append({"nodes": n, "n": len(rt), "runtime_ms": statistics.fmean(rt), "runtime_min": min(rt),
+            pts.append({"nodes": n, "n": len(rt), "unsolved": unsolved, "runtime_ms": statistics.fmean(rt), "runtime_min": min(rt),
                         "runtime_max": max(rt), "settled": statistics.fmean(st) if st else None,
                         "settled_min": min(st) if st else None, "settled_max": max(st) if st else None})
         if pts:
@@ -569,7 +579,7 @@ def _sec_scalability(exp: Mapping[str, Any], checks: _Checks, ctx: Mapping[str, 
     for (n, pair), by in sorted(inst.items(), key=lambda kv: (kv[0][0] or 0, kv[0][1] or 0)):
         label = f"n={n} pair {pair}"
         for fast, slow, cid in (("bls-astar", "bls", "bls-astar-equals-bls"), ("cfp-astar", "cfp", "cfp-astar-equals-cfp")):
-            if fast in by and slow in by:
+            if fast in by and slow in by and not (_limit(by[fast]) or _limit(by[slow])):
                 a, b = by[fast], by[slow]
                 ta, tb = _num(a, "time_min"), _num(b, "time_min")
                 ok = (_feasible(a) == _feasible(b)) and (not _feasible(a) or (ta is not None and tb is not None and _close(ta, tb)))
@@ -603,6 +613,20 @@ def _sec_scalability(exp: Mapping[str, Any], checks: _Checks, ctx: Mapping[str, 
     nmax = max(sizes) if sizes else None
 
     def finding(lang: str) -> str:
+        s = finding_core(lang)
+        by_alg: dict[str, list[dict[str, Any]]] = {}
+        for x in budget:
+            by_alg.setdefault(x["algorithm"], []).append(x)
+        for a, xs in by_alg.items():
+            if lang == "tr":
+                at = ", ".join(f"{fmt_num(x['nodes'], 0, lang)} düğümde {x['total']} örneğin {x['unsolved']} tanesinde" for x in xs)
+                s += f" {algo_title(a, lang)} etiket bütçesini {at} aştı (bunlar çözümsüz sayılmaz; hızlanmalar iki algoritmanın da çözdüğü örneklerden hesaplanır)."
+            else:
+                at = ", ".join(f"{x['unsolved']} of {x['total']} instances at {fmt_num(x['nodes'], 0, lang)} nodes" for x in xs)
+                s += f" {algo_title(a, lang)} ran out of its label budget on {at} (not counted as infeasible; speed-ups use the instances both solved)."
+        return s
+
+    def finding_core(lang: str) -> str:
         b, c = sp.get("bls-astar"), sp.get("cfp-astar")
         if not b and not c:
             fastest = min(series, key=lambda s: s["points"][-1]["runtime_ms"]) if series else None
@@ -639,7 +663,7 @@ def _sec_scalability(exp: Mapping[str, Any], checks: _Checks, ctx: Mapping[str, 
         return s + "; but " + " and ".join(f"{algo_title(fast, lang)} and {algo_title(fast.replace('-astar', ''), lang)} disagree on {k} of {m} instances"
                                            for fast, (k, m) in bad.items()) + " (see the exactness checks)."
 
-    return {"data": {"series": series, "speedup": speedup, "sizes": sizes, "max_nodes": nmax,
+    return {"data": {"series": series, "speedup": speedup, "sizes": sizes, "max_nodes": nmax, "budget": budget,
                      "headline_nodes": (sp.get("bls-astar") or sp.get("cfp-astar") or {}).get("nodes")},
             "finding": _both(finding),
             "facts": {"speedup": {k: v["speedup"] for k, v in sp.items()},

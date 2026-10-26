@@ -289,6 +289,15 @@
     c1.foot.textContent = I.lang === 'tr'
       ? `nokta: ${Math.max(...d.series[0].points.map((p) => p.n))} örneğin ortalaması · göstergedeki bir algoritmanın üzerine gelin: en küçük–en büyük aralığı`
       : `dot: mean of ${Math.max(...d.series[0].points.map((p) => p.n))} instances · hover an algorithm in the legend for its min–max range`;
+    // searches stopped by their label budget: the dot averages only the instances they solved
+    const lim = (d.budget || []).map((b) => (I.lang === 'tr'
+      ? `${I.algo(b.algorithm)} ${I.num(b.nodes, 0)} düğümde ${b.total} örneğin ${b.unsolved} tanesinde etiket bütçesini aştı`
+      : `${I.algo(b.algorithm)} hit its label budget on ${b.unsolved} of ${b.total} instances at ${I.num(b.nodes, 0)} nodes`));
+    if (lim.length) {
+      c1.foot.textContent += I.lang === 'tr'
+        ? ` · ${lim.join('; ')} (nokta yalnızca çözülen örneklerin ortalamasıdır)`
+        : ` · ${lim.join('; ')} (the dot averages the solved instances only)`;
+    }
     c3.foot.hidden = !(d.speedup || []).length;
     c3.foot.textContent = I.t('sc_geo');
   }
