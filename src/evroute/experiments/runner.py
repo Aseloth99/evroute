@@ -110,8 +110,8 @@ def exp_scalability(out: Path, quick: bool) -> dict[str, Any]:
                 if p is None:
                     continue
                 rows.append(plan_row(p, nodes=base.network.num_nodes, pair=i))
+        write_csv(out / "results.csv", rows)  # after every size: a long run keeps what it measured
         print(f"  scalability: {base.network.num_nodes} nodes done")
-    write_csv(out / "results.csv", rows)
     summary = {}
     for a in algos:
         xs, ys, ss = [], [], []
@@ -360,7 +360,16 @@ EXPERIMENTS: dict[str, Callable[[Path, bool], dict[str, Any]]] = {
 }
 
 
-def run_experiments(names: list[str] | None = None, out_dir: Path = Path("results"), quick: bool = False) -> dict[str, Any]:
+def run_experiments(
+    names: list[str] | None = None,
+    out_dir: Path = Path("results"),
+    quick: bool = False,
+    *,
+    panel: bool = True,
+    lang: str = "tr",
+) -> dict[str, Any]:
+    """Run ``names`` (default: all) into ``out_dir``; also write the interactive
+    ``results.html`` dashboard (:mod:`evroute.viz.results`) unless ``panel`` is false."""
     names = names or list(EXPERIMENTS)
     unknown = [n for n in names if n not in EXPERIMENTS]
     if unknown:
@@ -383,6 +392,14 @@ def run_experiments(names: list[str] | None = None, out_dir: Path = Path("result
         print(f"[{name}] {status} in {dt:.1f} s")
         report[name] = {"status": status, "seconds": round(dt, 2), "result": res}
     write_json(ensure_dir(Path(out_dir)) / "report.json", report)
+    if panel:
+        try:
+            from ..viz.results import build_results_html
+
+            path = build_results_html(out_dir, Path(out_dir) / "results.html", lang=lang)
+            print(f"results panel: {path}")
+        except Exception as exc:  # the panel is a convenience; never lose the run for it
+            print(f"results panel failed: {exc!r}")
     return report
 
 
@@ -391,8 +408,10 @@ def main() -> None:  # pragma: no cover
     ap.add_argument("names", nargs="*", help=f"any of: {', '.join(EXPERIMENTS)}")
     ap.add_argument("-o", "--out", default="results")
     ap.add_argument("--quick", action="store_true")
+    ap.add_argument("--no-panel", action="store_true", help="do not write results.html")
+    ap.add_argument("--lang", default="tr", choices=["tr", "en"], help="initial language of results.html")
     a = ap.parse_args()
-    run_experiments(a.names or None, Path(a.out), a.quick)
+    run_experiments(a.names or None, Path(a.out), a.quick, panel=not a.no_panel, lang=a.lang)
 
 
 if __name__ == "__main__":  # pragma: no cover

@@ -400,13 +400,15 @@ countries with 2 000-40 000 nodes), `random-geometric`, `grid-small`.
 
 Ten seeded experiments reproduce every table and figure of the accompanying
 paper. Each writes `results.csv`, `summary.json`, a booktabs `table.tex` and
-PDF/PNG figures into `<out>/<experiment>/`.
+PDF/PNG figures into `<out>/<experiment>/`; the run ends with
+`<out>/results.html`, an interactive offline dashboard of everything it
+measured (computed findings, exactness checks, charts, tables, CSV downloads).
 
 ```bash
 evroute experiments --quick -o results/            # smoke size: ~1 minute
-evroute experiments -o results/                    # full size
+evroute experiments -o results/ --lang en          # full size, English dashboard
 evroute experiments optimality-gap robustness -o results/
-python -m evroute.viz.results results/ -o results/results.html --lang en   # interactive dashboard
+evroute results results/ --lang en                 # rebuild the dashboard of a results folder
 evroute gallery -o docs/img                        # the seaborn figures of this README
 ```
 

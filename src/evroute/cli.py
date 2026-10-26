@@ -11,7 +11,8 @@ Examples::
     evroute serve turkey-karaman-istanbul
     evroute gallery -o docs/img
     evroute robustness turkey-izmir-erzurum -n 2000
-    evroute experiments --quick -o results/
+    evroute experiments --quick -o results/      # also writes results/results.html
+    evroute results results/ --lang en
 
 Every command accepts a preset name or the path of a scenario ``.json`` file.
 """
@@ -260,8 +261,15 @@ def cmd_robustness(args: argparse.Namespace) -> int:
 def cmd_experiments(args: argparse.Namespace) -> int:
     from .experiments.runner import run_experiments
 
-    run_experiments(args.names or None, out_dir=Path(args.out), quick=args.quick)
+    run_experiments(args.names or None, out_dir=Path(args.out), quick=args.quick, panel=not args.no_panel, lang=args.lang)
     return 0
+
+
+def cmd_results(args: argparse.Namespace) -> int:
+    from .viz.results import main as results_main
+
+    argv = [args.results_dir, "--lang", args.lang] + (["-o", args.out] if args.out else [])
+    return results_main(argv + (["--title", args.title] if args.title else []))
 
 
 def cmd_export(args: argparse.Namespace) -> int:
@@ -344,7 +352,16 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("names", nargs="*", help="experiment ids (default: all)")
     p.add_argument("-o", "--out", default="results")
     p.add_argument("--quick", action="store_true", help="small instances, fast smoke run")
+    p.add_argument("--no-panel", action="store_true", help="do not write the results.html dashboard")
+    p.add_argument("--lang", default="tr", choices=["tr", "en"], help="initial language of results.html")
     p.set_defaults(func=cmd_experiments)
+
+    p = sub.add_parser("results", help="build the interactive results dashboard of an experiments folder")
+    p.add_argument("results_dir", nargs="?", default="results")
+    p.add_argument("-o", "--out", help="output HTML (default: <results_dir>/results.html)")
+    p.add_argument("--lang", default="tr", choices=["tr", "en"])
+    p.add_argument("--title")
+    p.set_defaults(func=cmd_results)
 
     p = sub.add_parser("export-scenario", help="save a scenario as JSON")
     _scenario_options(p)

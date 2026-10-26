@@ -44,7 +44,7 @@ Invariants (ids as in ``tests/fuzz_report.md``)
 * **I9 brute force** -- on tiny digraphs (<= 7 nodes, <= 2 stations) an
   exhaustive enumeration of walks (each node at most twice) x up to two stops
   per node visit x targets equals BLS, its Pareto front equals the planner's
-  front, and CFP is no slower than the best one-stop-per-visit route.
+  front, and CFP is no slower than the enumerated optimum (time objective).
 * **I10 metamorphic** -- relabelling nodes/edges/stations, duplicating a
   station, adding a slower parallel road, moving the departure without
   queues: same optimum; more initial energy, an extra station, an extra speed
@@ -560,11 +560,6 @@ def check_bookkeeping(P: PreparedScenario, plan: RoutePlan) -> list[str]:
     return bad
 
 
-def _one_stop_per_visit(plan: RoutePlan) -> bool:
-    pos = [s.position for s in plan.stops]
-    return len(pos) == len(set(pos))
-
-
 def _all_plans(plans: dict[str, RoutePlan]) -> list[tuple[str, RoutePlan]]:
     out = []
     for name, p in plans.items():
@@ -651,7 +646,7 @@ def check_instance(inst: Instance, budget: Budget = FAST, tally: Tally | None = 
         check_plan(tally, P, p, f"{name} {tag}", exact)
 
     # ---------------------------------------------------------------- I2
-    def same(a: str, b: str, rel: float, abs_: float) -> None:
+    def same(a: str, b: str, rel: float, abs_: float, value: Callable[[RoutePlan], float] | None = None) -> None:
         if a in limited or b in limited or a not in plans or b not in plans:
             return
         pa, pb = plans[a], plans[b]
@@ -659,13 +654,15 @@ def check_instance(inst: Instance, budget: Budget = FAST, tally: Tally | None = 
                            lambda: f"{a} feasible={pa.feasible} vs {b} feasible={pb.feasible} {tag}"):
             return
         if pa.feasible:
-            tally.check("I2", _close(pa.internal_objective, pb.internal_objective, rel, abs_),
-                        lambda: f"{a}={pa.internal_objective!r} vs {b}={pb.internal_objective!r} {tag}")
+            f = value or (lambda p: p.internal_objective)
+            tally.check("I2", _close(f(pa), f(pb), rel, abs_), lambda: f"{a}={f(pa)!r} vs {b}={f(pb)!r} {tag}")
 
     same("bls", "bls-astar", 1e-9, 1e-9)
     same("bls", "bls-astar/basic", 1e-9, 1e-9)
-    same("cfp", "cfp-astar", 1e-9, TOL_S)
-    same("cfp", "cfp-astar/basic", 1e-9, TOL_S)
+    # CFP minimises the trip time, also under objective "cost" -- its internal objective is then the
+    # evaluated cost of one of possibly several fastest plans, which may differ between the two orders
+    same("cfp", "cfp-astar", 1e-9, TOL_S, lambda p: p.total_time_s)
+    same("cfp", "cfp-astar/basic", 1e-9, TOL_S, lambda p: p.total_time_s)
     check_potentials(tally, P, inst.seed)
     check_options(tally, P, plans, limited, inst, budget)
 
@@ -698,12 +695,10 @@ def check_instance(inst: Instance, budget: Budget = FAST, tally: Tally | None = 
     # ---------------------------------------------------------------- I5
     if cfp_time is not None:
         for name, p in _all_plans(plans):
-            if p.feasible and _one_stop_per_visit(p):
+            if p.feasible:
                 tally.check("I5", p.total_time_s >= cfp_time - TOL_S - 1e-9 * cfp_time,
                             lambda: f"{name} time {p.total_time_s!r} < cfp {cfp_time!r} "
                                     f"(waits {'td' if P.time_dependent else 'static'}) {tag}")
-            elif p.feasible:
-                tally.skip("I5 (two stops at one node visit)")
 
     # ---------------------------------------------------------------- I6
     any_feasible = [n for n, p in plans.items() if p.feasible]
@@ -963,7 +958,7 @@ def check_pareto(tally: Tally, sc: Scenario, P: PreparedScenario, par: RoutePlan
             if nd is None:
                 break
             q = evaluate(P, nd)
-            if q.feasible and _one_stop_per_visit(q):
+            if q.feasible:
                 y = _crit(q)
                 # (equally fast up to float noise counts since BUG-1 is fixed)
                 tally.check("I11", not (_dominates_tol(y, x, 1e-7) and y[0] <= x[0] * (1.0 + TIE_RTOL)),
@@ -1341,7 +1336,7 @@ def neighbours(P: PreparedScenario, d: PlanDecision, rng: random.Random, continu
 
 
 def check_local_optimality(tally: Tally, P: PreparedScenario, plan: RoutePlan, name: str, seed: int, n: int) -> None:
-    """I11: no feasible neighbour (one stop per node visit; grid targets for BLS) beats the optimum."""
+    """I11: no feasible neighbour (grid targets for BLS) beats the optimum."""
     rng = random.Random(f"evroute-crossval-mut-{seed}-{name}")
     cont = name.startswith("cfp")
     best = plan.total_time_s if cont else plan.objective_value
@@ -1352,7 +1347,7 @@ def check_local_optimality(tally: Tally, P: PreparedScenario, plan: RoutePlan, n
             tally.skip("I11 (no applicable modification)")
             break
         q = evaluate(P, nd)
-        if not q.feasible or not _one_stop_per_visit(q):
+        if not q.feasible:
             continue
         v = q.total_time_s if cont else q.objective_value
         tally.checked["I11"] += 1
@@ -1382,8 +1377,8 @@ def _oracle_targets(P: PreparedScenario, s: int) -> list[float]:
 def brute_force(P: PreparedScenario, max_visits: int = 2, max_steps: int = 400_000, stops_per_visit: int = 1):
     """Exhaustive enumeration of walks (every node at most ``max_visits`` times)
     with at most ``stops_per_visit`` stops (at distinct stations) per node visit
-    to any target of the target set.  ``stops_per_visit=1`` is the model of CFP;
-    BLS, BLS-A* and Pareto allow consecutive stops at different stations (BUG-3).
+    to any target of the target set.  Every exact planner allows consecutive stops at
+    different stations of one node (BUG-3), i.e. ``stops_per_visit=2`` on a tiny digraph.
 
     Returns ``(best objective, best decision, (t, money, wear) of the
     non-dominated complete routes)``; ``None`` if the enumeration needs more
@@ -1474,10 +1469,9 @@ def _front_of(points: list[tuple[float, float, float]]) -> list[tuple[float, flo
 def check_brute_force(inst: Instance, tally: Tally | None = None) -> Tally:
     """I9 (and I1/I2 on the tiny instance).
 
-    BLS, BLS-A* and Pareto model consecutive stops at different stations of one node
-    (BUG-3, fixed for them), so their oracle enumerates up to two stops per node visit (a
-    tiny digraph has at most two stations); CFP is compared with the one-stop enumeration
-    (BUG-3 is open for CFP)."""
+    Every exact planner models consecutive stops at different stations of one node
+    (BUG-3), so the oracle enumerates up to two stops per node visit (a tiny digraph has at
+    most two stations); CFP, with continuous targets, may only be faster."""
     tally = tally if tally is not None else Tally()
     sc = build_scenario(inst)
     P = sc.prepare()
@@ -1512,21 +1506,14 @@ def check_brute_force(inst: Instance, tally: Tally | None = None) -> Tally:
         rp = evaluate(P, decision)
         tally.check("I9", rp.feasible and _close(rp.objective_value, value, 1e-9, 1e-9),
                     lambda: f"oracle decision replays to {rp.objective_value!r} != {value!r} {tag}")
-    # continuous charging can only help (against routes with one stop per node visit)
+    # continuous charging can only help (consecutive stops at one node included)
     c = _run(P, "cfp")
     check_plan(tally, P, c, f"cfp {tag}", True)
     if value < INF:
         tally.check("I9", c.feasible, lambda: f"cfp infeasible, brute force {value!r} {tag}")
         if P.objective == "time" and c.feasible:
-            one = value
-            if len({ch.position for ch in decision.charges}) < len(decision.charges):
-                r1 = brute_force(P)  # the optimum needs two stops at one node: enumerate one-stop routes
-                one = r1[0] if r1 is not None else None
-            if one is None:
-                tally.skip("I9 cfp (one-stop enumeration too large)")
-            else:
-                tally.check("I9", c.total_time_s <= one + TOL_S,
-                            lambda: f"cfp {c.total_time_s!r} > one-stop brute force {one!r} {tag}")
+            tally.check("I9", c.total_time_s <= value + TOL_S,
+                        lambda: f"cfp {c.total_time_s!r} > brute force {value!r} {tag}")
     # the Pareto front
     par = _run(P, "pareto")
     if value == INF:
@@ -1867,17 +1854,18 @@ def test_bug3_consecutive_stops_at_two_stations_beat_the_grid_optimum():
         assert p.objective_value <= double.objective_value + 1e-9, (name, p.objective_value, double.objective_value)
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "BUG-3 (CFP): CFP's guarantee covers routes with at most one stop per node visit only (module docs of "
-    "cfp.py when found: a label 'charged here ... spawns no further stop'); with zero setup, DC to 37.4 kWh then AC to the same "
-    "just-enough energy is 16 s faster than the 'exact' CFP optimum, and evaluate() accepts it"))
 def test_bug3_consecutive_stops_beat_the_continuous_optimum():
+    """Regression for BUG-3 (fixed in cfp.py): CFP spawned no stop from a label created by a
+    stop at the same node, so its 'exact' optimum covered one stop per node visit only.  With
+    zero setup, DC to 37.4 kWh (where the derated DC power falls below the AC power) and then
+    AC to the just-enough energy is 16 s faster than the best single stop."""
     P = _two_station_line("time", 0.0).prepare()
     c = _run(P, "cfp")
-    assert c.feasible and len(c.stops) == 1
-    need = c.stops[0].energy_out_kwh
+    assert c.feasible and [(s.position, s.station) for s in c.stops] == [(1, 0), (1, 1)]
+    need = c.stops[-1].energy_out_kwh
+    one = min(evaluate(P, PlanDecision(c.edges, c.levels, [ChargeDecision(1, s, need)])).total_time_s for s in (0, 1))
     double = evaluate(P, PlanDecision(c.edges, c.levels, [ChargeDecision(1, 0, 37.4), ChargeDecision(1, 1, need)]))
-    assert double.feasible
+    assert double.feasible and double.total_time_s < one - 10.0
     for name in ("cfp", "cfp-astar"):
         assert _run(P, name).total_time_s <= double.total_time_s + TOL_S
 

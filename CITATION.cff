@@ -4,6 +4,7 @@ title: "EVRoute: exact, battery-, queue- and degradation-aware route planning fo
 version: 1.0.0
 date-released: 2026-10-24
 license: MIT
+repository-code: "https://github.com/Aseloth99/evroute"
 authors:
   - family-names: "Açık"
     given-names: "Mustafa"

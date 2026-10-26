@@ -28,6 +28,11 @@ dependencies = []
 plot = ["matplotlib>=3.7", "seaborn>=0.13"]
 dev = ["pytest>=7", "matplotlib>=3.7", "seaborn>=0.13"]
 
+[project.urls]
+Homepage = "https://github.com/Aseloth99/evroute"
+Documentation = "https://github.com/Aseloth99/evroute/blob/main/docs/index.md"
+Issues = "https://github.com/Aseloth99/evroute/issues"
+
 [project.scripts]
 evroute = "evroute.cli:main"
 
