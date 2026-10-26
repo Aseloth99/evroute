@@ -416,7 +416,8 @@ evroute gallery -o docs/img                        # the seaborn figures of this
 ```
 
 Highlights of a full run (all experiments except scalability: 3 minutes on
-the machine above):
+the machine above; scalability alone takes about 5 hours, almost all of it
+in the Dijkstra-order baselines on the largest networks):
 
 | experiment | finding |
 |---|---|
@@ -429,7 +430,7 @@ the machine above):
 | `robustness` | İzmir → Erzurum, 2 000 Monte Carlo runs: P(strand) 1.25 % and P(reserve breach) 56 % at safety factor 1.0; 0 % and 9.7 % at 1.1 (+21 min), 0 % and 0.4 % at 1.2 (+36 min) |
 | `eco-speed` | allowing 90 / 80 % speeds shortens 24 of 80 trips, by up to 2.8 min: driving a leg slower can save more charging time than it costs |
 | `vehicles` | Karaman → İstanbul: 7 h 50 min (75 kWh sedan, 2 stops) to 10 h 57 min (27 kWh city car, 5 stops) |
-| `scalability` | runtime and labels vs network size on synthetic countries of 1 000-40 000 nodes |
+| `scalability` | synthetic countries of 1 000-40 000 nodes, 8 trips each: BLS-A\* answers in 0.03 s → 1.7 s and CFP-A\* in 0.03 s → 2.5 s on average; Dijkstra-order BLS and CFP are already 20× and 35× slower at 10 000 nodes and run out of their label budgets on 3 / 4 of 8 trips at 20 000 nodes (CFP: 6 of 8 at 40 000); the station graph needs 8 minutes per trip at 40 000 nodes to build its meta-graph |
 
 ## How correctness is verified
 

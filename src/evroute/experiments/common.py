@@ -111,6 +111,8 @@ def plan_row(plan: RoutePlan, **extra: Any) -> dict[str, Any]:
         "runtime_ms": (st.runtime_s * 1000.0) if st else math.nan,
         "settled": st.settled if st else 0,
         "generated": st.generated if st else 0,
+        # "limit": the search hit its label budget, so "infeasible" means "not solved", not "no route"
+        "status": str((st.extra or {}).get("status", "")) if st else "",
     }
     return row
 

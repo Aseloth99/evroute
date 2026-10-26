@@ -438,7 +438,9 @@ evroute gallery -o docs/img                        # bu README'deki seaborn graf
 ```
 
 Tam bir koşudan öne çıkanlar (ölçeklenebilirlik dışındaki tüm deneyler
-yukarıdaki makinede 3 dakika sürer):
+yukarıdaki makinede 3 dakika sürer; ölçeklenebilirlik tek başına yaklaşık 5
+saat sürer ve bunun neredeyse tamamı en büyük ağlardaki Dijkstra sıralı
+temel yöntemlere gider):
 
 | deney | bulgu |
 |---|---|
@@ -451,7 +453,7 @@ yukarıdaki makinede 3 dakika sürer):
 | `robustness` | İzmir → Erzurum, 2 000 Monte Carlo koşusu: güvenlik katsayısı 1,0'da P(yolda kalma) %1,25 ve P(rezerv aşımı) %56; 1,1'de %0 ve %9,7 (+21 dk), 1,2'de %0 ve %0,4 (+36 dk) |
 | `eco-speed` | %90 / %80 hızlara izin vermek 80 yolculuğun 24'ünü en çok 2,8 dk kısaltır: bir etabı daha yavaş sürmek, kaybettirdiğinden daha fazla şarj süresi kazandırabilir |
 | `vehicles` | Karaman → İstanbul: 7 sa 50 dk (75 kWh sedan, 2 mola) ile 10 sa 57 dk (27 kWh şehir otomobili, 5 mola) arası |
-| `scalability` | 1 000-40 000 düğümlü sentetik ülkelerde ağ boyutuna göre çalışma süresi ve etiket sayısı |
+| `scalability` | 1 000-40 000 düğümlü sentetik ülkeler, her birinde 8 yolculuk: BLS-A\* ortalama 0,03 sn → 1,7 sn'de, CFP-A\* 0,03 sn → 2,5 sn'de yanıt veriyor; Dijkstra sırasındaki BLS ve CFP 10 000 düğümde zaten 20 ve 35 kat yavaş, 20 000 düğümde 8 yolculuğun 3'ünde / 4'ünde etiket bütçesini aşıyor (CFP 40 000 düğümde 8'in 6'sında); istasyon grafı 40 000 düğümde meta-grafını kurmak için yolculuk başına 8 dakika harcıyor |
 
 ## Doğruluğun denetlenmesi
 
