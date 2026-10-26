@@ -266,6 +266,7 @@ class StationGraphPlanner(Planner):
     """
 
     name = "station-graph"
+    OPTIONS = ("charge_to_soc", "detour_factor", "widen")
     title = "Station graph (fixed charge target)"
     exact = "heuristic"
     description = (

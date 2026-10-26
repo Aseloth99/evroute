@@ -225,6 +225,7 @@ class NaivePlanner(Planner):
     """
 
     name = "naive"
+    OPTIONS = ("metric",)
     title = "Naive fastest path"
     exact = "heuristic"
     description = (

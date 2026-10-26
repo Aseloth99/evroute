@@ -77,7 +77,7 @@ def _suite(i: int) -> dict:
         if name == "cfp" and not HAVE_CFP:
             continue
         out[name] = get_planner(name).plan(P)
-    out["bls1"] = get_planner("bls", charge_step_soc=0.01).plan(
+    out["bls1"] = get_planner("bls").plan(
         _scenario(CONFIGS[i], charge_step_soc=0.01).prepare()
     )
     return out
@@ -602,7 +602,7 @@ def test_genetic_supports_the_cost_objective():
     assert plan.feasible and plan.objective == "cost"
     assert plan.objective_value == pytest.approx(plan.generalized_cost)
     assert check_objective(plan)
-    ref = get_planner("bls", charge_step_soc=0.01).plan(_scenario(CONFIGS[3], objective="cost", charge_step_soc=0.01).prepare())
+    ref = get_planner("bls").plan(_scenario(CONFIGS[3], objective="cost", charge_step_soc=0.01).prepare())
     assert plan.generalized_cost >= ref.generalized_cost - 0.05 * ref.generalized_cost
 
 

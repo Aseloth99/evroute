@@ -1426,6 +1426,7 @@ class LabelSettingPlanner(Planner):
     """
 
     name = "bls"
+    OPTIONS = ("max_labels", "targets")
     title = "BLS (label setting)"
     exact = "grid"
     objectives = ("time", "cost")
@@ -1529,6 +1530,7 @@ class LabelAStarPlanner(LabelSettingPlanner):
     """
 
     name = "bls-astar"
+    OPTIONS = ("max_labels", "targets", "potential")
     title = "BLS-A*"
     exact = "grid"
     objectives = ("time", "cost")

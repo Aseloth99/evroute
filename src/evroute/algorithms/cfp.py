@@ -1488,6 +1488,7 @@ class CFPPlanner(Planner):
     """
 
     name = "cfp"
+    OPTIONS = ("eps", "exact_switching", "max_labels")
     title = "CFP (charging function propagation)"
     exact = "exact"
     objectives = ("time",)
@@ -1662,6 +1663,7 @@ class CFPAStarPlanner(CFPPlanner):
     """
 
     name = "cfp-astar"
+    OPTIONS = ("eps", "exact_switching", "max_labels", "potential")
     title = "CFP-A*"
     description = (
         "CFP with an A* key: earliest feasible time plus a consistent lower bound "

@@ -1072,6 +1072,7 @@ class ParetoPlanner(Planner):
     """
 
     name = "pareto"
+    OPTIONS = OPTIONS
     title = "Pareto label setting"
     exact = "grid"
     objectives = ("time", "cost")

@@ -342,6 +342,7 @@ class GreedyPlanner(Planner):
     """
 
     name = "greedy"
+    OPTIONS = ("charge_to_soc", "final_leg", "max_stops")
     title = "Greedy (charge when needed)"
     exact = "heuristic"
     description = (

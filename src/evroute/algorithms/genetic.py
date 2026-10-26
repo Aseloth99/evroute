@@ -528,6 +528,10 @@ class GeneticPlanner(Planner):
     """
 
     name = "genetic"
+    OPTIONS = (
+        "crossover_rate", "detour_factor", "elite", "generations", "max_stops", "mutation_rate",
+        "patience", "penalty_weight", "population", "seed", "seed_greedy", "tournament",
+    )
     title = "Genetic algorithm"
     exact = "heuristic"
     objectives = ("time", "cost")
