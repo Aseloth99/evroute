@@ -94,8 +94,9 @@ route = plan(sc, "pareto", criteria=("time", "money"), max_labels=1_000_000)
 route = get_planner("bls-astar", potential="basic").plan(sc, trace=True)
 ```
 
-- **Scenarios** (`evroute.scenario.Scenario`) are immutable and
-  serialisable: `with_query(origin=..., initial_soc=..., departure_s=...)`,
+- **Scenarios** (`evroute.scenario.Scenario`) are meant to be used as
+  immutable values (`prepare()` notices in-place changes, but the `with_*`
+  helpers are the intended way) and are serialisable: `with_query(origin=..., initial_soc=..., departure_s=...)`,
   `with_conditions(temperature_c=..., wind_speed_ms=..., preconditioning=...)`,
   `with_preferences(objective=..., reserve_soc=..., speed_factors=...,
   charge_step_soc=..., safety_factor=...)`, `with_(vehicle=...)`;

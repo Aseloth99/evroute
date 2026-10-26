@@ -17,14 +17,11 @@ beautiful animated viewer.  Read this file completely before writing code.
 * **Units are fixed** (see `src/evroute/units.py`): m, s, kWh, kW, m/s,
   currency, SoC fractions.  Never mix.
 * **Determinism**: anything random takes a `seed` and uses `random.Random(seed)`.
-* Never edit a file you do not own (see your task).  If the foundation needs a
-  change, describe it in your final report instead of editing it.
-* Do **not** run any `git` command.  Run only your own test files
-  (`python3 -m pytest tests/test_<yours>.py -q`), plus
-  `tests/test_foundation.py` if you want — other agents are writing other
-  modules at the same time and their tests may be mid-edit.
-* The package is installed in editable mode (`pip install -e .` already done),
-  so `import evroute` works from anywhere.
+* Install in editable mode (`pip install -e ".[dev]"`, see
+  [`CONTRIBUTING.md`](../CONTRIBUTING.md)).  Run the tests of the modules you
+  touch (`python -m pytest tests/test_<module>.py -q`) and, before you change
+  an algorithm, the cross-validation suite (`tests/test_crossval.py`, fast and
+  slow tier).
 
 ## 1. Model summary (implemented in the foundation)
 
@@ -77,7 +74,9 @@ P.vot_per_s, P.w_money, P.w_deg, P.drive_soh_per_kwh, P.p_max, P.min_money_rate,
 2. Energy at every node of the path — on arrival and on departure — must be
    `>= P.e_min` (tolerance 1e-6 kWh).  The only exception is the origin's
    *arrival* state `P.e_init`, which may be below the reserve if the vehicle
-   charges at the origin before leaving.
+   charges at the origin before leaving (nothing is checked between
+   consecutive stops, so a stop there may end below the reserve when another
+   stop at the origin follows).
 3. Arrival at the destination needs `>= P.e_dest_min`.
 4. A charging stop at station `s` reached at trip time `t` with energy `x`
    to target `y` costs `P.wait_s(s, t) + P.setup_s[s] + P.cf[s].charge_time(x, y)`
@@ -114,45 +113,77 @@ P.vot_per_s, P.w_money, P.w_deg, P.drive_soh_per_kwh, P.p_max, P.min_money_rate,
 ### 2.1 BLS / BLS-A* (labels.py)
 
 State = (node, energy) with *continuous* energy (no rounding of consumption).
-Labels: `(key, t, g, e, node, parent, how)`.  Time objective: dominance at a
-node `t' <= t and e' >= e`.  Cost objective: `g' <= g and e' >= e`, and also
-`t' <= t` when `P.time_dependent` (because waits depend on time).  Settled
-Pareto sets per node; for 2-D use a staircase with `bisect`.
+Labels: `(key, t, g, e, node, parent, how)`.  Dominance at a node: time
+objective `t' <= t and e' >= e`; cost objective with static waits
+`g' <= g and e' >= e`; cost objective with time-dependent waits
+(`P.time_dependent`) `m' <= m, t' <= t and e' >= e` with
+`m = g - P.vot_per_s * t`, the money and wear spent so far (comparing
+`(g, t, e)` is unsound: a falling FIFO queue can absorb the head start of an
+earlier label while its money disadvantage persists, `docs/algorithms.md`
+§1).  One settled Pareto set per node; 2-D sets are staircases with
+`bisect`, 3-D sets `_Pareto3`.
 Driving: every `P.edge_options[e]`.  Charging: when a label at a station node
-is settled and it was not produced by charging at that node, for every
-station `s` at the node and every target `y` in
+is settled, for every station `s` at the node except the one whose stop
+created the label (consecutive stops at *other* stations of a node are
+allowed, any number of times) and every target `y` in
 `targets = P.target_grid ∪ {interior breakpoints of P.cf[s] ≤ e_charge_cap}`
-with `y > e`, push a charged label.  A* key = `primary + LowerBounds.h(v, e)`.
-Stop when the first label at the destination with `e >= P.e_dest_min` is
-popped.  Options: `targets="grid+breaks"|"grid"`, `max_labels` safeguard.
+with `y > e`, push a charged label (targets below the reserve only at a node
+with several stations, i.e. at the origin with `e_init < e_min`).  A* key =
+`primary + h(v, e)` with the default potential `AStarPotential.tight`
+(`potential="basic"`: `LowerBounds.h(v, e)`).  Stop when the first label at
+the destination with `e >= P.e_dest_min` is popped.  Options:
+`targets="grid+breaks"|"grid"`, `max_labels` safeguard, `potential`
+(BLS-A\*).  Details and proofs: module docs of `labels.py`,
+`docs/algorithms.md` §1-3.
 
 ### 2.2 CFP (cfp.py) — continuous charging (time objective)
 
-Label at node `v`: last station `s` (or origin), `t0` (trip time if no extra
-charging at `s`), `b_s` (energy when charging started at `s`), and the path
-consumption profile `(in, cost, out)` from `s` to `v`
-(`f(x) = min(x - cost, out)` for `x >= in`).  The label's function
-`B(t) = f(x(t))`, `x(t) = min(F⁻¹(F(b_s) + t - t0), cap)` is piecewise linear,
-concave, non-decreasing.  Edge extension with `(τ, c)`:
-`in' = max(in, e_min + cost + c)`, `cost' = cost + c`, `out' = min(out - c, capacity)`,
-infeasible if `out' < e_min` or the needed `in'` exceeds the max reachable `x`.
-At a station node, a settled label spawns one new label per breakpoint
-`t'_j` of `B` (switch from charging at `s` to charging at the new station):
-`t0 = t'_j + wait(t'_j) + setup`, `b = B(t'_j)`, identity profile.  Queue key =
-earliest feasible time `t_feas` (+ heuristic at `B(t_feas)` for A*).
-Dominance: single-label pointwise `B' >= B` (checked on the union of
-breakpoints and at infinity, with `t_feas' <= t_feas`).  At the destination,
-push a final entry with key = min `t` with `B(t) >= e_dest_min`; the first
-final entry popped is optimal.  Exact when waits are static
-(`P.time_dependent == False`), a sound heuristic otherwise.
+Label at node `v`: last station `s` (or `-1`, the origin), `t0` (trip time at
+`v` if nothing beyond `b_s` is charged at `s`; wait and setup included),
+`b_s` (energy when charging started at `s`), and the path consumption profile
+`(in, cost, out)` from `s` to `v` (`f(x) = min(x - cost, out)` for
+`x >= in`).  The label's function `B(t) = f(x(t))`,
+`x(t) = min(F⁻¹(F(b_s) + t - t0), max(cap, b_s))`, is piecewise linear and
+non-decreasing; it is concave only if the power of `s` does not increase with
+the energy (the DC curves of the presets ramp up at low SoC).  Edge extension
+with `(τ, c)`: `t0' = t0 + τ`, `in' = max(in, e_min + cost + c)`,
+`cost' = cost + c`, `out' = min(out - c, capacity)`, infeasible if
+`out' < e_min` or the needed `in'` exceeds the max reachable `x`.
+At a station node, a settled label spawns, for every station `s2` of the node
+other than its own `s` (consecutive stops at other stations are allowed), one
+stop label per *switch candidate* `tj`: `t0 = tj + wait(tj) + setup`,
+`b = B(tj)`, identity profile.  The candidates (option `exact_switching=True`,
+the default) are the breakpoints of `B`, the times at which `B` crosses an
+energy where the power of `s2` increases, and the knots of the wait profile of
+`s2`; `exact_switching=False` uses the breakpoints only (the textbook set,
+exact for concave charging functions and static waits).  A label created by a
+stop skips the candidate at its own `t0`, and sibling candidates that an
+earlier one dominates are not created.  Queue key: the earliest feasible time
+`t_feas` (CFP), or the minimum of `t + h(v, B(t))` over the label (CFP-A\*,
+default potential `"tight"`).  Dominance: set dominance -- a popped label is
+discarded if the upper envelope of the settled labels of its node lies above
+its function (`_Envelope`, exact on the union of breakpoints; constant labels
+in a staircase), with energies capped at the completion energy `need[v]`.
+Destination: the arrival time of every label generated there (least
+`t >= t_feas` with `B(t) >= e_dest_min`, closed form) updates an incumbent
+kept outside the heap; the search stops when the smallest key reaches it.
+Exact when waits are static, or FIFO time-dependent with
+`exact_switching=True`; `stats.extra["optimality"]` is then `"proven"`
+(unless `max_labels` was hit).
+Details and proofs: module docs of `cfp.py`, `docs/algorithms.md` §4.
 
 ### 2.3 Pareto (pareto.py)
 
 Martins-style multi-criteria label setting over `(t, money, wear, -e)` with the
-same transitions as BLS (charging targets on the grid).  Optional
-target-pruning with lower bounds against the destination front and optional
-ε-dominance.  Return the plan with the minimum generalised cost and put all
-evaluated front members (sorted by time) into `plan.alternatives`.
+same transitions as BLS (charging targets on the target set, consecutive
+stops at different stations of a node included).  Goal-directed order
+(`t + T_lb(v)`; `goal_directed=False` restores plain Martins), pruning
+against the destination front with consistent completion bounds, optional
+ε-dominance (`epsilon`, `epsilon_scope`) and two criteria
+(`criteria=("time", "money")`).  Return the front member with the best
+scenario objective (minimum trip time for `"time"`, minimum generalised cost
+for `"cost"`) and put all evaluated front members (sorted by time) into
+`plan.alternatives`.
 
 ## 3. Viewer data contract (`evroute-viewer/1`)
 
@@ -189,11 +220,15 @@ evaluated front members (sorted by time) into `plan.alternatives`.
   cross-validation on small random instances (`grid_scenario(rows, cols, seed=...)`
   with low `initial_soc` so that charging is needed):
   * `bls` and `bls-astar` return identical objective values;
-  * `cfp` time ≤ `bls` time (+1e-6) on static-wait instances, and the gap
-    shrinks as `charge_step_soc` shrinks;
+  * `cfp` time ≤ `bls` time (+1e-6), and the gap shrinks as
+    `charge_step_soc` shrinks;
   * heuristics (`greedy`, `station-graph`, `genetic`) are never better than
     `bls` on the same target grid... *unless* they use targets off the grid
     — compare them against `cfp` instead;
-  * on tiny instances, a brute-force enumeration over simple paths and grid
-    targets agrees with `bls`.
+  * on tiny instances, a brute-force enumeration of walks (each node at most
+    twice), up to two stops per node visit (consecutive stops at different
+    stations) and targets on the target set agrees with `bls`, `bls-astar` and
+    the Pareto front, and `cfp` is no slower.
+* `tests/test_crossval.py` runs all of these, and more, on seeded random
+  instances (summary in `tests/fuzz_report.md`).
 * Keep the default test-suite under ~60 s; mark long tests `@pytest.mark.slow`.

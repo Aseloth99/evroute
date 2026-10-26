@@ -1,11 +1,12 @@
 """Vehicle model: longitudinal-dynamics parameters, charging curve, ageing.
 
 The charging behaviour is modelled the way the EV routing literature does it
-(Montoya et al. 2017; Baum et al. 2020): the vehicle's maximum charging power
+(Montoya et al. 2017; Baum et al. 2019): the vehicle's maximum charging power
 is *piecewise constant over SoC bins*.  The resulting charging function
-"SoC as a function of time at the charger" is then piecewise linear and
-concave, which is exactly what the exact algorithms in
-:mod:`evroute.algorithms` exploit.
+"SoC as a function of time at the charger" is then piecewise linear, and
+concave wherever the power does not rise with the SoC (every preset ramps up
+over the first 5-15 % SoC); the exact algorithms in :mod:`evroute.algorithms`
+handle both shapes.
 
 Published curves are usually given as a polyline (power vs SoC).
 :meth:`ChargingCurve.from_points` converts such a polyline into bins using the

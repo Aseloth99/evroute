@@ -164,7 +164,7 @@ for s in route.stops:
     print(f"  {s.station_name:12} {s.soc_in:4.0%} -> {s.soc_out:4.0%}"
           f"  queue {s.wait_s / 60:2.0f} min  charge {s.charge_s / 60:2.0f} min")
 
-# Ya koşullar değişirse? Senaryolar değiştirilemez; with_* değiştirilmiş bir kopya döndürür.
+# Ya koşullar değişirse? Senaryoyu değiştirmeyin; with_* değiştirilmiş bir kopya döndürür.
 print(plan(scenario.with_conditions(temperature_c=-5), "cfp-astar"))   # kış, sürekli şarj
 print(plan(scenario.with_preferences(objective="cost"), "bls-astar"))  # süre + para + batarya yıpranması
 
@@ -341,7 +341,9 @@ profilini saklar. Etiketin *fonksiyonu* `B(t)` — araç `j`'den, mevcut düğü
 doğrusal ve azalmayan bir fonksiyondur. Bir kenar boyunca yalnızca profil
 değişir (kapalı formda); yeni bir istasyonda ise etiket, `B`'nin kırılma
 noktalarında durak etiketleri üretir: `j`'de şarj etmekten yeni istasyonda
-şarj etmeye optimal geçiş tam da bu noktalardadır (Lemma 3). Baskınlık
+şarj etmeye optimal geçiş tam da bu noktalardadır (Lemma 3; içbükey olmayan
+eğrilerde gücün yükseldiği kırılmalar ve zamana bağlı beklemelerin düğüm
+noktaları da eklenir). Baskınlık
 sınaması, bir etiketi kendi düğümünde kesinleşmiş etiketlerin üst zarfıyla
 karşılaştırır. Hedef için öncelik kuyruğundan çekilen ilk kayıt, **tüm** şarj
 miktarları üzerinden en hızlı rotadır. İspatlar ve genişletmeler (konkav
@@ -363,7 +365,8 @@ olmayan eğriler, zamana bağlı kuyruklar, art arda duraklar):
 - **Şarj** — şarj ünitesinin gücüyle sınırlanan araç şarj eğrileri (SoC
   aralıklarında parçalı sabit güç) ve ön ısıtma yapılmamış soğuk bir
   bataryada düşürülen DC gücü → kesin, parçalı doğrusal şarj fonksiyonları
-  (olağan eğriler için içbükey/konkav); şarj kayıplarını da içeren kWh başına
+  (düşük SoC'deki güç artışının ötesinde içbükey/konkav; CFP iki biçimi de
+  kesin olarak işler); şarj kayıplarını da içeren kWh başına
   fiyatlar; her mola için hazırlık süresi.
 - **Kuyruklar** — her istasyon, saatlik talep profiline sahip bir M/M/c
   kuyruğudur; Erlang-C beklenen bekleme süresi, zamana bağlı planlamanın
@@ -562,7 +565,8 @@ Bilgisayar Mühendisliği Bölümü.
 ## Teşekkürler
 
 - Algoritmalar; Artmeier vd. (2010), Storandt & Funke (2012), Baum, Dibbelt,
-  Gemsa, Wagner & Zündorf (2015, 2019, 2020), Montoya vd. (2017), Martins
+  Gemsa, Wagner & Zündorf (2015, 2019), Baum, Dibbelt, Wagner & Zündorf
+  (2020), Montoya vd. (2017), Martins
   (1984) ile Mandow & Pérez de la Cruz (2010) çalışmalarına dayanır; tam
   kaynakça [`docs/algorithms.md`](docs/algorithms.md) dosyasındadır.
 - Türkiye vaka çalışmasındaki yer koordinatları ve rakımlar, genel coğrafya

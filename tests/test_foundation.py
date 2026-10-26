@@ -2,6 +2,7 @@
 
 import json
 import math
+import re
 
 import pytest
 
@@ -221,3 +222,67 @@ def test_evaluator_detects_broken_path():
     other = next(e for e in range(P.net.num_edges) if P.net.tail[e] != P.net.head[e0])
     plan = evaluate(P, PlanDecision([e0, other], [0, 0]))
     assert not plan.feasible
+
+
+@pytest.mark.parametrize(
+    "where, change, fragment",
+    [
+        ("query", {"origin": 16}, "origin 16 is not a node"),  # a 4x4 grid has nodes 0..15
+        ("query", {"destination": -2}, "destination -2 is not a node"),
+        ("query", {"origin": True}, "origin True"),
+        ("query", {"initial_soc": 1.2}, "initial_soc"),
+        ("query", {"initial_soc": -0.3}, "initial_soc"),
+        ("query", {"initial_soc": math.nan}, "initial_soc"),
+        ("query", {"departure_s": math.inf}, "departure_s"),
+        ("conditions", {"temperature_c": math.nan}, "temperature_c"),
+        ("preferences", {"reserve_soc": -0.01}, "reserve_soc"),
+        ("preferences", {"min_arrival_soc": 1.5}, "min_arrival_soc"),
+        ("preferences", {"max_charge_soc": 0.0}, "max_charge_soc"),
+        ("preferences", {"max_charge_soc": 1.01}, "max_charge_soc"),
+        ("preferences", {"safety_factor": 0.9}, "safety_factor"),
+        ("preferences", {"safety_factor": 0.0}, "safety_factor"),
+        ("preferences", {"charge_step_soc": 0.0}, "charge_step_soc"),
+        ("preferences", {"charge_step_soc": math.nan}, "charge_step_soc"),
+    ],
+)
+def test_prepare_rejects_values_outside_the_model(where, change, fragment):
+    """CLI-2/CLI-3: out-of-range values used to be clamped, wrapped or to crash deep in a planner."""
+    sc = getattr(grid_scenario(rows=4, cols=4, seed=1), f"with_{where}")(**change)
+    with pytest.raises(ValueError, match=re.escape(fragment)):
+        sc.prepare()
+
+
+def test_prepare_accepts_the_edges_of_the_domain():
+    base = grid_scenario(rows=4, cols=4, seed=1)
+    for sc in (base.with_query(initial_soc=0.0, origin=3), base.with_query(initial_soc=1.0, destination=3),
+               base.with_preferences(reserve_soc=0.0, min_arrival_soc=1.0, max_charge_soc=1.0, safety_factor=1.0),
+               base.with_query(destination=base.query.origin)):  # a trip of length zero is valid for the API
+        P = sc.prepare()
+        assert P.e_init == sc.query.initial_soc * P.capacity
+
+
+def test_prepare_notices_fields_changed_in_place():
+    """API-1: the cached PreparedScenario must not outlive an in-place change."""
+    sc = grid_scenario(rows=4, cols=4, seed=1, initial_soc=0.3)
+    P = sc.prepare()
+    assert sc.prepare() is P
+    sc.query.initial_soc = 1.0
+    assert sc.prepare().e_init == P.capacity
+    sc.stations[0].power_kw = 7.0
+    assert sc.prepare().cf[0].max_power_kw <= 7.0
+
+
+def test_planner_options_are_checked_against_the_declared_names():
+    """API-2: a misspelt option must not silently run the default settings."""
+    from evroute.algorithms.base import Planner
+
+    class Fixed(Planner):
+        name = "fixed"
+        OPTIONS = ("max_labels",)
+
+        def _plan(self, prepared, *, trace):  # pragma: no cover - never planned
+            raise NotImplementedError
+
+    assert Fixed(max_labels=10).options == {"max_labels": 10}
+    with pytest.raises(ValueError, match=r"unknown option\(s\) \['max_label'\] for 'fixed'"):
+        Fixed(max_label=10)

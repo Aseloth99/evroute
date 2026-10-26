@@ -86,7 +86,8 @@ Let ``m`` be the lowest energy the battery holds *while driving*: the
 departure energy at the origin and the arrival energy at every later node
 (exactly the states the evaluator checks against the reserve).
 
-* **strand**: ``m < 0`` -- the battery empties before the destination;
+* **strand**: ``m < -TOL_KWH`` (1e-6 kWh of float tolerance) -- the battery
+  empties before the destination;
 * **reserve breach**: ``m < reserve - 1e-6`` (default reserve ``P.e_min``);
   every stranding is also a breach;
 * **arrival short**: stranded, or the destination is reached with less than

@@ -58,6 +58,13 @@ the route, both on arrival and on departure:
 
 $$ x_v \ge \underline{e} = r\,Q \quad\text{(reserve)},\qquad x_{dest} \ge \max(\underline{e}, a\,Q),\qquad x \le \bar e = \mu Q \text{ after charging.} $$
 
+The only exception is the origin's initial state $x_0$, which may lie below
+the reserve if the vehicle charges there before leaving.  No constraint
+applies between consecutive stops at one node, so with several stations at
+the origin a stop may also end below the reserve when another stop follows
+(at every other node the arrival state already satisfies the reserve).  The
+departure state at the origin must satisfy it again.
+
 ## 4. Charging
 
 The vehicle's battery-side power limit is piecewise constant on SoC bins
@@ -68,14 +75,23 @@ $p_{ij} = \phi(T)\min(p_i^{veh}, P_j)$, where $\phi(T) = \max(\phi_{\min},
 1 - \lambda_c (20 - T))$ derates a battery below 20 °C that was not
 preconditioned ($\phi = 1$ otherwise).  At an AC station the on-board
 charger limits the power to $\min(p^{veh}_{AC}, P_j)$ up to 95 % SoC and to
-half of that above (two bins, no cold derating).  With energy breakpoints
+half of that above (two bins, no cold derating).  Every bin's power is
+floored at 0.5 kW (`charging.build_charging_function`), which matters only
+for chargers below about 1.5 kW.  With energy breakpoints
 $e_i = s_i Q$,
 
 $$ F_j(e) = \sum_{i:\,e_{i+1}\le e} \frac{e_{i+1}-e_i}{p_{ij}}\,3600 + \frac{e - e_{i^*}}{p_{i^*j}}\,3600 $$
 
-is the time to charge from empty to $e$ — piecewise linear, increasing,
-convex.  The *charging function* $F_j^{-1}$ ("energy after $t$ seconds") is
-piecewise linear, increasing and **concave** (Montoya et al., 2017).  Charging
+is the time to charge from empty to $e$ — piecewise linear and increasing.
+The *charging function* $F_j^{-1}$ ("energy after $t$ seconds") is piecewise
+linear and increasing as well.  $F_j$ is convex and $F_j^{-1}$ **concave**
+(the textbook model of Montoya et al., 2017) only where the power $p_{ij}$
+does not increase with the energy.  Real curves ramp up at low SoC: the DC
+curves of all vehicle presets rise up to 5-15 % SoC (e.g. `sedan75` at a
+350 kW charger and 20 °C: 139 → 162.5 → 167.5 → 169 kW on its first four bins), so
+their charging functions are not concave there.  The exact planners do not
+need concavity (CFP's default candidate set covers rising power,
+[`algorithms.md` §4](algorithms.md#4-cfp--charging-function-propagation-continuous-charging)).  Charging
 from $x$ to $y$ takes $F_j(y) - F_j(x)$ seconds, costs
 $\pi_j (y - x)/\eta_c$ money and causes wear $\int_x^y \omega_j(e)\,de$
 (`charging.ChargingFunction`).
@@ -118,7 +134,8 @@ time $\mathcal T$, money $\mathcal M$ and wear $\mathcal W$:
 
 ## 8. Uncertainty (evaluation only)
 
-For robustness analysis, the *nominal* consumption of each edge is multiplied
-by $\xi_{trip}\,\xi_e$ with independent log-normal factors of mean 1, and
+For robustness analysis, the *nominal* consumption $c > 0$ of each edge is
+multiplied by $\xi_{trip}\,\xi_e$ and regeneration ($c \le 0$) is divided by
+it, with independent log-normal factors of mean 1, and
 queueing delays are drawn from an exponential distribution with the expected
 wait as mean (`robustness.monte_carlo`).

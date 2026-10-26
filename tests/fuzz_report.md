@@ -37,11 +37,11 @@ failure message carries `Instance.describe()`, so any report can be replayed.
 | I2 | A* = Dijkstra order: `bls == bls-astar` (tight and basic potential), `cfp == cfp-astar` (tight and basic); every potential is consistent on random states of the battery-expanded graph (drive and charge transitions, monotone in the energy, 0 at the goal), CFP's rate bound (Lemma 2 of `cfp.py`), the Pareto completion bounds; `trace=True` and `exact_switching=False` relations |
 | I3 | CFP (continuous charging) is never slower than BLS; a finer target grid that contains a coarser one is never worse (both `targets` modes); `targets="grid+breaks"` never worse than `"grid"`; BLS/Pareto targets lie on the target set |
 | I4 | Pareto: fastest member = BLS(time), cheapest generalised cost = BLS(cost), members feasible and mutually non-dominated (an equally fast member up to 1e-12 relative counts as a dominator); option variants (`goal_directed=False`, `epsilon`, two criteria) agree with the exact front |
-| I5 | no feasible plan of any planner (heuristics, BLS under the cost objective, Pareto members) is faster than CFP (plans with two stops at one node visit are skipped: CFP's model allows one, see BUG-3) |
+| I5 | no feasible plan of any planner (heuristics, BLS under the cost objective, Pareto members) is faster than CFP, plans with consecutive stops at one node included |
 | I6 | if any planner finds a feasible plan, every exact planner does (modulo `max_labels`) |
 | I7 | zero-noise Monte Carlo reproduces `evaluate()`; the adaptive policy never strands more often than same-target; a plan made with safety factor > 1 is feasible and no slower at factor 1, and the factor-1 optimum is never worse |
 | I8 | lossless serialisation: `Scenario.to_dict` is JSON-normal and a fixed point, the reloaded scenario prepares bit-identical data (network, edge times/energies, charging functions, bounds), every plan replays to the *identical* objective on it, and so does the decision rebuilt from `RoutePlan.to_dict` alone |
-| I9 | brute force on tiny digraphs: an exhaustive enumeration of walks (each node at most twice) x up to two stops per node visit (consecutive stops at different stations) x targets equals BLS / BLS-A*, CFP is no slower than the best route with one stop per node visit, and the enumerated Pareto front equals the planner's front |
+| I9 | brute force on tiny digraphs: an exhaustive enumeration of walks (each node at most twice) x up to two stops per node visit (consecutive stops at different stations) x targets equals BLS / BLS-A*, CFP is no slower than the enumerated optimum (time objective), and the enumerated Pareto front equals the planner's front |
 | I10 | metamorphic relations: relabelled nodes/edges/stations, a duplicated station, a slower parallel road, another departure without queues give the same optimum; more initial energy, an extra station, an extra speed level, a lower reserve / arrival requirement, no queues, a higher charging cap, safety factor 1 give a no worse optimum |
 | I11 | local search: random feasible neighbours (other targets, dropped / added / moved stops, other speed levels, random detours) of the BLS-A* / CFP-A* optima and of Pareto members are never better (dominating) |
 
@@ -51,7 +51,15 @@ failure message carries `Instance.describe()`, so any report can be replayed.
 "checks" = individual assertions.  Collected with the suite's own `Tally`
 over exactly the instances of each tier.
 
-### Fast tier (default `pytest`): 176 instances, 0 failures
+The tallies of this section were collected at revision `bcfb4b7`, *before*
+the CFP fixes for BUG-3 and BUG-4 (section 5): at that time I5 skipped plans
+with two stops at one node visit, I9 compared CFP with the one-stop
+enumeration and I11 ignored neighbours with two stops at one node visit.  The
+suite no longer has these restrictions; the tallies have not been collected
+again since, so the I5 / I9 / I11 rows and the skip counts below describe the
+earlier revision.
+
+### Fast tier (default `pytest`): 176 instances, 0 failures (revision `bcfb4b7`)
 
 96 random instances (61 grid, 21 rgg, 14 corridor), 48 tiny digraphs (brute
 force) and 32 edge-case variants.
@@ -72,10 +80,10 @@ force) and 32 edge-case variants.
 
 Skips: Pareto on instances above 30 nodes / 3 speed levels / step < 0.04 (55)
 or at its label limit (3); I5 for plans with two stops at one node visit
-(135, see BUG-3); I11 where no neighbour exists (9); brute force above 400 000
-enumeration steps (1).
+(135; this skip was removed with the BUG-3 fix for CFP); I11 where no
+neighbour exists (9); brute force above 400 000 enumeration steps (1).
 
-### Slow tier (`-m slow`)
+### Slow tier (`-m slow`, revision `bcfb4b7`)
 
 2000 random instances (`SLOW_PER_BLOCK` x `SLOW_BLOCKS`) and 1200 tiny
 digraphs.  Samples run for this report (the per-invariant table is the first row):
@@ -103,7 +111,8 @@ digraphs.  Samples run for this report (the per-invariant table is the first row
 Skips in the random sample: Pareto above 50 nodes / step < 0.04 (533) or at
 its label limit (14); label limits of BLS (32), BLS-A* (18), CFP (43), CFP-A*
 (11) -- the derived checks of that planner are skipped on that instance; I5
-for plans with two stops at one node visit (737); a Pareto member dominated by
+for plans with two stops at one node visit (737; removed with the BUG-3 fix
+for CFP); a Pareto member dominated by
 an equally fast member, i.e. BUG-1 (6, before its fix).  24 tiny digraphs
 exceed the enumeration budget (up to two stops per node visit).  Before the
 BUG-1 fix the tiny tier had one failure, seed 10850: a 3-node instance on
@@ -118,7 +127,8 @@ suite, not a release.)
 | | wall time |
 |---|---|
 | before | never finished: the edge-case test hung (killed after > 15 min) |
-| after | 21.7 s: `pytest -m "not slow" tests/test_crossval.py` -> 22 passed, 3 xfailed (4 cores shared with other jobs) |
+| after | 21.7 s: `pytest -m "not slow" tests/test_crossval.py` -> 22 passed, 3 xfailed (revision `bcfb4b7`, before the CFP / Monte Carlo fixes of BUG-3 and BUG-4; 4 cores shared with other jobs) |
+| now | 18.9 s: the same command -> 25 passed (the three former strict xfails are plain regression tests; 4 cores) |
 
 The cause was not the instance mix but a test-harness bug: `neighbours()`
 (the I11 mutation generator) drew random operations in a `while True` loop and
@@ -141,30 +151,16 @@ Each bug is reproduced by a test at the end of `tests/test_crossval.py`:
 |---|---|---|---|
 | BUG-1 | `pareto.py` | The front keeps members that a later member dominates.  Lemma 3 (a new member never dominates an existing one) assumes exact key order, but routes with equal trip times in exact arithmetic (the same energy charged at two stations with the same power) reach the destination through different float sums, and the goal-directed keys `t + T_lb(v)` are not monotone in floating point; the dearer route is popped first and stays.  Variant: a member 1 ulp faster but 0.77 EUR dearer survives. | **fixed** in `pareto.py` (robust front maintenance: a new route that a member covers is rejected, and members that an equally fast -- `TIE_RTOL = 1e-12` -- but cheaper route covers leave the front).  The three reproductions (`test_bug1_*`, incl. the 3-node instance found by the slow tier) are plain regression tests now, and I4 / I11 count an equally fast dominator (up to `1e-12` relative) as a failure instead of skipping it |
 | BUG-2 | `network.py` | `Scenario.to_dict` was lossy: `RoadNetwork.to_dict` rounded x/y/elevation to 1 cm and lengths to 1 mm, so a saved and reloaded scenario had different edge energies -- objective values moved by ~1e-6 relative and exact just-enough CFP plans replayed as infeasible (reserve undercut by ~1e-5 kWh). | **fixed**: the dict is lossless (`json` writes `repr(float)`, which reads back bit-identically); `to_dict(compact=True)` keeps the old rounding for display payloads.  `Scenario.to_dict` is JSON-normal (tuple demand profiles, `speed_factors`, `meta`).  Regression tests `test_bug2_scenario_json_round_trip_reproduces_the_plan`, I8 (now exact), `test_foundation.py::test_scenario_json_round_trip_is_lossless` |
-| BUG-3 | `labels.py`, `pareto.py`, `cfp.py` | At most one charging stop per node visit, justified by "two consecutive stops would pay waiting and setup twice" -- false with two *different* stations at one node: fast DC to 80 % then cheap AC to 90 % costs 90.72 vs the claimed grid optimum 91.75 (cost objective); with zero setup, DC to 37.4 kWh then AC to the just-enough energy is 16 s faster than the "exact" CFP optimum.  `evaluate()` accepts both. | **fixed for BLS, BLS-A* and Pareto** (consecutive stops at different stations of one node; `test_bug3_consecutive_stops_at_two_stations_beat_the_grid_optimum` is a regression test).  **Open for CFP**: `test_bug3_consecutive_stops_beat_the_continuous_optimum` (strict xfail) |
-| BUG-4 | `evaluate.py` (+ `cfp.py`, `robustness.py`) | With `reserve_soc = min_arrival_soc = 0`, `evaluate()` flagged "battery empty" as soon as the energy was below 0.0 by any amount, contradicting the 1e-6 kWh tolerance of the reserve and arrival checks: a route arriving with -9e-16 kWh was returned by BLS/BLS-A*/Pareto/greedy/station-graph as infeasible, while CFP, which adds a private 1e-8 kWh floor for exactly this reason, reported that no route exists. | **evaluator fixed**: the battery is empty below `-TOL_KWH` only (`test_bug4_zero_reserve_float_noise_is_not_stranding`, `test_foundation.py::test_evaluator_empty_battery_uses_the_energy_tolerance`).  Open: (a) `cfp.py` still raises a zero reserve / goal energy to a private 1e-8 kWh floor (`floor = 10.0 * eps`, `emin = max(P.e_min, floor)`, `egoal = max(P.e_dest_min, floor)` in `_search`), so CFP and CFP-A* report "no route" (`test_bug4_cfp_zero_reserve_float_noise_is_not_stranding`, strict xfail); (b) the Monte Carlo kernel of `robustness.py` strands at `m < 0.0` (`_Outcomes.events` and the `_verify` cross-check), so a zero-noise replay of the knife-edge plan strands 3/3 and `verify=True` raises (`test_bug4_monte_carlo_zero_reserve_float_noise_is_not_stranding`, strict xfail); both comparisons should be `< -TOL_KWH` |
+| BUG-3 | `labels.py`, `pareto.py`, `cfp.py` | At most one charging stop per node visit, justified by "two consecutive stops would pay waiting and setup twice" -- false with two *different* stations at one node: fast DC to 80 % then cheap AC to 90 % costs 90.72 vs the claimed grid optimum 91.75 (cost objective); with zero setup, DC to 37.4 kWh then AC to the just-enough energy is 16 s faster than the "exact" CFP optimum.  `evaluate()` accepts both. | **fixed** in BLS, BLS-A* and Pareto (consecutive stops at different stations of one node; `test_bug3_consecutive_stops_at_two_stations_beat_the_grid_optimum`) and in CFP / CFP-A* (a label created by a stop spawns stops at every *other* station of its node, at the switch candidates of its own function; one settled set per node stays exact, `docs/algorithms.md` §4): `test_bug3_consecutive_stops_beat_the_continuous_optimum` and `test_cfp.py::test_consecutive_stops_match_an_exact_dynamic_programme` (an exact dynamic programme over breakpoint energies and the charger in use) are plain regression tests.  I5, I9 and I11 no longer restrict CFP's competitors to one stop per node visit |
+| BUG-4 | `evaluate.py` (+ `cfp.py`, `robustness.py`) | With `reserve_soc = min_arrival_soc = 0`, `evaluate()` flagged "battery empty" as soon as the energy was below 0.0 by any amount, contradicting the 1e-6 kWh tolerance of the reserve and arrival checks: a route arriving with -9e-16 kWh was returned by BLS/BLS-A*/Pareto/greedy/station-graph as infeasible, while CFP, which adds a private 1e-8 kWh floor for exactly this reason, reported that no route exists. | **fixed**: the evaluator's battery is empty below `-TOL_KWH` only (`test_bug4_zero_reserve_float_noise_is_not_stranding`, `test_foundation.py::test_evaluator_empty_battery_uses_the_energy_tolerance`); `cfp.py` no longer raises a zero reserve / goal energy to a private 1e-8 kWh floor in `_search` (`test_bug4_cfp_zero_reserve_float_noise_is_not_stranding`); the Monte Carlo kernel of `robustness.py` strands below `-TOL_KWH` like `evaluate()`, in `_Outcomes.events` and in the `_verify` cross-check (`test_bug4_monte_carlo_zero_reserve_float_noise_is_not_stranding`).  All three are plain regression tests |
 | TD-waits dominance | `labels.py` | The 3-D cost dominance `(g, t, e)` used with time-dependent waits is unsound: a label that is earlier *and* cheaper in `g` is not better when a FIFO queue absorbs its head start (the waiting is paid at the value of time while the other label's money advantage persists).  On a hand-built line the old rule discarded the slow, cheap AC charge that leads to the optimum. | **fixed** in `labels.py` (dominance on `m = g - vot*t`, `t`, `e`); BLS, BLS-A* and Pareto match brute force (`test_cost_dominance_with_time_dependent_waits_regression`) |
 | harness | `test_crossval.py` | `neighbours()` looped forever when no modification applies (section 4). | **fixed** (`test_neighbour_search_terminates_without_applicable_moves`) |
 
 ## 6. Open items
 
-* **BUG-3 for CFP** (`algorithms/cfp.py`): consecutive stops at different
-  stations of one node.  Until it is fixed, I5 skips plans with two stops at
-  one node visit and I9 compares CFP with the one-stop enumeration; drop both
-  restrictions with the fix (and the strict xfail turns into an XPASS).
-* **BUG-4 in `cfp.py`**: remove the private `floor = 10.0 * eps` reserve /
-  goal floor in `_search` (strict xfail
-  `test_bug4_cfp_zero_reserve_float_noise_is_not_stranding`).
-* **BUG-4 in `robustness.py`** (no owner in this round): `_Outcomes.events`
-  (`strand = [drives and m < 0.0 ...]`) and `_verify`
-  (`stranded = out.min_kwh[r] < 0.0`) must strand below `-TOL_KWH`, like
-  `evaluate()`.  Until then a zero-noise Monte Carlo replay of a knife-edge
-  zero-reserve plan reports stranding and `verify=True` raises (strict xfail
-  `test_bug4_monte_carlo_zero_reserve_float_noise_is_not_stranding`); once
-  CFP's floor is gone such plans become more frequent, so fix both together.
-* **Viewer payload size**: `viz/export.py::_network_block` reuses
-  `RoadNetwork.to_dict()`, which is lossless now: the network block of the
-  Turkey Karaman-Istanbul case grows from 236.8 KB to 311.8 KB (+73 KiB; the
-  whole payload without results is now ~442 KiB).  `to_dict(compact=True)` restores the
-  old size; the viewer only draws the network (the live server plans on its
-  own `Scenario`, never on the payload), so rounding is harmless there.
+None.  The items listed here in earlier versions of this report are
+resolved: BUG-3 for CFP and BUG-4 in `cfp.py` and `robustness.py` (section 5),
+and the viewer payload size -- `viz/export.py::_network_block` builds the
+network block with `RoadNetwork.to_dict(compact=True)` again (rounded to
+1 cm / 1 mm; the viewer only draws the network and the live server plans on
+its own `Scenario`, never on the payload).

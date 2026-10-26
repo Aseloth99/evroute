@@ -14,8 +14,10 @@ matplotlib is available.  All randomness is seeded.
 from __future__ import annotations
 
 import argparse
+import json
 import math
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
@@ -369,12 +371,24 @@ def run_experiments(
     lang: str = "tr",
 ) -> dict[str, Any]:
     """Run ``names`` (default: all) into ``out_dir``; also write the interactive
-    ``results.html`` dashboard (:mod:`evroute.viz.results`) unless ``panel`` is false."""
+    ``results.html`` dashboard (:mod:`evroute.viz.results`) unless ``panel`` is false.
+
+    ``report.json`` describes the whole folder: a re-run of some experiments
+    replaces their entries and keeps the others (an earlier failure must not
+    disappear); every entry records when it finished and whether it was quick.
+    Returns that merged report.
+    """
     names = names or list(EXPERIMENTS)
     unknown = [n for n in names if n not in EXPERIMENTS]
     if unknown:
         raise SystemExit(f"unknown experiment(s) {unknown}; choose from {list(EXPERIMENTS)}")
-    report = {}
+    report_path = ensure_dir(Path(out_dir)) / "report.json"
+    try:
+        report = json.loads(report_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        report = {}
+    if not isinstance(report, dict):
+        report = {}
     for name in names:
         fn = EXPERIMENTS[name]
         out = ensure_dir(Path(out_dir) / name)
@@ -390,8 +404,9 @@ def run_experiments(
             res, status = {"error": repr(exc)}, "failed"
         dt = time.perf_counter() - t0
         print(f"[{name}] {status} in {dt:.1f} s")
-        report[name] = {"status": status, "seconds": round(dt, 2), "result": res}
-    write_json(ensure_dir(Path(out_dir)) / "report.json", report)
+        report[name] = {"status": status, "seconds": round(dt, 2), "quick": quick,
+                        "finished": datetime.now(timezone.utc).isoformat(timespec="seconds"), "result": res}
+    write_json(report_path, report)
     if panel:
         try:
             from ..viz.results import build_results_html

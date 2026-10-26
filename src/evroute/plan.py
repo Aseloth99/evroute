@@ -214,12 +214,12 @@ class RoutePlan:
             d[k] = [round(x, 2) for x in d[k]]
         for k in ("node_energy_arrive", "node_energy_depart"):
             d[k] = [round(x, 5) for x in d[k]]
-        d = {k: (None if isinstance(v, float) and not math.isfinite(v) else v) for k, v in d.items()}
+        d = _finite_or_none(d)
         d["stops"] = [asdict(s) for s in self.stops]
         d["stats"] = self.stats.to_dict() if self.stats else None
         d["trace"] = self.trace.to_dict(trace_events) if self.trace else None
         d["alternatives"] = [a.to_dict(trace_events=0) for a in self.alternatives]
-        d["summary"] = self.summary()
+        d["summary"] = _finite_or_none(self.summary())  # an infeasible plan has infinite time and cost
         return d
 
     def __str__(self) -> str:  # pragma: no cover - cosmetic
@@ -230,3 +230,8 @@ class RoutePlan:
             f"[{self.algorithm}] {s['total_time']} | {s['distance_km']} km | {s['stops']} stop(s) | "
             f"arrive {100 * self.arrival_soc:.1f}% | {self.money:.2f} {self.currency}"
         )
+
+
+def _finite_or_none(d: dict[str, Any]) -> dict[str, Any]:
+    """``d`` with non-finite float values replaced by ``None`` (standard JSON has no Infinity)."""
+    return {k: (None if isinstance(v, float) and not math.isfinite(v) else v) for k, v in d.items()}

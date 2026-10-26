@@ -158,16 +158,20 @@
   function heroTile(k) {
     const sc = app.data.sections.find((s) => s.id === 'scalability');
     let bars = null;
-    if (sc && sc.data && sc.data.series) {
-      const last = (a) => { const s = sc.data.series.find((x) => x.algorithm === a); return s ? s.points[s.points.length - 1] : null; };
-      const pairs = [['bls', 'bls-astar'], ['cfp', 'cfp-astar']].map(([a, b]) => [a, b, last(a), last(b)]).filter((x) => x[2] && x[3] && x[2].nodes === x[3].nodes);
+    if (sc && sc.data && sc.data.speedup) {
+      // the speed-up pairs at the headline's network size; geometric mean runtimes over the
+      // same instances, so the ratio of two bars is the speed-up factor shown above
+      const pairs = sc.data.speedup.map((s) => [s.baseline, s.algorithm, s.points.find((p) => p.nodes === sc.data.headline_nodes)])
+        .filter((x) => x[2] && finite(x[2].baseline_runtime_ms) && finite(x[2].runtime_ms))
+        .map(([a, b, p]) => [a, b, p.baseline_runtime_ms, p.runtime_ms]);
       if (pairs.length) {
-        const mx = Math.max(...pairs.flatMap((p) => [p[2].runtime_ms, p[3].runtime_ms]));
-        bars = U.el('div', { class: 'hero-bars', role: 'img', 'aria-label': pairs.map((p) => `${I.algo(p[0])} ${I.ms(p[2].runtime_ms)}, ${I.algo(p[1])} ${I.ms(p[3].runtime_ms)}`).join('; ') },
-          pairs.flatMap(([a, b, pa, pb]) => [[a, pa], [b, pb]]).map(([a, p]) => U.el('div', { class: 'hb-row' },
+        const mx = Math.max(...pairs.flatMap((p) => [p[2], p[3]]));
+        bars = U.el('div', { class: 'hero-bars', role: 'img', 'aria-label': `${pairs.map((p) => `${I.algo(p[0])} ${I.ms(p[2])}, ${I.algo(p[1])} ${I.ms(p[3])}`).join('; ')} (${I.t('hero_geo')})` },
+          pairs.flatMap(([a, b, ra, rb]) => [[a, ra], [b, rb]]).map(([a, ms]) => U.el('div', { class: 'hb-row' },
             U.el('span', { class: 'hb-name', text: I.algo(a) }),
-            U.el('span', { class: 'hb-track' }, U.el('i', { style: { width: `${Math.max(1.2, (100 * p.runtime_ms) / mx)}%`, background: `var(--a-${a})` } })),
-            U.el('span', { class: 'hb-val', text: I.ms(p.runtime_ms) }))));
+            U.el('span', { class: 'hb-track' }, U.el('i', { style: { width: `${Math.max(1.2, (100 * ms) / mx)}%`, background: `var(--a-${a})` } })),
+            U.el('span', { class: 'hb-val', text: I.ms(ms) }))),
+          U.el('span', { class: 'hb-foot', text: I.t('hero_geo') }));
       }
     }
     return U.el('a', { class: `hero-kpi tone-${k.tone}`, href: `#sec-${k.section}` },

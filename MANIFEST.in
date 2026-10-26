@@ -1,0 +1,8 @@
+# The source distribution: what the wheel is built from (src/, pyproject.toml)
+# plus the test suite with its conftest.py, the examples, the text
+# documentation and the citation. Figures and the built demo pages of docs/
+# stay in the repository.
+include README.md README.tr.md LICENSE CITATION.cff CONTRIBUTING.md
+recursive-include tests *.py *.md
+recursive-include examples *.py
+recursive-include docs *.md

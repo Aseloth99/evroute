@@ -34,7 +34,10 @@ from .scenario import PreparedScenario
 #: sums of float edge consumptions, so a route that is feasible in exact
 #: arithmetic can come out ~1e-14 kWh short; only a shortfall of more than
 #: ``TOL_KWH`` is a violation (and with ``reserve_soc = 0`` an energy in
-#: ``[-TOL_KWH, 0)`` is float noise, not an empty battery).
+#: ``[-TOL_KWH, 0)`` is float noise, not an empty battery).  The exact planners
+#: do not use this slack (their own tolerance is 1e-9 kWh): their optimum is
+#: over the plans feasible in exact arithmetic, so on a knife-edge instance a
+#: plan up to ``TOL_KWH`` short that is accepted here can be faster than it.
 TOL_KWH = 1e-6
 
 

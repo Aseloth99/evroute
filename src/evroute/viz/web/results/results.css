@@ -212,6 +212,8 @@ button { cursor: pointer; }
 .hb-track { height: 9px; border-radius: 999px; background: var(--surface-3); overflow: hidden; }
 .hb-track i { display: block; height: 100%; border-radius: 999px; }
 .hb-val { text-align: right; font-variant-numeric: tabular-nums; font-weight: 650; color: var(--text-2); }
+.hb-foot { font-size: 11.5px; color: var(--text-3); }
+.hero-kpi.tone-bad .kpi-sub { color: var(--bad); font-weight: 650; }
 
 .kpi-grid { display: grid; grid-template-columns: repeat(var(--cols, 4), minmax(0, 1fr)); gap: 12px; }
 .kpi {

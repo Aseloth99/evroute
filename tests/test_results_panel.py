@@ -199,6 +199,7 @@ def test_findings_are_computed_from_the_data(results_dir):
     assert math.isclose(sc["facts"]["speedup"]["bls-astar"], 10.0)
     assert math.isclose(sc["facts"]["settled_ratio"]["bls-astar"], 25.0)
     assert "10×" in sc["finding"]["en"] and "4,000 nodes" in sc["finding"]["en"]
+    assert "identical optima" in sc["finding"]["en"] and "aynı optimumu" in sc["finding"]["tr"]
     og = section(p, "optimality-gap")
     assert og["facts"]["mean_gap_pct"]["greedy"] == pytest.approx(5.0)
     assert "Genetic" in og["finding"]["en"] and "Genetik" in og["finding"]["tr"]
@@ -276,6 +277,145 @@ def test_pareto_without_feasible_front(tmp_path):
     s = section(R.results_payload(root), "pareto")
     assert s["data"]["fronts"] == [] and s["data"]["empty"][0]["case"] == "turkey-karaman-istanbul"
     assert "no feasible front" in s["finding"]["en"]
+
+
+def read_rows(path: Path) -> list[dict]:
+    with path.open(encoding="utf-8", newline="") as fh:
+        return list(csv.DictReader(fh))
+
+
+def test_scalability_headline_compares_at_one_size_when_bls_is_skipped(tmp_path):
+    root = make_results(tmp_path / "r")
+    path = root / "scalability" / "results.csv"
+    rows = read_rows(path)
+    for pair in (0, 1):  # a full run skips BLS on the largest network, so BLS-A* has no speed-up there
+        t = 300.0 + 10 * pair
+        rows += [{"nodes": 16000, "pair": pair, **row("bls-astar", t, runtime_ms=160.0, settled=12800)},
+                 {"nodes": 16000, "pair": pair, **row("cfp", t - 0.5, runtime_ms=9600.0, settled=48000)},
+                 {"nodes": 16000, "pair": pair, **row("cfp-astar", t - 0.5, runtime_ms=32.0, settled=1600)}]
+    write_csv(path, rows)
+    p = R.results_payload(root)
+    sc = section(p, "scalability")
+    assert sc["data"]["headline_nodes"] == 4000 and sc["facts"]["nodes"] == {"bls-astar": 4000, "cfp-astar": 4000}
+    assert sc["facts"]["speedup"]["cfp-astar"] == pytest.approx(12.5)  # 150 / 12 ms at 4,000 nodes, not 300x
+    cfp = next(s for s in sc["data"]["speedup"] if s["algorithm"] == "cfp-astar")
+    assert cfp["points"][-1]["nodes"] == 16000 and cfp["points"][-1]["speedup"] == pytest.approx(300.0)  # still charted
+    en = sc["finding"]["en"]
+    assert "4,000 nodes" in en and "16,000" not in en and "300×" not in en
+    assert "4,000 nodes" in next(k for k in p["kpis"] if k["id"] == "speedup-cfp")["sub"]["en"]
+
+
+def test_scalability_mismatch_is_stated_not_hidden(tmp_path):
+    root = make_results(tmp_path / "r")
+    path = root / "scalability" / "results.csv"
+    rows = read_rows(path)
+    for r in rows:  # BLS-A* misses the optimum on both pairs of the largest size
+        if r["algorithm"] == "bls-astar" and r["nodes"] == "4000":
+            r["time_min"] = float(r["time_min"]) + 5.0
+    write_csv(path, rows)
+    p = R.results_payload(root)
+    sc = section(p, "scalability")
+    assert sc["data"]["headline_nodes"] == 4000  # no silent fallback to the size where they agree
+    assert sc["facts"]["mismatches"] == {"bls-astar": [2, 4], "cfp-astar": [0, 4]}
+    en, tr = sc["finding"]["en"], sc["finding"]["tr"]
+    assert "identical optima" not in en and "BLS-A* and BLS disagree on 2 of 4 instances" in en and "4,000 nodes" in en
+    assert "aynı optimumu" not in tr and "4 örneğin 2 tanesinde farklı sonuç" in tr
+    hero = next(k for k in p["kpis"] if k["id"] == "speedup-bls")
+    assert hero["tone"] == "bad" and "same optimum" not in hero["sub"]["en"] and "differs on 2 of 4" in hero["sub"]["en"]
+    assert "same optimum" in next(k for k in p["kpis"] if k["id"] == "speedup-cfp")["sub"]["en"]
+
+
+def test_speedup_is_a_labelled_geometric_mean(tmp_path):
+    root = make_results(tmp_path / "r")
+    path = root / "scalability" / "results.csv"
+    rows = read_rows(path)
+    for r in rows:  # per-instance speed-ups 4x and 16x at 4,000 nodes (BLS-A* takes 40 ms)
+        if r["algorithm"] == "bls" and r["nodes"] == "4000":
+            r["runtime_ms"] = 160.0 if r["pair"] == "0" else 640.0
+    write_csv(path, rows)
+    sc = section(R.results_payload(root), "scalability")
+    pt = next(s for s in sc["data"]["speedup"] if s["algorithm"] == "bls-astar")["points"][-1]
+    assert pt["speedup"] == pytest.approx(8.0) and sc["facts"]["speedup"]["bls-astar"] == pytest.approx(8.0)
+    # the runtimes shown beside the factor are aggregated the same way: their ratio is the factor
+    assert pt["runtime_ms"] == pytest.approx(40.0) and pt["baseline_runtime_ms"] == pytest.approx(320.0)
+    bls = next(s for s in sc["data"]["series"] if s["algorithm"] == "bls")["points"][-1]
+    assert bls["runtime_ms"] == pytest.approx(400.0)  # the arithmetic mean (runtime chart) would suggest 10x
+    assert "geometric means" in sc["finding"]["en"] and "geometrik ortalama" in sc["finding"]["tr"]
+
+
+def test_pareto_references_beating_a_member_are_flagged(results_dir):
+    p = R.results_payload(results_dir)
+    s = section(p, "pareto")
+    f = s["data"]["fronts"][0]
+    # CFP-A*'s continuous-charging plan (486.9 min, 1,200 TRY, 0.019 %SoH) beats member 0
+    # (488.4 min, 1,203.2 TRY, 0.0193 %SoH) in every criterion: the front is exact on its grid only
+    assert f["beaten_by_references"] == [0] and s["facts"]["beaten_by_references"] == {"turkey-karaman-istanbul": 1}
+    refs = {r["algorithm"]: r["dominates"] for r in f["references"]}
+    assert refs["cfp-astar"] == 1 and refs["greedy"] == 0
+    g = next(g for g in p["checks"]["groups"] if g["id"] == "pareto-nondominated")
+    assert g["passed"] == g["total"]  # a grid limitation, not an exactness failure
+    assert "grid" in s["meaning"]["en"] and "guarantees" not in s["meaning"]["en"] and "ızgara" in s["meaning"]["tr"]
+
+
+def test_optimality_gap_finding_gives_mean_and_max_of_bls_astar(tmp_path):
+    root = make_results(tmp_path / "r")
+    rows = []
+    for pair, opt in enumerate((500.0, 600.0, 700.0)):
+        for a, gap in (("greedy", 4.0 + pair), ("bls-astar", (0.1, 0.1, 0.4)[pair])):
+            rows.append({"pair": pair, **row(a, opt * (1 + gap / 100)), "gap_pct": gap, "opt_min": opt})
+    write_csv(root / "optimality-gap" / "results.csv", rows)
+    s = section(R.results_payload(root), "optimality-gap")
+    assert "BLS-A* is 0.20% from the optimum on average (at most 0.40%)" in s["finding"]["en"]
+    assert "ortalama yalnızca %0,20, en çok %0,40 uzakta" in s["finding"]["tr"]
+
+
+def test_empty_result_files_are_shown_as_no_data(results_dir):
+    (results_dir / "queue-awareness" / "results.csv").write_text("", encoding="utf-8")  # the runner's "no rows"
+    (results_dir / "vehicles" / "results.csv").write_text("vehicle,algorithm,time_min\n", encoding="utf-8")
+    p = R.results_payload(results_dir)
+    for sid in ("queue-awareness", "vehicles"):
+        s = section(p, sid)
+        assert s["status"] == "empty" and s["finding"] is None and s["data"] is None, sid
+    assert section(p, "eco-speed")["status"] == "ok"
+
+
+def test_csv_with_byte_order_mark(results_dir):
+    for sid in ("case-studies", "vehicles"):  # as re-saved by a spreadsheet
+        f = results_dir / sid / "results.csv"
+        f.write_text(f.read_text(encoding="utf-8"), encoding="utf-8-sig")
+    p = R.results_payload(results_dir)
+    assert section(p, "case-studies")["facts"]["exact_best"] == 2
+    v = section(p, "vehicles")
+    assert v["facts"]["fastest"] == "sedan75" and "None" not in v["finding"]["en"]
+    assert v["tables"][0]["columns"][0] == "vehicle"
+
+
+def test_rerun_keeps_the_report_of_earlier_runs(tmp_path, monkeypatch):
+    from evroute.experiments import runner
+
+    root = make_results(tmp_path / "r")
+    report = json.loads((root / "report.json").read_text())
+    report["scalability"] = {"status": "failed", "seconds": 60.0, "result": {"error": "MemoryError()"}}
+    report["temperature"] = {"status": "failed", "seconds": 2.0, "result": {"error": "RuntimeError('cold')"}}
+    (root / "report.json").write_text(json.dumps(report))
+
+    def vehicles(out, quick):
+        write_csv(out / "results.csv", [{"vehicle": "sedan75", **row("bls-astar", 470.2)}])
+        return {"rows": 1}
+
+    monkeypatch.setitem(runner.EXPERIMENTS, "vehicles", vehicles)
+    runner.run_experiments(["vehicles"], root, quick=True)
+    merged = json.loads((root / "report.json").read_text())
+    assert set(merged) == set(R.SECTION_IDS)
+    assert merged["scalability"]["status"] == "failed" and merged["temperature"]["status"] == "failed"
+    assert merged["vehicles"]["status"] == "ok" and merged["vehicles"]["quick"] is True and merged["vehicles"]["finished"]
+    p = embedded_payload((root / "results.html").read_text(encoding="utf-8"))
+    assert section(p, "scalability")["status"] == "failed" and section(p, "temperature")["status"] == "failed"
+    assert p["run"]["total_seconds"] == pytest.approx(7 * 1.5 + 60.0 + 2.0 + merged["vehicles"]["seconds"], abs=0.02)
+    # a malformed report is replaced, not merged
+    (root / "report.json").write_text("[]")
+    runner.run_experiments(["vehicles"], root, quick=True, panel=False)
+    assert list(json.loads((root / "report.json").read_text())) == ["vehicles"]
 
 
 def test_case_study_metadata_and_viewer_link(results_dir, tmp_path):

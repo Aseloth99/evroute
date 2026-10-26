@@ -157,7 +157,7 @@ for s in route.stops:
     print(f"  {s.station_name:12} {s.soc_in:4.0%} -> {s.soc_out:4.0%}"
           f"  queue {s.wait_s / 60:2.0f} min  charge {s.charge_s / 60:2.0f} min")
 
-# What if?  Every scenario is immutable; with_* returns a modified copy.
+# What if?  Treat a scenario as immutable: with_* returns a modified copy.
 print(plan(scenario.with_conditions(temperature_c=-5), "cfp-astar"))   # winter, continuous charging
 print(plan(scenario.with_preferences(objective="cost"), "bls-astar"))  # time + money + battery wear
 
@@ -324,7 +324,8 @@ leaves `j` so that it arrives at time `t` - is piecewise linear and
 non-decreasing. Along an edge only the profile changes (closed form); at a
 new station the label spawns stop labels at the breakpoints of `B`, which is
 where an optimal switch from charging at `j` to charging at the new station
-lies (Lemma 3). Dominance compares a label against the upper envelope of the
+lies (Lemma 3; plus the upward power breaks of non-concave curves and the
+knots of time-dependent waits). Dominance compares a label against the upper envelope of the
 settled labels of its node. The first destination entry popped is the
 fastest route over **all** charging amounts. Proofs and the extensions
 (non-concave curves, time-dependent queues, consecutive stops):
@@ -345,7 +346,8 @@ fastest route over **all** charging amounts. Proofs and the extensions
 - **Charging** - vehicle charging curves (piecewise-constant power over SoC
   bins) capped by the charger power, DC power derated for a cold battery
   without preconditioning → exact, piecewise-linear charging functions
-  (concave for the usual curves); prices per kWh with charging losses;
+  (concave above the low-SoC ramp-up; CFP handles both shapes exactly);
+  prices per kWh with charging losses;
   set-up time per stop.
 - **Queues** - each station is an M/M/c queue with an hourly demand profile;
   the Erlang-C expected wait is made FIFO-safe so that time-dependent
@@ -526,7 +528,8 @@ Department of Computer Engineering.
 ## Acknowledgements
 
 - The algorithms build on the work of Artmeier et al. (2010), Storandt &
-  Funke (2012), Baum, Dibbelt, Gemsa, Wagner & Zündorf (2015, 2019, 2020),
+  Funke (2012), Baum, Dibbelt, Gemsa, Wagner & Zündorf (2015, 2019), Baum,
+  Dibbelt, Wagner & Zündorf (2020),
   Montoya et al. (2017), Martins (1984) and Mandow & Pérez de la Cruz
   (2010) - full references in [`docs/algorithms.md`](docs/algorithms.md).
 - Place coordinates and elevations of the Turkey case study were compiled

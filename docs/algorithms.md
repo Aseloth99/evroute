@@ -8,7 +8,8 @@ effective charging power of any station.
 ## 1. The battery-expanded state space
 
 A *state* is a pair $(v, x)$ of a node and the energy in the battery.  Driving
-edge $e = (v, w)$ at speed level $k$ moves $(v, x) \to (w, \delta_{e,k}(x))$
+edge $e = (v, w)$ at speed level $k$ (speed adaptation as in Baum et al.
+2020) moves $(v, x) \to (w, \delta_{e,k}(x))$
 in $t_{e,k}$ seconds, provided $x \ge \underline e$ and
 $\delta_{e,k}(x) \ge \underline e$.  Charging at station $j$ located at $v$
 moves $(v, x) \to (v, y)$, $y > x$, in $W_j(t) + \sigma_j + F_j(y) - F_j(x)$
@@ -25,9 +26,21 @@ first stop could have charged, and $F_j$, the money and the wear are additive
 along the charging curve.  The evaluator checks the reserve on arrival and on
 departure only, so at the origin with $x_0 < \underline e$ a stop may end
 below the reserve when another stop at the same node follows.  This is
-exactly the set of plans `evaluate()` accepts; earlier versions allowed one
-stop per node visit and missed such routes (BUG-3 of the cross-validation
-suite).
+exactly the set of plans `evaluate()` accepts (up to its float tolerance, see
+below); earlier versions allowed one stop per node visit and missed such
+routes (BUG-3 of the cross-validation suite).
+
+*Feasibility tolerance.*  The guarantees below are stated for exact
+arithmetic.  `evaluate()` accepts an energy shortfall of up to
+`TOL_KWH` $= 10^{-6}$ kWh at every reserve, arrival, cap and empty-battery
+check, to absorb the rounding of float sums of edge consumptions.  The
+exact planners (BLS, CFP, Pareto) do not use this slack: they treat a state
+as feasible up to their own `eps` $= 10^{-9}$ kWh only.  On a knife-edge
+instance `evaluate()` can therefore accept a plan that is up to $10^{-6}$ kWh
+short: one faster than the exact optimum (e.g. without a stop that would add
+a few joules), or one on an instance where the exact planners report that no
+route exists.  Such plans are infeasible in exact arithmetic; the slack is
+float-noise tolerance, not part of the model.
 
 **Lemma 1 (monotonicity).** Let two partial routes reach the same node $v$
 with $(t_1, x_1)$ and $(t_2, x_2)$, $t_1 \le t_2$ and $x_1 \ge x_2$.  Any
@@ -162,7 +175,7 @@ random instances by `tests/test_labels.py`) while settling fewer labels.
 
 ## 4. CFP — charging function propagation (continuous charging)
 
-BLS fixes charging amounts to a grid.  CFP (Baum et al. 2015, 2020) instead
+BLS fixes charging amounts to a grid.  CFP (Baum et al. 2015, 2019) instead
 *defers* the decision of how long to charge at the last station until it is
 known what the rest of the route needs.
 
@@ -185,12 +198,14 @@ $$ B(t) = f\big(\min(F_j^{-1}(F_j(b) + t - t_0),\ \bar e)\big), $$
 a piecewise-linear, non-decreasing function of the arrival time (concave when
 the charging power does not increase with the energy).
 
-**Lemma 3 (switching at breakpoints).** With static waits, when arriving at a
-new station $j'$ the best moment to stop charging at $j$ and start charging at
-$j'$ lies at a breakpoint of $B$.  This includes a station $j' \ne j$ at the
-node of $j$ itself (consecutive stops): then $B$ is the label's own charging
-curve at $j$, and its breakpoints are the energies where the power of $j$
-changes -- e.g. where a derated DC charger falls below the AC charger next to it.
+**Lemma 3 (switching at breakpoints).** Let the waits be static and let the
+charging power of the new station $j'$ not increase with the energy
+($F_{j'}^{-1}$ concave).  Then, when arriving at $j'$, the best moment to
+stop charging at $j$ and start charging at $j'$ lies at a breakpoint of $B$.
+This includes a station $j' \ne j$ at the node of $j$ itself (consecutive
+stops): then $B$ is the label's own charging curve at $j$, and its
+breakpoints are the energies where the power of $j$ changes -- e.g. where a
+derated DC charger falls below the AC charger next to it.
 
 *Proof.* For a fixed final time $t$, switching at $t'$ gives
 $\Phi(t') = F_{j'}^{-1}\big(F_{j'}(B(t')) + t - t' - W_{j'} - \sigma_{j'}\big)$.
@@ -202,10 +217,28 @@ $B(t')$ increases, so $\Phi'$ changes sign at most once, from negative to
 positive: $\Phi$ is quasi-convex on the piece and attains its maximum at an
 endpoint.  $\square$
 
+Both conditions matter.  Where $B(t')$ crosses an energy at which the power
+of $j'$ *increases* -- the ramp-up at low SoC of every vehicle preset
+(`model.md` §4) -- $p_{j'}$ jumps up, $\Phi'$ can turn from positive to
+negative and $\Phi$ has a local maximum inside the piece; a time-dependent
+wait adds a $-W_{j'}'$ term that jumps at the knots of the wait profile.  Cutting the pieces of $B$ at these points restores the
+argument, so the *extended candidate set* -- breakpoints of $B$, crossings of
+the upward power breaks of $j'$ and wait-profile knots -- is exact in general
+(Lemma 1 of `cfp.py`, option `exact_switching=True`, the default).  With the
+breakpoints alone (`exact_switching=False`) CFP misses the optimum by more
+than 10 s on a line with a curve that ramps up
+(`test_nonconcave_charging_curve_needs_upward_break_candidates`).
+
 **Key.** Let $t_{feas}$ be the earliest time at which $B$ is defined.  The
 queue key is $t_{feas}$ (CFP) or $\min_t\, t + h(v, B(t))$ (CFP-A\*).
-Because $B'(t) \le P_{\max}/3600$ and the linear part of $h$ falls by at most
-$3600/P_{\max}$ per kWh, $t + h(v, B(t))$ is non-decreasing in $t$ as long as
+While the label charges at $j$ with energy $x$, $B'(t) \le p_j(x)/3600$, and
+the linear part of $h$ falls by at most $r$ per kWh, the rate of the
+potential: $3600/P_{\max}$ for the basic one, and for the tight one the best
+rate over the energies the battery can be charged in (Section 3).  Every
+energy $x$ of a stop lies in that range, so $r\,p_j(x)/3600 \le 1$ ($r$ can
+exceed $3600/P_{\max}$, e.g. when a high reserve excludes the bins of peak
+power, so $B' \le P_{\max}/3600$ alone would not suffice).  Hence
+$t + h(v, B(t))$ is non-decreasing in $t$ as long as
 the stop-count term of the tight potential (Section 3) is constant; it can
 drop inside a label (the vehicle keeps charging in a stop it has already paid
 for), so the minimum is taken over $t_{feas}$ and the times at which $B$ reaches
@@ -250,17 +283,18 @@ cold two-charger line of BUG-3 (16 s faster than the best single stop).
 
 **Theorem 3.** With static waits, CFP returns a fastest feasible route with
 arbitrary (continuous) charging amounts and any number of consecutive stops
-at different stations of a node, i.e. over all plans `evaluate()` accepts (a
-second stop at the same station right after the first is never useful,
-Section 1).  *Sketch:* every label operation is monotone
+at different stations of a node, i.e. over all plans that are feasible in
+exact arithmetic -- the plans `evaluate()` accepts, up to its float
+tolerance (Section 1); a second stop at the same station right after the
+first is never useful (Section 1).  *Sketch:* every label operation is monotone
 and distributes over pointwise maxima, so pruning labels below the envelope
-of settled labels is safe; by Lemma 3 creating station labels at breakpoints
-loses nothing, also for a stop that follows a stop at the same node; keys are
-lower bounds that never decrease along label extensions; the first final
-entry popped at $d$ is therefore optimal.
-$\square$ (`cfp.py` extends the candidate set by upward power breaks and
-wait-profile knots, which makes the result exact for non-concave charging
-curves and FIFO time-dependent waits as well.)
+of settled labels is safe; by Lemma 3 and its extension, creating station
+labels at the candidate times loses nothing, also for a stop that follows a
+stop at the same node; keys are lower bounds that never decrease along label
+extensions; the first final entry popped at $d$ is therefore optimal.
+$\square$ (With the breakpoints alone this holds for concave charging
+functions; the default extended candidate set makes the result exact for
+non-concave charging curves and FIFO time-dependent waits as well.)
 
 The consecutive-stop part is checked against an independent oracle: on a line
 with two or three chargers at one node (also at the origin, where stops may
@@ -374,9 +408,12 @@ exact planners trade speed for energy.
   problem revisited: optimal routing for electric vehicles.* KI 2010, LNCS 6359.
 * Baum, Dibbelt, Gemsa, Wagner, Zündorf (2015). *Shortest feasible paths with
   charging stops.* ACM SIGSPATIAL 2015.
+* Baum, Dibbelt, Gemsa, Wagner, Zündorf (2019). *Shortest feasible paths
+  with charging stops for battery electric vehicles.* Transportation Science
+  53(6), 1627-1655.
 * Baum, Dibbelt, Wagner, Zündorf (2020). *Modeling and engineering
   constrained shortest path algorithms for battery electric vehicles.*
-  Transportation Science 54(6).
+  Transportation Science 54(6) (speed adaptation, without charging stops).
 * Hart, Nilsson, Raphael (1968). *A formal basis for the heuristic
   determination of minimum cost paths.* IEEE Trans. SSC 4(2).
 * Mandow, Pérez de la Cruz (2010). *Multiobjective A\* search with consistent

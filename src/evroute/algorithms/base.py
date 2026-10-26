@@ -24,8 +24,16 @@ class Planner(ABC):
     exact: ClassVar[str] = "heuristic"
     objectives: ClassVar[tuple[str, ...]] = ("time",)
     description: ClassVar[str] = ""
+    #: Names of the keyword options the planner reads.  Any other name raises
+    #: :class:`ValueError`, so a misspelt option never silently runs default
+    #: settings; ``None`` skips the check.
+    OPTIONS: ClassVar[tuple[str, ...] | None] = None
 
     def __init__(self, **options: Any) -> None:
+        if self.OPTIONS is not None:
+            unknown = sorted(set(options) - set(self.OPTIONS))
+            if unknown:
+                raise ValueError(f"unknown option(s) {unknown} for {self.name!r}; choose from {self.OPTIONS}")
         self.options = options
 
     def plan(self, scenario: Scenario | PreparedScenario, *, trace: bool = False) -> RoutePlan:

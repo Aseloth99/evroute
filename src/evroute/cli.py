@@ -14,13 +14,17 @@ Examples::
     evroute experiments --quick -o results/      # also writes results/results.html
     evroute results results/ --lang en
 
-Every command accepts a preset name or the path of a scenario ``.json`` file.
+Commands that take a scenario accept a preset name or the path of a scenario
+``.json`` file; ``serve`` takes preset names only.  Bad input (an unknown
+name, an out-of-range value, an unreadable file) is reported as one
+``error: ...`` line on stderr with exit code 2.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 from typing import Any, Sequence
@@ -28,25 +32,49 @@ from typing import Any, Sequence
 from .units import format_clock, format_duration
 
 
+class UsageError(Exception):
+    """Bad command-line input: :func:`main` prints ``error: <message>`` and returns 2."""
+
+
 # ---------------------------------------------------------------- helpers
 def _load_scenario(args: argparse.Namespace):
     from .scenario import Scenario
 
     name = args.scenario
-    if name.endswith(".json") and Path(name).exists():
-        sc = Scenario.load(name)
+    if name.endswith(".json"):
+        if not Path(name).is_file():
+            raise UsageError(f"no scenario file {name}")
+        try:
+            sc = Scenario.load(name)
+        except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:  # unreadable or malformed
+            raise UsageError(f"cannot read scenario {name}: {type(exc).__name__}: {exc}") from None
     else:
-        from .generators.presets import get_scenario
+        from .generators.presets import PRESETS, get_scenario
 
-        sc = get_scenario(name)
-    return _apply_overrides(sc, args)
+        try:
+            sc = get_scenario(name)
+        except KeyError as exc:
+            if name in PRESETS:  # a bug in the preset builder, not a typo
+                raise
+            raise UsageError(exc.args[0]) from None
+    sc = _apply_overrides(sc, args)
+    try:
+        sc.validate()
+    except ValueError as exc:
+        raise UsageError(str(exc)) from None
+    if sc.query.origin == sc.query.destination:
+        raise UsageError("origin and destination must differ")
+    return sc
 
 
 def _node(sc, value: str) -> int:
     try:
         return int(value)
     except ValueError:
-        return sc.network.node_by_name(value)
+        try:
+            return sc.network.node_by_name(value)
+        except KeyError as exc:
+            raise UsageError(exc.args[0]) from None
 
 
 def _apply_overrides(sc, args: argparse.Namespace):
@@ -58,8 +86,10 @@ def _apply_overrides(sc, args: argparse.Namespace):
     if getattr(args, "soc", None) is not None:
         q["initial_soc"] = args.soc
     if getattr(args, "depart", None):
-        hh, mm = args.depart.split(":")
-        q["departure_s"] = int(hh) * 3600 + int(mm) * 60
+        m = re.fullmatch(r"\s*(\d{1,2}):(\d{2})\s*", args.depart)
+        if not m or int(m.group(1)) > 23 or int(m.group(2)) > 59:
+            raise UsageError(f"--depart must be a clock time HH:MM (00:00 to 23:59), got {args.depart!r}")
+        q["departure_s"] = int(m.group(1)) * 3600 + int(m.group(2)) * 60
     if q:
         sc = sc.with_query(**q)
     c: dict[str, Any] = {}
@@ -87,8 +117,19 @@ def _apply_overrides(sc, args: argparse.Namespace):
     if getattr(args, "vehicle", None):
         from .vehicle import get_vehicle
 
-        sc = sc.with_(vehicle=get_vehicle(args.vehicle))
+        try:
+            sc = sc.with_(vehicle=get_vehicle(args.vehicle))
+        except KeyError as exc:
+            raise UsageError(exc.args[0]) from None
     return sc
+
+
+def _algorithm(name: str) -> str:
+    from .algorithms import available
+
+    if name not in available():
+        raise UsageError(f"unknown algorithm {name!r}; choose from {available()}")
+    return name
 
 
 def _algorithms(spec: str | None) -> list[str]:
@@ -96,7 +137,14 @@ def _algorithms(spec: str | None) -> list[str]:
 
     if not spec or spec == "all":
         return available()
-    return [a.strip() for a in spec.split(",") if a.strip()]
+    names = [_algorithm(a.strip()) for a in spec.split(",") if a.strip()]
+    if not names:
+        raise UsageError("no algorithm given")
+    return names
+
+
+def _cannot_write(path: str, exc: OSError) -> UsageError:
+    return UsageError(f"cannot write {path}: {exc.strerror or exc}")
 
 
 def _table(rows: list[list[str]], header: list[str], left: int = 1) -> str:
@@ -181,10 +229,13 @@ def cmd_plan(args: argparse.Namespace) -> int:
     from .algorithms import plan
 
     sc = _load_scenario(args)
-    result = plan(sc, args.algorithm)
+    result = plan(sc, _algorithm(args.algorithm))
     _print_plan(result, sc)
     if args.json:
-        Path(args.json).write_text(json.dumps(result.to_dict(trace_events=0), ensure_ascii=False, indent=1))
+        try:
+            Path(args.json).write_text(json.dumps(result.to_dict(trace_events=0), ensure_ascii=False, indent=1))
+        except OSError as exc:
+            raise _cannot_write(args.json, exc) from None
         print(f"wrote {args.json}")
     return 0 if result.feasible else 2
 
@@ -205,7 +256,7 @@ def cmd_compare(args: argparse.Namespace) -> int:
             ["algorithm", "feasible", "time", "km", "stops", "money", "arrive", "ms", "settled"],
         )
     )
-    return 0
+    return 0 if plans else 1  # every planner raised
 
 
 def cmd_viz(args: argparse.Namespace) -> int:
@@ -219,9 +270,15 @@ def cmd_viz(args: argparse.Namespace) -> int:
 
 
 def cmd_serve(args: argparse.Namespace) -> int:
+    from .generators.presets import PRESETS
     from .server import serve
 
-    serve(args.scenario, host=args.host, port=args.port, open_browser=args.open)
+    if args.scenario not in PRESETS:  # the live viewer re-plans presets, not .json files
+        raise UsageError(f"unknown preset {args.scenario!r}; serve takes a preset name (see 'evroute scenarios')")
+    try:
+        serve(args.scenario, host=args.host, port=args.port, open_browser=args.open)
+    except (OSError, OverflowError) as exc:  # port in use, bad host or port number
+        raise UsageError(f"cannot serve on {args.host}:{args.port}: {exc}") from None
     return 0
 
 
@@ -248,8 +305,10 @@ def cmd_robustness(args: argparse.Namespace) -> int:
     from .algorithms import plan
     from .robustness import monte_carlo
 
+    if args.n < 1:
+        raise UsageError(f"-n must be at least 1, got {args.n}")
     sc = _load_scenario(args)
-    route = plan(sc, args.algorithm)
+    route = plan(sc, _algorithm(args.algorithm))
     print(route)
     if not route.feasible:
         return 2
@@ -274,7 +333,10 @@ def cmd_results(args: argparse.Namespace) -> int:
 
 def cmd_export(args: argparse.Namespace) -> int:
     sc = _load_scenario(args)
-    sc.save(args.out)
+    try:
+        sc.save(args.out)
+    except OSError as exc:
+        raise _cannot_write(args.out, exc) from None
     print(f"wrote {args.out}")
     return 0
 
@@ -372,7 +434,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    return int(args.func(args) or 0)
+    try:
+        return int(args.func(args) or 0)
+    except UsageError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
 
 
 if __name__ == "__main__":  # pragma: no cover

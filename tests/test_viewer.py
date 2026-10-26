@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import re
 import shutil
+import socket
 import subprocess
 import threading
 import urllib.error
@@ -524,6 +525,16 @@ def test_server_rejects_malformed_and_oversized_bodies(server):
     status, data = _post(server, "/api/plan", raw=b" " * (MAX_BODY_BYTES + 1))
     assert status == 413
     assert _post(server, "/api/other", {})[0] == 404
+    # SRV-1: deep nesting is a client error, not a RecursionError (500)
+    for raw in (b"[" * 30000 + b"]" * 30000, b'{"a":' * 10000 + b"1" + b"}" * 10000):
+        status, data = _post(server, "/api/plan", raw=raw)
+        assert status == 400 and "invalid JSON" in data["error"]
+    # ... and a negative Content-Length is invalid, not "too large"
+    host, port = server.server_address[:2]
+    with socket.create_connection((host, port), timeout=30) as s:
+        s.sendall(b"POST /api/plan HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\nContent-Length: -5\r\n\r\n")
+        reply = s.makefile("rb").read()  # the server closes the connection
+    assert reply.startswith(b"HTTP/1.1 400 ") and b"invalid Content-Length" in reply
 
 
 def test_build_plan_scenario_unit():

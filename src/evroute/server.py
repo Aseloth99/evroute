@@ -431,16 +431,19 @@ class ViewerRequestHandler(BaseHTTPRequestHandler):
             try:
                 length = int(length_hdr)
             except ValueError:
+                length = -1
+            if length < 0:  # the body cannot be delimited: drop the connection
+                self.close_connection = True
                 self._error(HTTPStatus.BAD_REQUEST, "invalid Content-Length")
                 return
-            if length < 0 or length > MAX_BODY_BYTES:
+            if length > MAX_BODY_BYTES:
                 self.close_connection = True
                 self._error(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, f"request body larger than {MAX_BODY_BYTES} bytes")
                 return
             raw = self.rfile.read(length)
             try:
                 body = json.loads(raw.decode("utf-8") or "{}")
-            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            except (UnicodeDecodeError, json.JSONDecodeError, RecursionError) as exc:  # RecursionError: deep nesting
                 self._error(HTTPStatus.BAD_REQUEST, f"invalid JSON: {exc}")
                 return
             self._json(HTTPStatus.OK, self.server.plan(body))
@@ -504,7 +507,7 @@ def serve(
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="python -m evroute.server", description="Live EV route planning in the browser.")
-    ap.add_argument("--scenario", default="turkey-karaman-istanbul", help="preset name (see evroute list)")
+    ap.add_argument("--scenario", default="turkey-karaman-istanbul", help="preset name (see evroute scenarios)")
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=8765)
     ap.add_argument("--lang", default="tr", choices=["tr", "en"])

@@ -225,7 +225,7 @@ def read_csv_text(text: str) -> tuple[list[str], list[dict[str, Any]]]:
 
 def _read_json(path: Path) -> Any:
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        return json.loads(path.read_text(encoding="utf-8-sig"))
     except (OSError, ValueError):
         return None
 
@@ -259,7 +259,7 @@ def load_results(results_dir: str | Path) -> dict[str, Any]:
         if d.is_dir():
             for f in sorted(d.glob("*.csv")):
                 try:
-                    text = f.read_text(encoding="utf-8")
+                    text = f.read_text(encoding="utf-8-sig")  # a spreadsheet may have re-saved it with a BOM
                 except OSError:
                     continue
                 try:
@@ -562,7 +562,10 @@ def _sec_scalability(exp: Mapping[str, Any], checks: _Checks, ctx: Mapping[str, 
     inst: dict[tuple[Any, Any], dict[str, dict[str, Any]]] = {}
     for r in rows:
         inst.setdefault((r.get("nodes"), r.get("pair")), {})[str(r.get("algorithm"))] = r
-    speed: dict[str, dict[int, list[tuple[float, float]]]] = {"bls-astar": {}, "cfp-astar": {}}
+    # A speed-up pairs every instance both algorithms solved, also when their optima
+    # differ: such a mismatch is stated next to the speed-up, never hidden by dropping it.
+    speed: dict[str, dict[int, list[tuple[float, float, float, float]]]] = {"bls-astar": {}, "cfp-astar": {}}
+    mismatches: dict[str, list[int]] = {"bls-astar": [0, 0], "cfp-astar": [0, 0]}  # [failed, compared]
     for (n, pair), by in sorted(inst.items(), key=lambda kv: (kv[0][0] or 0, kv[0][1] or 0)):
         label = f"n={n} pair {pair}"
         for fast, slow, cid in (("bls-astar", "bls", "bls-astar-equals-bls"), ("cfp-astar", "cfp", "cfp-astar-equals-cfp")):
@@ -571,10 +574,12 @@ def _sec_scalability(exp: Mapping[str, Any], checks: _Checks, ctx: Mapping[str, 
                 ta, tb = _num(a, "time_min"), _num(b, "time_min")
                 ok = (_feasible(a) == _feasible(b)) and (not _feasible(a) or (ta is not None and tb is not None and _close(ta, tb)))
                 checks.add(cid, ok, "scalability", f"{label}: {slow} {tb} vs {fast} {ta} min")
+                mismatches[fast][0] += not ok
+                mismatches[fast][1] += 1
                 ra, rb = _num(a, "runtime_ms"), _num(b, "runtime_ms")
                 sa, sb = _num(a, "settled"), _num(b, "settled")
-                if ok and _feasible(a) and ra and rb and ra > 0 and isinstance(n, int):
-                    speed[fast].setdefault(n, []).append((rb / ra, (sb / sa) if sa and sb and sa > 0 else float("nan")))
+                if _feasible(a) and _feasible(b) and ra and rb and ra > 0 and isinstance(n, int):
+                    speed[fast].setdefault(n, []).append((rb / ra, (sb / sa) if sa and sb and sa > 0 else float("nan"), ra, rb))
         tc = _num(by["cfp"], "time_min") if "cfp" in by and _feasible(by["cfp"]) else None
         for other in ("bls", "bls-astar", "station-graph"):
             if tc is not None and other in by and _feasible(by[other]):
@@ -583,11 +588,18 @@ def _sec_scalability(exp: Mapping[str, Any], checks: _Checks, ctx: Mapping[str, 
                     checks.add("cfp-lower-bound", _leq(tc, to), "scalability", f"{label}: CFP {tc} > {other} {to} min")
     speedup = []
     for fast, by_n in speed.items():
-        pts = [{"nodes": n, "speedup": _geomean(x[0] for x in v), "settled_ratio": _geomean(x[1] for x in v), "n": len(v)}
+        # geometric means; the mean runtimes are geometric too, so their ratio is the speed-up
+        pts = [{"nodes": n, "speedup": _geomean(x[0] for x in v), "settled_ratio": _geomean(x[1] for x in v), "n": len(v),
+                "runtime_ms": _geomean(x[2] for x in v), "baseline_runtime_ms": _geomean(x[3] for x in v)}
                for n, v in sorted(by_n.items())]
         if pts:
             speedup.append({"algorithm": fast, "baseline": fast.replace("-astar", ""), "points": pts})
-    sp = {s["algorithm"]: s["points"][-1] for s in speedup}
+    # The headline compares both pairs at one size: the largest that has both (a full
+    # run skips BLS on the largest networks); without a common size each keeps its own.
+    common = set.intersection(*({p["nodes"] for p in s["points"]} for s in speedup)) if speedup else set()
+    ref_n = max(common) if common else None
+    sp = {s["algorithm"]: next((p for p in s["points"] if p["nodes"] == ref_n), s["points"][-1]) for s in speedup}
+    bad = {k: v for k, v in mismatches.items() if v[0]}
     nmax = max(sizes) if sizes else None
 
     def finding(lang: str) -> str:
@@ -602,26 +614,38 @@ def _sec_scalability(exp: Mapping[str, Any], checks: _Checks, ctx: Mapping[str, 
             return f"At {fmt_num(p['nodes'], 0, lang)} nodes the fastest algorithm is {algo_title(fastest['algorithm'], lang)} ({fmt_num(p['runtime_ms'], 0, lang)} ms)."
         parts = []
         ref = b or c
+        c_at = fmt_num(c["nodes"], 0, lang) if b and c and c["nodes"] != b["nodes"] else None
         if lang == "tr":
             head = f"{fmt_num(ref['nodes'], 0, lang)} düğümlü ağda "
             if b:
-                parts.append(f"BLS-A* BLS ile aynı optimumu {fmt_factor(b['speedup'], lang)} daha hızlı buluyor"
+                parts.append((f"BLS-A* BLS ile karşılaştırıldığında {fmt_factor(b['speedup'], lang)} daha hızlı" if "bls-astar" in bad
+                              else f"BLS-A* BLS ile aynı optimumu {fmt_factor(b['speedup'], lang)} daha hızlı buluyor")
                              + (f" ve {fmt_factor(b['settled_ratio'], lang)} daha az etiket kesinleştiriyor" if _finite(b.get("settled_ratio")) else ""))
             if c:
-                parts.append(f"CFP-A* ise CFP ile karşılaştırıldığında {fmt_factor(c['speedup'], lang)} daha hızlı")
-            return head + "; ".join(parts) + "."
+                parts.append(f"CFP-A* ise {c_at + ' düğümde ' if c_at else ''}CFP ile karşılaştırıldığında {fmt_factor(c['speedup'], lang)} daha hızlı")
+            s = head + "; ".join(parts) + " (örnek başına hızlanmaların geometrik ortalaması)"
+            for fast, (k, m) in bad.items():
+                s += f"; ancak {algo_title(fast, lang)} ile {algo_title(fast.replace('-astar', ''), lang)} {m} örneğin {k} tanesinde farklı sonuç buluyor"
+            return s + (" (kesinlik denetimlerine bakın)." if bad else ".")
         head = f"At {fmt_num(ref['nodes'], 0, lang)} nodes "
         if b:
             parts.append(f"BLS-A* is {fmt_factor(b['speedup'], lang)} faster than BLS"
                          + (f" and settles {fmt_factor(b['settled_ratio'], lang)} fewer labels" if _finite(b.get("settled_ratio")) else ""))
         if c:
-            parts.append(f"CFP-A* is {fmt_factor(c['speedup'], lang)} faster than CFP")
-        return head + "; ".join(parts) + " — with identical optima."
+            parts.append(f"CFP-A* is {fmt_factor(c['speedup'], lang)} faster than CFP" + (f" at {c_at} nodes" if c_at else ""))
+        s = head + "; ".join(parts) + " (geometric means of per-instance speed-ups)"
+        if not bad:
+            return s + " — with identical optima."
+        return s + "; but " + " and ".join(f"{algo_title(fast, lang)} and {algo_title(fast.replace('-astar', ''), lang)} disagree on {k} of {m} instances"
+                                           for fast, (k, m) in bad.items()) + " (see the exactness checks)."
 
-    return {"data": {"series": series, "speedup": speedup, "sizes": sizes, "max_nodes": nmax},
+    return {"data": {"series": series, "speedup": speedup, "sizes": sizes, "max_nodes": nmax,
+                     "headline_nodes": (sp.get("bls-astar") or sp.get("cfp-astar") or {}).get("nodes")},
             "finding": _both(finding),
             "facts": {"speedup": {k: v["speedup"] for k, v in sp.items()},
                       "settled_ratio": {k: v["settled_ratio"] for k, v in sp.items()},
+                      "nodes": {k: v["nodes"] for k, v in sp.items()},
+                      "mismatches": {k: v for k, v in mismatches.items() if v[1]},
                       "slopes": {s["algorithm"]: s["slope"] for s in series}}}
 
 
@@ -668,14 +692,16 @@ def _sec_optimality_gap(exp: Mapping[str, Any], checks: _Checks, ctx: Mapping[st
                  f"{fmt_pct(worst['stats']['mean'], 1, lang)}, en kötü durumda {algo_title(wmax['algorithm'], lang)} "
                  f"{fmt_pct(wmax['stats']['max'], 1, lang)} daha uzun sürüyor")
             if grid:
-                s += f"; ızgaralı BLS-A* yalnızca {fmt_pct(grid['stats']['mean'], 2, lang)} uzakta"
+                s += (f"; ızgaralı BLS-A* ortalama yalnızca {fmt_pct(grid['stats']['mean'], 2, lang)}, "
+                      f"en çok {fmt_pct(grid['stats']['max'], 2, lang)} uzakta")
             return s + "."
         s = (f"Over {pairs} origin–destination pairs the closest heuristic is {algo_title(best['algorithm'], lang)} "
              f"(mean gap {fmt_pct(best['stats']['mean'], 1, lang)}); {algo_title(worst['algorithm'], lang)} averages "
              f"{fmt_pct(worst['stats']['mean'], 1, lang)} and the worst case is {fmt_pct(wmax['stats']['max'], 1, lang)} "
              f"({algo_title(wmax['algorithm'], lang)})")
         if grid:
-            s += f"; grid-based BLS-A* stays within {fmt_pct(grid['stats']['mean'], 2, lang)}"
+            s += (f"; grid-based BLS-A* is {fmt_pct(grid['stats']['mean'], 2, lang)} from the optimum on average "
+                  f"(at most {fmt_pct(grid['stats']['max'], 2, lang)})")
         return s + "."
 
     return {"data": {"groups": groups, "pairs": pairs}, "finding": _both(finding),
@@ -890,9 +916,19 @@ def _sec_pareto(exp: Mapping[str, Any], checks: _Checks, ctx: Mapping[str, Any])
             if case["id"] == cid:
                 refs = [{"algorithm": r["algorithm"], "time_min": r["time_min"], "money": r["money"], "soh_pct": r["soh_pct"],
                          "stops": r["stops"]} for r in case["rows"] if r["feasible"] and r["time_min"] is not None and r["money"] is not None]
+        # The front is exact on its charging-target grid only (ε-approximate in quick runs): a
+        # plan that charges between the grid's targets (CFP, or BLS on a finer grid) can beat
+        # members in every criterion.  That is flagged here, not counted as an exactness failure.
+        beaten: set[int] = set()
+        for ref in refs:
+            rv = (ref["time_min"], ref["money"], ref["soh_pct"] if ref["soh_pct"] is not None else 0.0)
+            hit = [i for i, b in enumerate(vec) if _dominates(rv, b)]
+            ref["dominates"] = len(hit)
+            beaten.update(hit)
         meta = case_meta(cid)
         fronts.append({"case": cid, "title": meta["title"], "currency": meta["currency"], "points": pts,
-                       "fastest": 0, "cheapest": cheapest, "knee": knee, "references": refs})
+                       "fastest": 0, "cheapest": cheapest, "knee": knee, "references": refs,
+                       "beaten_by_references": sorted(beaten)})
     if not fronts and not empty:
         return None
 
@@ -916,7 +952,8 @@ def _sec_pareto(exp: Mapping[str, Any], checks: _Checks, ctx: Mapping[str, Any])
         return s + "."
 
     return {"data": {"fronts": fronts, "empty": empty}, "finding": _both(finding),
-            "facts": {"front_sizes": {f["case"]: len(f["points"]) for f in fronts}}}
+            "facts": {"front_sizes": {f["case"]: len(f["points"]) for f in fronts},
+                      "beaten_by_references": {f["case"]: len(f["beaten_by_references"]) for f in fronts}}}
 
 
 def _sec_robustness(exp: Mapping[str, Any], checks: _Checks, ctx: Mapping[str, Any]) -> dict[str, Any] | None:
@@ -1100,8 +1137,8 @@ SECTION_TEXT: dict[str, dict[str, LangText]] = {
     },
     "pareto": {
         "title": {"tr": "Pareto cephesi: süre, ücret, yıpranma", "en": "Pareto front: time, money, wear"},
-        "meaning": {"tr": "Her nokta, süre, ücret ve batarya yıpranmasında aynı anda daha iyisi olmayan bir plandır; seçimi sürücü yapar, algoritma daha iyi bir seçeneğin kaçırılmadığını garanti eder.",
-                    "en": "Every point is a plan that no other plan beats on time, money and battery wear at once; the driver picks the trade-off, the algorithm guarantees nothing better was missed."},
+        "meaning": {"tr": "Her nokta, aynı şarj hedefi ızgarasındaki hiçbir planın süre, ücret ve batarya yıpranmasında aynı anda geçemediği bir plandır (hızlı koşularda ε payıyla); seçimi sürücü yapar. Cephe yalnızca bu ızgarada kesindir: ızgara hedeflerinin arasında şarj eden bir plan, örneğin CFP'nin sürekli şarjı, bir üyeyi yine de geçebilir.",
+                    "en": "Every point is a plan that no other plan on the same charging-target grid beats on time, money and battery wear at once (within ε in quick runs); the driver picks the trade-off. The front is exact on that grid only: a plan that charges between the grid's targets, such as CFP's continuous charging, can still beat a member."},
     },
     "robustness": {
         "title": {"tr": "Sağlamlık: güvenlik katsayısı", "en": "Robustness: safety factor"},
@@ -1129,20 +1166,33 @@ def _kpis(sections: Mapping[str, Mapping[str, Any]], checks: Mapping[str, Any]) 
         out.append({"id": kid, "section": section, "label": label, "value": value, "sub": sub, "tone": tone, "hero": hero})
 
     sc = sections.get("scalability", {}).get("facts") or {}
+    at = sc.get("nodes") or {}
+    mism = sc.get("mismatches") or {}
+
+    def optimum(fast: str, L: str) -> str:
+        """'same optimum' only when every equality check of the pair passed."""
+        k, m = mism.get(fast, (0, 0))
+        if k:
+            return f"{m} örneğin {k} tanesinde farklı sonuç" if L == "tr" else f"differs on {k} of {m} instances"
+        return "aynı optimum" if L == "tr" else "same optimum"
+
     sp = (sc.get("speedup") or {}).get("bls-astar")
     if _finite(sp):
-        data = sections["scalability"]["data"]
-        last = next((s["points"][-1] for s in data["speedup"] if s["algorithm"] == "bls-astar"), {})
-        sr = last.get("settled_ratio")
+        sr = (sc.get("settled_ratio") or {}).get("bls-astar")
         kpi("speedup-bls", "scalability", {"tr": "Hızlanma: BLS-A* / BLS", "en": "Speed-up: BLS-A* vs BLS"},
             _both(lambda L: fmt_factor(sp, L) + (" daha hızlı" if L == "tr" else " faster")),
-            _both(lambda L: (f"{fmt_num(last.get('nodes'), 0, L)} düğüm · {fmt_factor(sr, L)} daha az etiket · aynı optimum"
-                             if L == "tr" else f"{fmt_num(last.get('nodes'), 0, L)} nodes · {fmt_factor(sr, L)} fewer labels · same optimum")
-                  if _finite(sr) else ""), "ok", hero=True)
+            _both(lambda L: " · ".join(x for x in (
+                f"{fmt_num(at.get('bls-astar'), 0, L)} {'düğüm' if L == 'tr' else 'nodes'}",
+                ((f"{fmt_factor(sr, L)} daha az etiket" if L == "tr" else f"{fmt_factor(sr, L)} fewer labels") if _finite(sr) else ""),
+                optimum("bls-astar", L)) if x)),
+            "bad" if mism.get("bls-astar", (0, 0))[0] else "ok", hero=True)
     cp = (sc.get("speedup") or {}).get("cfp-astar")
     if _finite(cp):
         kpi("speedup-cfp", "scalability", {"tr": "Hızlanma: CFP-A* / CFP", "en": "Speed-up: CFP-A* vs CFP"},
-            _both(lambda L: fmt_factor(cp, L)), {"tr": "sürekli şarj, aynı optimum", "en": "continuous charging, same optimum"})
+            _both(lambda L: fmt_factor(cp, L)),
+            _both(lambda L: (f"{fmt_num(at.get('cfp-astar'), 0, L)} düğüm · sürekli şarj · {optimum('cfp-astar', L)}" if L == "tr"
+                             else f"{fmt_num(at.get('cfp-astar'), 0, L)} nodes · continuous charging · {optimum('cfp-astar', L)}")),
+            "bad" if mism.get("cfp-astar", (0, 0))[0] else "neutral")
     og = sections.get("optimality-gap", {})
     hg = (og.get("facts") or {}).get("heuristic_mean_gap_pct")
     if _finite(hg):
@@ -1238,8 +1288,10 @@ def analyze_results(loaded: Mapping[str, Any], *, out_dir: str | Path | None = N
         exp = experiments.get(name) or {"files": {}, "summary": None}
         rep = report.get(name) if isinstance(report.get(name), dict) else {}
         res = analysed.get(name) or {}
-        status = rep.get("status") or ("ok" if exp["files"] else "empty")
-        if status == "ok" and not exp["files"]:
+        # the runner writes an empty results.csv when no run produced a row
+        has_rows = any(f["rows"] for f in exp["files"].values())
+        status = rep.get("status") or ("ok" if has_rows else "empty")
+        if status == "ok" and not has_rows:
             status = "empty"
         if "error" in res:
             status, err = "error", res["error"]

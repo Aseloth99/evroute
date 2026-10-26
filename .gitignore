@@ -5,6 +5,11 @@ __pycache__/
 build/
 dist/
 .venv/
-results/tmp/
 *.log
 viewer_demo.html
+# default outputs of the CLI run from the repository root (anchored: the
+# package itself has a tracked src/evroute/viz/web/results/)
+/evroute.html
+/figures/
+/results/
+/results-ci/

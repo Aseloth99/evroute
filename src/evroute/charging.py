@@ -6,12 +6,17 @@ battery), not SoC fractions, so search code never multiplies by the capacity.
 
 Power is constant on each energy bin ``[e_i, e_{i+1})``, hence
 
-* ``F(e)``  -- seconds needed to charge from 0 to ``e`` -- is piecewise linear,
-  increasing and convex;
+* ``F(e)``  -- seconds needed to charge from 0 to ``e`` -- is piecewise linear
+  and increasing;
 * ``F^{-1}(t)`` -- the classic *charging function* "energy after ``t`` seconds"
-  -- is piecewise linear, increasing and concave;
+  -- is piecewise linear and increasing;
 * ``M(e)`` / ``S(e)`` -- cumulative money and state-of-health cost of charging
   from 0 to ``e`` -- are piecewise linear as well.
+
+``F`` is convex and ``F^{-1}`` concave only where the power does not increase
+with the energy.  Real DC curves ramp up at low state of charge (every
+vehicle preset does, up to 5-15 % SoC), so the exact planners do not assume
+concavity: CFP covers rising power with its default ``exact_switching=True``.
 
 All quantities between two energies are differences of these cumulative
 functions, evaluated exactly (no numeric integration).
@@ -148,6 +153,9 @@ def build_charging_function(
 ) -> ChargingFunction:
     """Combine vehicle curve and station limit into a :class:`ChargingFunction`.
 
+    The power of bin ``i`` is ``max(min(p_veh_i, station_power_kw) *
+    temperature_factor, 0.5)`` kW: the 0.5 kW floor keeps every bin chargeable
+    and only matters for chargers below about 1.5 kW.
     ``soh_rate_fn(c_rate, soc)`` returns SoH loss per kWh for a bin.
     """
     e_breaks = [s * capacity_kwh for s in soc_breaks]

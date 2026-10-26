@@ -28,7 +28,7 @@ scenario = Scenario(
     network=net,
     stations=[Station(id=0, node=s1, power_kw=120, kind="DC", plugs=4, price_per_kwh=0.5, name="Fast charger")],
     vehicle=car,
-    query=Query(origin=a, destination=z, initial_soc=0.55),
+    query=Query(origin=a, destination=z, initial_soc=0.8),
     conditions=Conditions(temperature_c=10),
     preferences=Preferences(reserve_soc=0.1, min_arrival_soc=0.15),
 )

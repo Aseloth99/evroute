@@ -298,8 +298,9 @@ other (the destination may host a faster station, or a detour may pay off).
 
 **Theorem.**  Let the waits be static, or let ``exact_switching`` be on and the
 waits FIFO.  Then the incumbent at termination is the least trip time over all
-routes the evaluator accepts with arbitrary charging amounts ``<= cap`` (any
-number of consecutive stops at different stations of a node).
+routes that are feasible in exact arithmetic, with arbitrary charging amounts
+``<= cap`` (any number of consecutive stops at different stations of a node)
+-- the routes the evaluator accepts, up to its float tolerance (see below).
 
 *Sketch.*  (i) The label function describes exactly the set of
 ``(time, energy)`` pairs of its route family, extension (section 2) and stops
@@ -324,7 +325,14 @@ positive time and does not raise the energy, so cycle labels are dominated.
 The dominance and feasibility tests use a tolerance ``eps`` (1e-9 kWh / s), so
 the returned time may exceed the exact optimum by a few times ``eps`` times the
 seconds per kWh of charging (far below a microsecond); the objective of the
-returned plan is nevertheless exactly what the evaluator measures.
+returned plan is nevertheless exactly what the evaluator measures.  The
+evaluator is more lenient: it lets every energy check fall short by up to
+:data:`~evroute.evaluate.TOL_KWH` (1e-6 kWh) to absorb float noise.  On a
+knife-edge instance it therefore accepts a plan up to 1e-6 kWh short that is
+faster than the optimum above (e.g. without a stop that adds a few joules),
+also on an instance where CFP reports that no route exists; such a plan is
+infeasible in exact arithmetic, and CFP does not return it (nor does BLS, with
+the same ``eps``).
 
 With time-dependent waits and ``exact_switching=False`` plans are still
 feasible and the objective still equals the evaluator's (waits are evaluated at

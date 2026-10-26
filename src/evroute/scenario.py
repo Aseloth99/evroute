@@ -13,6 +13,7 @@ precision.
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Any, Literal
@@ -139,13 +140,53 @@ class Scenario:
 
     def __post_init__(self) -> None:
         self._prepared: PreparedScenario | None = None
+        self._prepared_key: str | None = None
 
     # ------------------------------------------------------------- derived
     def prepare(self) -> "PreparedScenario":
-        """Return (and cache) the derived data used by all algorithms."""
-        if self._prepared is None:
+        """Return (and cache) the derived data used by all algorithms.
+
+        Vary a scenario through the ``with_*`` copies; a field changed in
+        place (``sc.query.initial_soc = 1.0``) is noticed here and the cache
+        is rebuilt, so a plan never uses stale derived data.  The network is
+        treated as immutable.
+        """
+        key = repr((self.query, self.conditions, self.preferences, self.stations, self.vehicle, self.currency))
+        if self._prepared is None or key != self._prepared_key:
             self._prepared = PreparedScenario(self)
+            self._prepared_key = key
         return self._prepared
+
+    def validate(self) -> None:
+        """Raise :class:`ValueError` for a value outside the model's domain.
+
+        Origin, destination and station nodes must be nodes of the network;
+        SoC fractions lie in ``[0, 1]`` (``max_charge_soc`` in ``(0, 1]``),
+        ``safety_factor >= 1``, ``charge_step_soc > 0``, and the departure
+        time and temperature are finite.  Called by :meth:`prepare`, so an
+        out-of-range value is never clamped or wrapped silently.
+        """
+        n = self.network.num_nodes
+
+        def is_node(v: Any) -> bool:
+            return isinstance(v, int) and not isinstance(v, bool) and 0 <= v < n
+
+        for key in ("origin", "destination"):
+            v = getattr(self.query, key)
+            if not is_node(v):
+                raise ValueError(f"{key} {v!r} is not a node of the network (0..{n - 1})")
+        for st in self.stations:
+            if not is_node(st.node):
+                raise ValueError(f"station {st.id} references unknown node {st.node!r}")
+        q, pref = self.query, self.preferences
+        _check_number("initial_soc", q.initial_soc, 0.0, 1.0)
+        _check_number("departure_s", q.departure_s)
+        _check_number("temperature_c", self.conditions.temperature_c)
+        _check_number("reserve_soc", pref.reserve_soc, 0.0, 1.0)
+        _check_number("min_arrival_soc", pref.min_arrival_soc, 0.0, 1.0)
+        _check_number("max_charge_soc", pref.max_charge_soc, 0.0, 1.0, open_lo=True)
+        _check_number("safety_factor", pref.safety_factor, 1.0)
+        _check_number("charge_step_soc", pref.charge_step_soc, 0.0, open_lo=True)
 
     def with_(self, **changes: Any) -> "Scenario":
         """Copy with replaced top-level fields (the cache is not shared)."""
@@ -236,6 +277,7 @@ class PreparedScenario:
     """
 
     def __init__(self, scenario: Scenario) -> None:
+        scenario.validate()
         self.scenario = scenario
         sc = scenario
         net = sc.network
@@ -253,8 +295,8 @@ class PreparedScenario:
         q = veh.usable_capacity_kwh(cond.temperature_c)
         self.capacity = q
         self.e_min = pref.reserve_soc * q
-        self.e_charge_cap = min(1.0, pref.max_charge_soc) * q
-        self.e_init = min(max(sc.query.initial_soc, 0.0), 1.0) * q
+        self.e_charge_cap = pref.max_charge_soc * q
+        self.e_init = sc.query.initial_soc * q
         # arriving at the destination is still driving: the reserve applies too
         self.e_dest_min = max(pref.min_arrival_soc * q, self.e_min)
         self.origin = sc.query.origin
@@ -301,9 +343,7 @@ class PreparedScenario:
         # ------------------------------------------------------- stations
         self.stations = sc.stations
         self.station_at: dict[int, list[int]] = {}
-        for i, st in enumerate(sc.stations):
-            if not 0 <= st.node < net.num_nodes:
-                raise ValueError(f"station {st.id} references unknown node {st.node}")
+        for i, st in enumerate(sc.stations):  # nodes checked by Scenario.validate
             self.station_at.setdefault(st.node, []).append(i)
         self.is_station_node = [False] * net.num_nodes
         for v in self.station_at:
@@ -397,6 +437,17 @@ class PreparedScenario:
             "speed_levels": list(self.speed_factors),
             "p_max_kw": round(self.p_max, 1),
         }
+
+
+def _check_number(name: str, value: Any, lo: float = -math.inf, hi: float = math.inf, *, open_lo: bool = False) -> None:
+    """Raise :class:`ValueError` unless ``value`` is a finite number in ``[lo, hi]``
+    (``(lo, hi]`` with ``open_lo``)."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+        raise ValueError(f"{name} must be a finite number, got {value!r}")
+    if value < lo or (open_lo and value == lo) or value > hi:
+        if hi == math.inf:
+            raise ValueError(f"{name} must be {'>' if open_lo else '>='} {lo:g}, got {value!r}")
+        raise ValueError(f"{name} must lie in {'(' if open_lo else '['}{lo:g}, {hi:g}], got {value!r}")
 
 
 def _json_ready(obj: Any) -> Any:

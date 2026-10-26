@@ -289,6 +289,8 @@
     c1.foot.textContent = I.lang === 'tr'
       ? `nokta: ${Math.max(...d.series[0].points.map((p) => p.n))} örneğin ortalaması · göstergedeki bir algoritmanın üzerine gelin: en küçük–en büyük aralığı`
       : `dot: mean of ${Math.max(...d.series[0].points.map((p) => p.n))} instances · hover an algorithm in the legend for its min–max range`;
+    c3.foot.hidden = !(d.speedup || []).length;
+    c3.foot.textContent = I.t('sc_geo');
   }
 
   /* ======================================================= optimality gap */
@@ -531,6 +533,16 @@
         x: { label: `${I.t('trip_time')} [${I.t('unit_h')}:${I.t('unit_min')}]`, fmt: (v) => I.hm(v), time: true },
         y: { label: `${I.t('ax_money')} [${cur || ''}]` },
       });
+      // the front is exact on its charging grid only: name the references that beat a member
+      const beat = f.references.filter((r) => r.dominates > 0);
+      const k = (f.beaten_by_references || []).length;
+      if (beat.length && k) {
+        const names = beat.map((r) => I.algo(r.algorithm)).join(', ');
+        c1.foot.hidden = false;
+        c1.foot.textContent = I.lang === 'tr'
+          ? `◆ ${names}, ızgara hedeflerinin arasında şarj ederek ${k} cephe planını her ölçütte geçiyor: bu bir kesinlik hatası değil, şarj ızgarasının sınırı.`
+          : `◆ ${names} ${beat.length > 1 ? 'beat' : 'beats'} ${k} front plan${k === 1 ? '' : 's'} in every criterion by charging between the grid's targets: a limit of the charging grid, not an exactness failure.`;
+      }
       // the three highlighted plans as cards
       const pick = [[f.fastest, 'fastest'], [f.knee, 'balanced'], [f.cheapest, 'cheapest']].filter((x, k, arr) => arr.findIndex((y) => y[0] === x[0]) === k);
       const p0 = f.points[f.fastest];
