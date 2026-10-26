@@ -14,6 +14,8 @@ page is the map of the documentation; the [README](../README.md)
 | [`PLAN.tr.md`](PLAN.tr.md) | the original project plan (Turkish) |
 | [`../tests/fuzz_report.md`](../tests/fuzz_report.md) | what the cross-validation suite checks, its coverage and the bugs it found |
 | [`../CONTRIBUTING.md`](../CONTRIBUTING.md) | how to set up, test and extend the project |
+| [`demo/index.html`](demo/index.html) | the animated viewer for Karaman → İstanbul with every planner (one offline file; `#tr` opens it in Turkish) |
+| [`demo/results.html`](demo/results.html) | the results dashboard of a full experiments run |
 
 On this page: [install](#install) · [command line](#command-line) ·
 [Python API](#python-api) · [web viewer](#web-viewer) ·

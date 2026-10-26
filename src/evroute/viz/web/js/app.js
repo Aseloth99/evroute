@@ -20,7 +20,14 @@
       this.ready = false;
       this.payload = payload;
       this.live = !!payload.live;
-      I.setLang(payload.lang === 'en' ? 'en' : 'tr');
+      // a link can choose the language: page.html?lang=en or page.html#en
+      let lang = payload.lang;
+      try {
+        const q = new URLSearchParams(window.location.search).get('lang');
+        const h = window.location.hash.slice(1).toLowerCase();
+        lang = q || (h === 'en' || h === 'tr' ? h : lang);
+      } catch (e) { /* no location (embedded) */ }
+      I.setLang(lang === 'en' ? 'en' : 'tr');
       this.model = new EVR.model.Model(payload);
       this.layers = { terrain: true, stations: true, labels: true, others: true };
       this.visible = new Set(this.model.results.map((r, i) => i));
