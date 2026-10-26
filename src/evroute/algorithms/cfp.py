@@ -113,8 +113,14 @@ charger next to it, then the AC charger); it never spawns a stop at ``s2``
 itself -- continuing to charge at ``s2`` is the label's own function and is
 never worse than paying the wait and setup again -- nor a switch at its own
 ``t0`` (nothing charged at ``s2`` yet: the parent's direct switch to ``s3`` is
-no worse).  Targets are limited by ``cap``: switch times with
-``B_L(tj) >= cap`` are useless and skipped.
+no worse).  Lemma 1 below applies to such a label like to any other: its
+function is the charging curve of ``s2`` from ``b`` on, so it switches at the
+energy breakpoints of ``F_{s2}`` (plus the upward power breaks of ``s3`` and
+the wait knots).  Targets are limited by ``cap``: switch times with
+``B_L(tj) >= cap`` are useless and skipped.  (Earlier versions spawned no
+stop from a label created at the same node -- BUG-3 of the cross-validation
+suite; the test-suite now checks consecutive stops against an exact dynamic
+programme over stop sequences and breakpoint energies.)
 
 *Stops below the reserve.*  The evaluator checks the reserve on arrival and
 departure only, so at the origin with ``e_init < e_min`` a stop may end below
@@ -124,8 +130,9 @@ function, its dominance tests and its switch candidates start at ``(t0, b)``
 instead of at ``t_feas`` (it can switch from ``t0`` on, it can only drive from
 ``t_feas`` on), and its key is the minimum of ``t + h(v, B(t))`` from ``t0``
 on (Lemma 2 below makes it a lower bound for every route through the label,
-including switches before ``t_feas``).  At a node with a single station nothing can follow such a stop,
-and the function and key start at ``t_feas`` as for every other label.
+including switches before ``t_feas``).  At a node with a single station
+nothing can follow such a stop, and the function and key start at ``t_feas``
+as for every other label.
 
 **Lemma 1 (candidate switch times).**  Fix a final trip time ``tau`` (the time
 at which the vehicle leaves ``v``).  Switching at ``t`` yields the energy
@@ -1479,7 +1486,8 @@ class CFPPlanner(Planner):
     description = (
         "Exact fastest route with continuous charging amounts: label setting on "
         "piecewise-linear charging functions (Baum et al.), one function-label per "
-        "last station, pointwise dominance, optimal stop times at breakpoints."
+        "last station, set dominance by the upper envelope, optimal stop times at "
+        "breakpoints, consecutive stops at different chargers of one node."
     )
 
     def _potential(self, P: PreparedScenario) -> tuple[list[float], list[float] | None, float, list[float], str]:

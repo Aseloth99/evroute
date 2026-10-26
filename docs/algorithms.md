@@ -116,7 +116,39 @@ states implies admissibility.  Monotonicity in $x$ is immediate.  $\square$
 The same construction with $C_{lb}(v)$ (generalised driving cost) and the
 cheapest possible cost per charged kWh,
 $\mathrm{VoT}\cdot 3600/P_{\max} + w_m \min \pi/\eta_c + w_w \min\omega$,
-gives a consistent heuristic for the generalised cost.
+gives a consistent heuristic for the generalised cost.  This *basic*
+potential is `potential="basic"` of BLS-A\* (`LowerBounds.h` in `search.py`).
+
+**The default ("tight") potential.**  BLS-A\* and CFP-A\* use a stronger
+bound of the same shape (`AStarPotential.tight` in `algorithms/labels.py`):
+
+$$ h(v, x) = T_{lb}(v) + r\,\big(E^{lin}_v - x\big)^+
+   + \sigma \left\lceil \frac{\big(E_{lb}(v) + e_d - x\big)^+}{R} \right\rceil . $$
+
+* $r \ge 3600/P_{\max}$ is the cheapest time (or generalised cost) per
+  charged kWh over the stations and SoC bins the battery can actually be
+  charged in (for the cost objective time, money and wear are minimised
+  *jointly* per station and bin).
+* $E^{lin}_v = \max\big(E_{lb}(v) + e_d,\ e_d + (W(v) - T_{lb}(v))/r\big)$,
+  where $W$ is the reverse shortest-path distance for the coupled edge weight
+  $\min_k (t_{e,k} + r\,c_{e,k})$: time and energy are measured on the *same*
+  path and speed level, so the bound is never weaker than the basic one.
+* $\sigma$ is the smallest overhead of one stop (set-up plus minimum wait)
+  and $R$ the most energy one stop can add, so the last term counts the stops
+  that the energy deficit makes unavoidable.
+
+For the cost objective $T_{lb}$, $W$ and $\sigma$ are replaced by their
+generalised-cost counterparts ($C_{lb}$, the coupled cost weight
+$\min_k(\mathrm{cost}_{e,k} + r\,c_{e,k})$ and $\mathrm{VoT}\cdot\sigma$).
+
+*Admissible:* a completion that drives with time $b$ and consumption $C$ and
+charges $D$ kWh in $m$ stops has $D \ge C + e_d - x$ (regeneration is clamped),
+$m \ge \lceil D/R \rceil$, $b + rC \ge W(v)$, $b \ge T_{lb}(v)$ and
+$C \ge E_{lb}(v)$, hence it costs at least $h(v, x)$.  *Consistent:* along a
+drive edge both linear parts are shortest-path potentials and the stop term
+can only grow; a stop adding $D \le R$ kWh lowers the linear part by at most
+$rD$ and the stop term by at most $\sigma$ -- never more than the stop costs.
+Every part is non-increasing in $x$, so Lemma 2 below applies unchanged.
 
 **Lemma 2 (A\* with dominance).** If $h$ is consistent and non-increasing in
 $x$, a label that dominates another at the same node has a key that is not
@@ -150,11 +182,15 @@ $t - t_0$ extra seconds at $j$ yields
 
 $$ B(t) = f\big(\min(F_j^{-1}(F_j(b) + t - t_0),\ \bar e)\big), $$
 
-a piecewise-linear, concave, non-decreasing function of the arrival time.
+a piecewise-linear, non-decreasing function of the arrival time (concave when
+the charging power does not increase with the energy).
 
 **Lemma 3 (switching at breakpoints).** With static waits, when arriving at a
 new station $j'$ the best moment to stop charging at $j$ and start charging at
-$j'$ lies at a breakpoint of $B$.
+$j'$ lies at a breakpoint of $B$.  This includes a station $j' \ne j$ at the
+node of $j$ itself (consecutive stops): then $B$ is the label's own charging
+curve at $j$, and its breakpoints are the energies where the power of $j$
+changes -- e.g. where a derated DC charger falls below the AC charger next to it.
 
 *Proof.* For a fixed final time $t$, switching at $t'$ gives
 $\Phi(t') = F_{j'}^{-1}\big(F_{j'}(B(t')) + t - t' - W_{j'} - \sigma_{j'}\big)$.
@@ -196,24 +232,46 @@ Constant labels (not charged yet) are compared one by one through a
 staircase, the others through their envelope.
 
 *Consecutive stops.*  A label created by a stop at $j$ spawns stop labels for
-every other station of its node (the model of Section 1); one settled set per
-node stays exact because a label charging at $j$ that attains the envelope
-covers any stop at $j$ by simply continuing to charge.  At the origin with
-$x_0 < \underline e$ and several stations, a stop label below the reserve is
-*extended*: its function, dominance tests and switch candidates start where
-charging starts (it may switch below the reserve, but drive only from
-$t_{feas}$ on).
+every *other* station $j' \ne j$ of its node, at the switch candidates of its
+own function (Lemma 3) -- the model of Section 1 -- and never one for $j$
+itself: continuing to charge at $j$ is the label's own function and never
+worse than paying $W_j + \sigma_j$ again.  It also skips the candidate at its
+own $t_0$ (nothing charged at $j$ yet), which the parent's direct switch to
+$j'$ covers: that one starts earlier with the same energy.  One settled set
+per node stays exact although a label created at $j$ may not stop at $j$ next:
+if it attains the envelope at time $t$, a stop at $j$ at $t$ of the label it
+prunes yields at every later time no more energy than continuing to charge.
+At the origin with $x_0 < \underline e$ and several stations, a stop label
+below the reserve is *extended*: its function, dominance tests and switch
+candidates start where charging starts (it may switch below the reserve, but
+drive only from $t_{feas}$ on).  Earlier versions spawned no stop from a label
+created at the same node and missed, e.g., DC to 37.4 kWh and then AC on the
+cold two-charger line of BUG-3 (16 s faster than the best single stop).
 
 **Theorem 3.** With static waits, CFP returns a fastest feasible route with
-arbitrary (continuous) charging amounts (consecutive stops at different
-stations of a node included).  *Sketch:* every label operation is monotone
+arbitrary (continuous) charging amounts and any number of consecutive stops
+at different stations of a node, i.e. over all plans `evaluate()` accepts (a
+second stop at the same station right after the first is never useful,
+Section 1).  *Sketch:* every label operation is monotone
 and distributes over pointwise maxima, so pruning labels below the envelope
 of settled labels is safe; by Lemma 3 creating station labels at breakpoints
-loses nothing; keys are lower bounds that never decrease along label
-extensions; the first final entry popped at $d$ is therefore optimal.
+loses nothing, also for a stop that follows a stop at the same node; keys are
+lower bounds that never decrease along label extensions; the first final
+entry popped at $d$ is therefore optimal.
 $\square$ (`cfp.py` extends the candidate set by upward power breaks and
 wait-profile knots, which makes the result exact for non-concave charging
 curves and FIFO time-dependent waits as well.)
+
+The consecutive-stop part is checked against an independent oracle: on a line
+with two or three chargers at one node (also at the origin, where stops may
+end below the reserve), the trip time is separable and
+piecewise linear in the energies at which the stops end, the constraints form
+an interval chain, so an optimal plan ends every stop at a breakpoint energy
+and a shortest path over (breakpoint energy, charger in use) is exact for any
+number of stops.  CFP and CFP-A\* match it on every random instance
+(`test_consecutive_stops_match_an_exact_dynamic_programme`; in a 6000-instance
+run 236 optima had two or more stops at the node, up to five alternating
+stops with a non-monotone charging curve).
 
 With time-dependent waits CFP evaluates $W_{j'}$ at each concrete switch time.
 With the breakpoints alone (option `exact_switching=False`) plans remain
@@ -232,6 +290,29 @@ stops) are those of BLS.  The fastest front member equals BLS with objective
 time and the cheapest equals BLS with objective cost — both equalities are
 asserted in the test-suite.
 
+*Goal-directed order.*  Labels are popped in lexicographic order of the key
+$(t + T_{lb}(v),\ \mathcal M,\ \mathcal W)$, ties broken by larger energy.
+$T_{lb}(v)$ is the same constant for every label of a node, so at each node
+labels are settled in Martins' lexicographic order of $(t, \mathcal M,
+\mathcal W)$; across nodes the shift is the consistent vector heuristic
+$(T_{lb}(v), 0, 0)$ of NAMOA\*, which pops far-away labels only after the
+front members that prune them are known (one to two orders of magnitude
+fewer labels; `goal_directed=False` restores the plain Martins order and
+returns the same front).  Because time leads the key, every settled label of
+a node and every front member is no slower than a label being tested, so
+the node tests compare $(\mathcal M, \mathcal W, x)$ and the front tests
+$(\mathcal M, \mathcal W)$ only.
+
+*Output and effort.*  The returned plan is the front member with the best
+scenario objective (trip time or generalised cost); all evaluated members,
+sorted by time, are in `plan.alternatives`.  Exact three-criteria fronts can
+need millions of labels (on the 750 km Karaman → İstanbul preset the default
+budget `max_labels = 2 000 000` is exhausted before the first route is
+found); `criteria=("time", "money")`, `targets="grid"`, a coarser
+`charge_step_soc` or $\varepsilon$-dominance (`epsilon`, `epsilon_scope`) make
+such instances tractable.  When the budget is hit the front may be
+incomplete and the planner says so (`plan.stats.extra["complete"] = False`).
+
 *Front maintenance in floating point.*  In exact arithmetic a new front
 member never dominates an existing one (members arrive in order of time).
 Routes with mathematically equal trip times reach the destination with times
@@ -246,13 +327,27 @@ that arrived first.  The front is thus mutually non-dominated up to rounding
 
 ## 6. Baselines
 
-* `naive` — fastest path, no charging; shows *where* the battery runs out.
-* `greedy` — drive the fastest path; when it is infeasible, detour to the
-  reachable station minimising time-to-station + lower bound to the goal,
-  charge to 80 % (DC) / 100 % (AC), repeat.  Typical of in-car navigation.
-* `station-graph` — two-level search on a meta-graph of stations with a
-  fixed charge target (Storandt & Funke, 2012).
-* `genetic` — a GA over ordered station sequences and target SoCs; a
+The baselines drive every edge at its fastest speed level, as a navigation
+system would (`fastest_level_only` in the label search they call); only the
+exact planners trade speed for energy.
+
+* `naive` — battery-unaware fastest path, no charging; shows *where* the
+  battery runs out.
+* `greedy` — if the battery-unaware fastest path to the destination is
+  drivable, drive it; otherwise detour to the reachable, not yet used station
+  minimising time-to-station + $T_{lb}$(station) (ties: the station closest to
+  the destination, then the shorter stop), charge to 80 % (DC) / 100 % (AC)
+  -- to the cap if that is needed to make progress -- and repeat.  Typical of
+  in-car navigation.
+* `station-graph` — time-dependent Dijkstra on a meta-graph of the origin,
+  the stations inside a detour ellipse and the destination; a meta-edge is
+  the fastest battery-feasible stretch between two of them, and every stop
+  charges to a fixed target (default 100 %, capped by $\bar e$) (Storandt &
+  Funke, 2012).  Optimal on its meta-graph only.
+* `genetic` — a deterministic (seeded) GA over ordered station sequences and
+  target SoCs; legs follow the fastest paths and a stop charges to
+  $\max(\text{target}, \text{just enough for the next leg})$; fitness is the
+  evaluated objective plus a static penalty for infeasibility.  A
   representative of the metaheuristics that dominate applied EV-routing
   papers.
 
@@ -260,12 +355,18 @@ that arrived first.  The front is thus mutually non-dominated up to rounding
 
 1. An **independent evaluator** (`evaluate.py`) replays every plan from first
    principles; the objective an algorithm claims must match it.
-2. **Cross-validation** on hundreds of random instances: BLS = BLS-A\*;
-   CFP = CFP-A\*; CFP ≤ BLS; Pareto extremes = BLS (time / cost).
-3. **Brute force** on tiny instances: enumeration of walks and targets
-   reproduces the BLS optimum.
+2. **Cross-validation** on thousands of seeded random instances
+   (`tests/test_crossval.py`, summarised in `tests/fuzz_report.md`): BLS =
+   BLS-A\*; CFP = CFP-A\*; CFP ≤ BLS; Pareto extremes = BLS (time / cost);
+   no plan of any planner beats CFP; finer target grids are never worse;
+   metamorphic relations and local search around every optimum.
+3. **Brute force** on tiny instances: enumeration of walks, stops (including
+   consecutive stops at different stations) and targets reproduces the BLS
+   optimum and the Pareto front.
 4. **Analytic oracles**: hand-built lines where the optimal continuous split
-   between a slow and a fast charger can be found by dense scanning.
+   between a slow and a fast charger can be found by dense scanning, and the
+   exact dynamic programme over breakpoint energies for consecutive stops
+   (Section 4).
 
 ## References
 

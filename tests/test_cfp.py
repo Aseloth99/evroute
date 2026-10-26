@@ -42,7 +42,7 @@ from evroute.generators import grid_scenario
 from evroute.network import NetworkBuilder
 from evroute.plan import ChargeDecision, PlanDecision
 from evroute.scenario import Conditions, Preferences, Query, Scenario, Station
-from evroute.vehicle import ChargingCurve, get_vehicle
+from evroute.vehicle import VEHICLES, ChargingCurve, get_vehicle
 
 # ----------------------------------------------------------------------------
 # helpers
@@ -808,6 +808,135 @@ def test_consecutive_stops_at_one_node(case):
         assert fine.total_time_s - p.total_time_s < 5.0
     if not case.startswith("derated"):
         assert p.stops[0].energy_out_kwh < P.e_min < p.stops[1].energy_out_kwh
+
+
+def _stack_line(rng):
+    """O --> S --> D (or S = O) on a flat road with 2-3 chargers at S, as the pair
+    ``(scenario, at_origin)``.  In half of the instances there are no queues and no setup
+    times, it is cold without preconditioning and the energy needed when leaving S is close to
+    the charging cap -- where a derated DC charger falls below an AC charger, so that
+    consecutive stops pay off; 30 % of the vehicles get a random (non-monotone) DC curve."""
+    at_origin = rng.random() < 0.35
+    xs = 0.0 if at_origin else rng.uniform(10e3, 80e3)
+    rc1, rc2 = rng.choice(["motorway", "trunk"]), rng.choice(["motorway", "trunk", "primary"])
+    free = rng.random() < 0.5
+    chargers = []
+    for i in range(rng.choice([2, 2, 3])):
+        kind = "AC" if i == 0 else "DC" if i == 1 else rng.choice(["AC", "DC"])
+        pw = rng.choice([7.4, 11.0, 22.0]) if kind == "AC" else rng.choice([50.0, 60.0, 100.0, 150.0, 350.0])
+        chargers.append((pw, kind, rng.choice([1, 2, 4]), 0.0 if free else rng.choice([0.0, 0.0, 15.0, 60.0, 180.0]),
+                         rng.choice([0.0, 5.0, 30.0, 80.0])))
+    rng.shuffle(chargers)
+    reserve = rng.choice([0.0, 0.05, 0.1, 0.25])
+    soc = rng.uniform(0.0, 0.4) if at_origin else rng.uniform(reserve + 0.05, 0.5)
+    veh = get_vehicle(rng.choice(sorted(VEHICLES)))
+    if rng.random() < 0.3:
+        nb = rng.randint(2, 7)
+        cuts = sorted(rng.sample(range(1, 20), nb - 1))
+        veh = dataclasses.replace(veh, ac_max_kw=rng.choice([7.4, 11.0, 22.0]), dc_curve=ChargingCurve(
+            (0.0, *(c / 20 for c in cuts), 1.0), tuple(rng.uniform(8.0, 200.0) for _ in range(nb))))
+    prefs = Preferences(queue_aware=not free and rng.random() < 0.5, time_dependent_waits=False, reserve_soc=reserve,
+                        min_arrival_soc=rng.choice([0.0, reserve, 0.2]), max_charge_soc=rng.choice([0.7, 0.8, 0.9, 1.0]),
+                        charge_step_soc=0.05)
+    if free or rng.random() < 0.5:
+        cond = Conditions(temperature_c=rng.uniform(-15.0, 5.0), preconditioning=False)
+    else:
+        cond = Conditions(temperature_c=rng.uniform(-15.0, 35.0), preconditioning=rng.random() < 0.4)
+    departure = rng.uniform(0.0, 86400.0)
+
+    def build(d2):
+        b = NetworkBuilder()
+        o = b.add_node(0.0, 0.0, 100.0)
+        s = o if at_origin else b.add_node(xs, 0.0, 100.0)
+        d = b.add_node(xs + d2, 0.0, 100.0)
+        if not at_origin:
+            b.add_road(o, s, road_class=rc1)
+        b.add_road(s, d, road_class=rc2)
+        sts = [Station(i, s, pw, kind, plugs=pl, price_per_kwh=0.5, setup_s=su, daily_sessions=ds)
+               for i, (pw, kind, pl, su, ds) in enumerate(chargers)]
+        return Scenario("stacked chargers", b.build(), sts, veh, Query(o, d, soc, departure), cond, prefs)
+
+    sc = build(rng.uniform(40e3, 160e3))
+    if free:  # stretch the last leg: the energy needed when leaving S becomes `frac * cap`
+        frac = rng.uniform(0.6, 0.995)
+        P = sc.prepare()
+        e2 = next(e for e in range(P.net.num_edges) if P.net.head[e] == P.destination != P.net.tail[e])
+        per_m = P.edge_energy[0][e2] / P.net.length[e2]
+        want = frac * P.e_charge_cap - P.e_dest_min
+        if per_m > 0.0 and want > 5e3 * per_m:
+            sc = build(want / per_m)
+    return sc, at_origin
+
+
+def _stack_optimum(P, at_origin):
+    """Least trip time on a :func:`_stack_line` instance, by a dynamic programme.
+
+    The road is fixed, so only the stops at S are free: a sequence of stations
+    ``s_1 .. s_k`` (consecutive ones different) and the energies ``b0 <= y_1 <= ... <= y_k``
+    with which each stop ends, ``y_k`` = the energy needed to finish.  The trip time is
+    ``sum (wait + setup + F_{s_i}(y_i) - F_{s_i}(y_{i-1}))``: separable and piecewise linear in
+    the ``y_i``, with kinks at the energy breakpoints of the ``F``.  The constraints form an
+    interval chain (a totally unimodular system), so for every ``k`` a vertex whose
+    coordinates are breakpoints is optimal, and a shortest path over the states
+    (breakpoint energy, station charging now) is exact for any number of stops.  Stops at S
+    may end below the reserve only when S is the origin (``b0 = e_init`` may be below it)."""
+    net, emin, inf = P.net, P.e_min, math.inf
+
+    def edge(u, w):
+        return next(e for e in range(net.num_edges) if net.tail[e] == u and net.head[e] == w)
+
+    o, d = P.origin, P.destination
+    if at_origin:
+        e2 = edge(o, d)
+        b0, drive = P.e_init, P.edge_time[0][e2]
+    else:
+        s = P.stations[0].node
+        e1, e2 = edge(o, s), edge(s, d)
+        b0 = min(P.e_init - P.edge_energy[0][e1], P.capacity)
+        if P.e_init < emin - 1e-9 or b0 < emin - 1e-9:
+            return inf
+        drive = P.edge_time[0][e1] + P.edge_time[0][e2]
+    need = max(P.e_dest_min + P.edge_energy[0][e2], emin)  # (flat road: no regeneration)
+    if b0 >= need:
+        return drive
+    if need > P.e_charge_cap:
+        return inf
+    U = sorted({b0, need} | {e for f in P.cf for e in f.e_breaks if b0 < e < need})
+    ns = len(P.stations)
+    over = [P.wait_s(s, 0.0) + P.setup_s[s] for s in range(ns)]
+    F = [f.time_at for f in P.cf]
+    best = [inf] * ns  # least time to reach the current energy while charging at station s
+    for i, y in enumerate(U):
+        if i:  # keep charging at s from U[i - 1] to y
+            best = [best[s] + F[s](y) - F[s](U[i - 1]) for s in range(ns)]
+        # ... or start a stop at s2 here: the first one (at b0), or right after a stop elsewhere
+        before = [0.0 if i == 0 else min((best[s] for s in range(ns) if s != s2), default=inf) for s2 in range(ns)]
+        best = [min(best[s2], over[s2] + before[s2]) for s2 in range(ns)]
+    return drive + min(best)
+
+
+@pytest.mark.parametrize("block", range(4))
+def test_consecutive_stops_match_an_exact_dynamic_programme(block):
+    """BUG-3 regression on random instances: CFP and CFP-A* (both potentials) equal the exact
+    optimum over *any* number of stops at a node with 2-3 chargers (:func:`_stack_optimum`),
+    including stops that end below the reserve at an origin station."""
+    rng = random.Random(9100 + block)
+    multi = 0
+    for i in range(150):
+        for _ in range(20):  # rejection sampling: feasible instances
+            sc, at_origin = _stack_line(rng)
+            P = sc.prepare()
+            want = _stack_optimum(P, at_origin)
+            if want < math.inf:
+                break
+        for name, opts in (("cfp", {}), ("cfp-astar", {}), ("cfp-astar", {"potential": "basic"})):
+            p = _run(P, name, **opts)
+            _assert_consistent(p)
+            assert p.total_time_s == pytest.approx(want, rel=1e-12, abs=1e-6), (block, i, name, opts)
+            for s1, s2 in pairwise(p.stops):  # never the same station twice in a row
+                assert s1.position != s2.position or s1.station != s2.station
+        multi += len({s.position for s in p.stops}) < len(p.stops)
+    assert multi >= 3  # consecutive stops are optimal in about 5 % of the instances
 
 
 def _regen_line(length_last, soc=1.0):

@@ -63,9 +63,13 @@ $$ x_v \ge \underline{e} = r\,Q \quad\text{(reserve)},\qquad x_{dest} \ge \max(\
 The vehicle's battery-side power limit is piecewise constant on SoC bins
 $[s_i, s_{i+1})$: $p_i^{veh}$ (published curves are binned with the harmonic
 mean, which preserves the exact time to cross a bin; `vehicle.ChargingCurve`).
-At station $j$ with power $P_j$ the effective power is
-$p_{ij} = \phi(T)\min(p_i^{veh}, P_j)$, where $\phi$ derates a cold battery
-without preconditioning.  With energy breakpoints $e_i = s_i Q$,
+At a DC station $j$ with power $P_j$ the effective power is
+$p_{ij} = \phi(T)\min(p_i^{veh}, P_j)$, where $\phi(T) = \max(\phi_{\min},
+1 - \lambda_c (20 - T))$ derates a battery below 20 °C that was not
+preconditioned ($\phi = 1$ otherwise).  At an AC station the on-board
+charger limits the power to $\min(p^{veh}_{AC}, P_j)$ up to 95 % SoC and to
+half of that above (two bins, no cold derating).  With energy breakpoints
+$e_i = s_i Q$,
 
 $$ F_j(e) = \sum_{i:\,e_{i+1}\le e} \frac{e_{i+1}-e_i}{p_{ij}}\,3600 + \frac{e - e_{i^*}}{p_{i^*j}}\,3600 $$
 
