@@ -49,13 +49,15 @@ the viewer needs Node.js with Playwright.
 | `evroute viz [SCENARIO] -o FILE.html [--lang en] [--no-animate] [--algorithms ...]` | export the animated viewer as one offline HTML file |
 | `evroute serve [SCENARIO] [--port 8765] [--open]` | live planning server with the viewer |
 | `evroute robustness [SCENARIO] [-a ALGO] [-n 1000] [--seed 0]` | Monte Carlo reliability of a plan (JSON report) |
-| `evroute experiments [NAMES ...] [-o results] [--quick]` | run the paper experiments |
+| `evroute experiments [NAMES ...] [-o results] [--quick] [--lang en] [--no-panel]` | run the paper experiments; ends with the dashboard `<out>/results.html` |
+| `evroute results [DIR] [-o FILE.html] [--lang en]` | rebuild the interactive results dashboard of an experiments folder |
 | `evroute figures [SCENARIO] [--outdir figures]` | publication figures for one scenario (map, SoC, time, search) |
 | `evroute gallery [-o docs/img] [--quick]` | the seaborn figure gallery of the README |
 | `evroute export-scenario [SCENARIO] -o FILE.json` | save a (modified) scenario as JSON |
 
-`SCENARIO` is a preset name (default `turkey-karaman-istanbul`) or the path
-of a scenario `.json` file.  The scenario commands accept these overrides:
+`SCENARIO` is a preset name (default `turkey-karaman-istanbul`) or, except
+for `serve`, the path of a scenario `.json` file.  `plan`, `compare`, `viz`,
+`robustness`, `figures` and `export-scenario` accept these overrides:
 
 | option | meaning |
 |---|---|
@@ -174,9 +176,11 @@ algorithms and press *Plan*.  The server uses only the standard library
 
 `evroute experiments` (or `python -m evroute.experiments.runner`) runs ten
 seeded experiments; `--quick` shrinks every one of them to a smoke test of
-about a minute.  Each writes `<out>/<id>/results.csv`, usually
-`summary.json`, a booktabs `table.tex` and PDF/PNG figures (with
-matplotlib), plus `<out>/report.json`.
+about a minute.  Each writes `<out>/<id>/results.csv` (pareto: one CSV per
+case), usually `summary.json`, PDF/PNG figures (with matplotlib) and, for
+case-studies, optimality-gap and vehicles, a booktabs `table.tex`; the run
+adds `<out>/report.json` and the interactive dashboard `<out>/results.html`
+(`--no-panel` skips it, `evroute results <out>` rebuilds it).
 
 | id | question | full size |
 |---|---|---|

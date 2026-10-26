@@ -143,11 +143,12 @@ $ evroute plan turkey-karaman-istanbul
 arrival 16:06 | drive 7 h 19 min | charge 36 min | queue+setup 12 min | battery wear 0.0188 %SoH
 ```
 
-Her komut bir hazır senaryo adı ya da bir senaryo `.json` dosyası
+Senaryo komutları (`plan`, `compare`, `viz`, `robustness`, `figures`,
+`export-scenario`) bir hazır senaryo adı ya da bir senaryo `.json` dosyası
 (`evroute export-scenario ... -o my.json`) alır; senaryonun değerleri
 `--from --to --soc --depart --temp --vehicle --objective --reserve --arrive --eco --no-queue --step --safety`
-seçenekleriyle geçersiz kılınabilir. Seçeneklerin tamamını
-`evroute <command> -h` listeler.
+seçenekleriyle geçersiz kılınabilir. `serve` yalnızca hazır senaryo adı alır.
+Seçeneklerin tamamını `evroute <command> -h` listeler.
 
 ### Python
 
@@ -187,7 +188,8 @@ P(strand) = 0.40%   P(reserve breach) = 51.9%
 ```
 
 Son satır, sağlamlık modülünün neden var olduğunu özetliyor: *beklenen*
-tüketime göre optimal olan bir plan hedefe tam olarak %10'luk rezervle varır;
+tüketime göre optimal olan bir plan hedefe %10'luk rezervin ancak biraz
+üstünde (%10,4) varır;
 dolayısıyla rastgele gerçekleşmelerin yarısında bu rezervin altına düşülür.
 Birkaç dakika karşılığında güvenilirlik satın almak için `safety_factor` > 1
 ile (komut satırında `--safety`) planlayın — bkz.
@@ -380,13 +382,13 @@ Tüm denklemler, onları gerçekleyen modüllerle birlikte:
 
 `evroute.generators.turkey`, paketle birlikte gelen iki CSV tablosundan
 **yaklaşık** bir Türkiye şehirlerarası ağı oluşturur: 171 yer (30 büyükşehir,
-35 diğer il merkezi, 45 kavşak ve 47 ara nokta yerleşimi, 10 dağ geçidi:
-Kop 2 409 m, Alacabel 1 825 m, Sertavul 1 610 m, ...), 146 otoyol ve devlet
-yolu bağlantısı (O-3 ... O-53, D-100, D-300, D-400, ...) — toplam 1 279
-düğüm, 2 632 kenar, ~14 100 km yol. Bunun üzerine Türk lirası fiyatlı ve en
-yoğun dinlenme tesislerinde öğleden sonra kuyrukları kalibre edilmiş, 290
-istasyonluk (14'ü HPC olmak üzere 199 DC, 91 AC; 1 174 soket) **sentetik**
-bir şarj ağı kurulur.
+35 diğer il merkezi, 45 kavşak ve 47 ara nokta yerleşimi, Kop 2 409 m,
+Alacabel 1 825 m ve Sertavul 1 610 m gibi 10 dağ geçidi ile 4 köprü) ve 146
+otoyol ve devlet yolu bağlantısı (O-3 ... O-53, D-100, D-300, D-400, ...) —
+toplam 1 279 düğüm, 2 632 kenar, ~14 100 km yol. Bunun üzerine Türk lirası
+fiyatlı ve en yoğun dinlenme tesislerinde öğleden sonra kuyrukları kalibre
+edilmiş, 290 istasyonluk (14'ü 300 kW HPC olmak üzere 199 DC ve 91 AC;
+1 174 soket) **sentetik** bir şarj ağı kurulur.
 
 | hazır senaryo | yolculuk |
 |---|---|
@@ -420,9 +422,10 @@ içeren, kısmi şarjı sınayan 600 km'lik bir örnek), `country-small/-medium/
 ## Deneyler
 
 Sabit tohumlu on deney, eşlik eden makaledeki tüm tablo ve şekilleri yeniden
-üretir. Her deney `<out>/<experiment>/` klasörüne `results.csv`,
-`summary.json`, booktabs biçiminde bir `table.tex` ve PDF/PNG grafikleri
-yazar; koşu, ölçülen her şeyi bir araya getiren etkileşimli, çevrimdışı bir
+üretir. Her deney `<out>/<experiment>/` klasörüne `results.csv` (pareto:
+her vaka için bir CSV) ve PDF/PNG grafikleri, çoğu bir `summary.json`,
+case-studies, optimality-gap ve vehicles ayrıca booktabs biçiminde bir
+`table.tex` yazar; koşu, ölçülen her şeyi bir araya getiren etkileşimli, çevrimdışı bir
 panel olan `<out>/results.html` ile tamamlanır (hesaplanmış bulgular,
 kesinlik denetimleri, grafikler, tablolar, CSV indirmeleri).
 
@@ -507,7 +510,7 @@ evroute/
 │   └── cli.py           # `evroute` komutu
 ├── tests/               # pytest paketi + fuzz_report.md
 ├── examples/            # quickstart.py, custom_network.py, viewer_demo.py
-└── docs/                # index, model, algorithms, görseller
+└── docs/                # index, model, algorithms, DEV_SPEC, PLAN.tr, demo/ (görüntüleyici + panel), img/
 ```
 
 ## Yol haritası ve fikirler

@@ -137,10 +137,11 @@ $ evroute plan turkey-karaman-istanbul
 arrival 16:06 | drive 7 h 19 min | charge 36 min | queue+setup 12 min | battery wear 0.0188 %SoH
 ```
 
-Every command takes a preset name or a scenario `.json` file (`evroute
+The scenario commands (`plan`, `compare`, `viz`, `robustness`, `figures`,
+`export-scenario`) take a preset name or a scenario `.json` file (`evroute
 export-scenario ... -o my.json`) and the overrides `--from --to --soc --depart
 --temp --vehicle --objective --reserve --arrive --eco --no-queue --step
---safety`. `evroute <command> -h` lists them.
+--safety`; `serve` takes a preset name. `evroute <command> -h` lists the options.
 
 ### Python
 
@@ -180,8 +181,8 @@ P(strand) = 0.40%   P(reserve breach) = 51.9%
 ```
 
 The last line is the point of the robustness module: a plan that is optimal
-for the *expected* consumption arrives with exactly the 10 % reserve, so half
-of all random worlds dip below it. Plan with `safety_factor` > 1 (or
+for the *expected* consumption arrives with barely more than the 10 % reserve
+(10.4 %), so half of all random worlds dip below it. Plan with `safety_factor` > 1 (or
 `--safety` on the command line) to buy reliability with minutes - see
 [the robustness experiment](#experiments).
 
@@ -363,11 +364,12 @@ Every equation, with the module that implements it: [`docs/model.md`](docs/model
 `evroute.generators.turkey` builds an **approximate** Turkish intercity
 network from two bundled CSV tables: 171 places (30 metropolitan provinces,
 35 further provincial centres, 45 junction and 47 waypoint towns, 10 mountain
-passes (Kop 2 409 m, Alacabel 1 825 m, Sertavul 1 610 m, ...), 146 motorway
-and state-road links (O-3 ... O-53, D-100, D-300, D-400, ...) - 1 279 nodes,
-2 632 edges, ~14 100 km of road - and a **synthetic** charging network of
-290 stations (199 DC, 14 HPC, 91 AC; 1 174 plugs) with Turkish-lira prices
-and calibrated afternoon queues at the busiest service areas.
+passes such as Kop 2 409 m, Alacabel 1 825 m and Sertavul 1 610 m, and 4
+bridges) and 146 motorway and state-road links (O-3 ... O-53, D-100, D-300,
+D-400, ...) - 1 279 nodes, 2 632 edges, ~14 100 km of road - and a
+**synthetic** charging network of 290 stations (199 DC, 14 of them 300 kW
+HPC, and 91 AC; 1 174 plugs) with Turkish-lira prices and calibrated
+afternoon queues at the busiest service areas.
 
 | preset | trip |
 |---|---|
@@ -399,8 +401,9 @@ countries with 2 000-40 000 nodes), `random-geometric`, `grid-small`.
 ## Experiments
 
 Ten seeded experiments reproduce every table and figure of the accompanying
-paper. Each writes `results.csv`, `summary.json`, a booktabs `table.tex` and
-PDF/PNG figures into `<out>/<experiment>/`; the run ends with
+paper. Each writes `results.csv` (pareto: one CSV per case) and PDF/PNG
+figures into `<out>/<experiment>/`, most a `summary.json`, and
+case-studies, optimality-gap and vehicles a booktabs `table.tex`; the run ends with
 `<out>/results.html`, an interactive offline dashboard of everything it
 measured (computed findings, exactness checks, charts, tables, CSV downloads).
 
@@ -478,7 +481,7 @@ evroute/
 │   └── cli.py           # `evroute` command
 ├── tests/               # pytest suite + fuzz_report.md
 ├── examples/            # quickstart.py, custom_network.py, viewer_demo.py
-└── docs/                # index, model, algorithms, images
+└── docs/                # index, model, algorithms, DEV_SPEC, PLAN.tr, demo/ (viewer + dashboard), img/
 ```
 
 ## Roadmap and ideas
