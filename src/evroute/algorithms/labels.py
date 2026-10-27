@@ -106,6 +106,50 @@ same tag ``s`` as ``B``'s child.  For ``y <= e_A`` ``A`` itself dominates
 kept a separate set for charged labels at multi-station nodes; they missed
 routes such as DC-then-AC at one node.)
 
+Charging tariffs
+================
+
+A :class:`~evroute.scenario.Tariff` makes the price of a kWh depend on the
+energy (the high-SoC tier is a breakpoint of every charging function, hence
+a charging target) and, with peak hours, on the clock time at which a stop
+joins the queue (``P.money_cf(s, t)``).  Time and wear do not depend on the
+price, so the **time objective is unchanged**: it never holds -- a hold only
+adds time and the queues are FIFO -- and prices do not enter it.
+
+For the **cost objective with a time-dependent tariff**
+(``P.tariff_time_dependent``):
+
+* *holds*: at every station expansion a label at trip time ``t`` charges at
+  once and, in addition, with the same targets after holding until each
+  price change of the station in ``(t, t + 24 h]``
+  (``P.hold_candidates(s, t)``); the money is that of the period at the
+  join time and the hold costs ``vot`` per second;
+* *dominance* is the 3-D rule on ``(m, t, e)`` also with static waits:
+  comparing ``(g, e)`` would let a cheaper but later label prune an earlier
+  one that still catches a cheap period the later one could only reach by
+  holding for hours;
+* *the same station again*: a label created by a stop at ``s`` may stop at
+  ``s`` once more when the new session falls into the *other* price period
+  (e.g. at the peak price until the peak ends, then off-peak above that
+  energy, which ``evaluate()`` accepts); in the same period the first stop
+  could have charged on, as above.
+
+*Exactness.*  Let ``A`` dominate ``B`` at a node (``t_A <= t_B``,
+``m_A <= m_B``, ``e_A >= e_B``).  ``A`` can follow ``B``'s decisions, holding
+at every stop until the start of the price period in which ``B`` joins the
+queue -- a price change of the station, hence in the generated hold set,
+and never later than ``B``'s join time -- or joining at once if it is
+already in that period.  With FIFO queues ``A`` starts every session no
+later than ``B``, pays the same prices on no more energy and arrives no
+later with no less energy, so holds to price changes are complete and the
+dominance rule stays exact.  The consecutive-stop argument above carries
+over: the parent ``C`` of a label ``A`` created at ``s`` joined in the
+period of ``A``'s session, so it matches a stop of ``B`` at ``s`` in that
+period, and one in the other period is open to ``A`` itself.  The A*
+potentials stay admissible and consistent: a hold costs ``vot * hold >= 0``
+without changing the energy, and their charging rates are minimised over
+the peak and off-peak money (``P.cf_variants``).
+
 Search order and exactness
 ==========================
 
@@ -172,7 +216,11 @@ parent, how)``; settled labels are copied into flat parallel lists
 indexed by a settled-label id.  ``how`` packs the transition that created a
 label: ``edge * n_levels + level`` for a drive, ``-2 - station`` for a
 charging stop (a label with ``how = -2 - s`` may not stop at ``s`` next)
-and ``-1`` for the root.  The secondary criterion is the generalised cost
+and ``-1`` for the root.  With a time-dependent tariff (cost objective) a
+stop is ``-2 - (s + n_stations * (2 * h + peak))``: ``h = 0`` charges at
+once, ``h >= 1`` after a hold until ``P.hold_candidates(s, t)[h - 1]`` of
+the parent's time ``t``, and ``peak`` is the price period of the session
+(without hold and off-peak this is ``-2 - s`` again).  The secondary criterion is the generalised cost
 for the time objective and the trip time for the cost objective.  Per node, the settled
 and the pushed 2-D Pareto sets are *staircases*: sorted lists (primary
 ascending, energy strictly ascending), queried and updated with
@@ -222,6 +270,7 @@ import math
 import time
 from bisect import bisect_left, bisect_right
 from collections.abc import Mapping, Sequence
+from typing import Any
 
 from ..evaluate import evaluate, infeasible_plan
 from ..plan import ChargeDecision, PlanDecision, RoutePlan, SearchStats, SearchTrace
@@ -525,13 +574,14 @@ def best_rate_per_kwh(P: PreparedScenario, objective: str | None = None) -> floa
     per station and bin) for the cost objective (``objective`` defaults to
     ``P.objective``).  Only bins that intersect
     the chargeable range ``[min(e_min, e_init), e_charge_cap]`` count.
+    The money of every price period counts (``P.cf_variants``).
     Returns 0 without stations.
     """
     lo = min(P.e_min, P.e_init) - EPS
     hi = P.e_charge_cap
     time_obj = _objective(P, objective) == "time"
     best = INF
-    for f in P.cf:
+    for f in P.cf_variants:
         eb = f.e_breaks
         for i, pw in enumerate(f.power_kw):
             if eb[i + 1] <= lo or eb[i] >= hi:
@@ -754,8 +804,8 @@ class _LabelSearch:
     """
 
     __slots__ = (
-        "bounded", "created", "energy", "final", "final_key", "generated", "how",
-        "n_levels", "node", "parent", "peak_queue", "primary", "pruned", "pruned_parents", "pushes",
+        "bounded", "created", "energy", "final", "final_key", "generated", "holds", "how",
+        "n_levels", "n_stations", "node", "parent", "peak_queue", "primary", "pruned", "pruned_parents", "pushes",
         "secondary", "settled", "stair3", "stair_e", "stair_i", "stair_p", "status",
         "time_objective", "upper",
     )
@@ -784,6 +834,9 @@ class _LabelSearch:
     bounded: int
     peak_queue: int
     n_levels: int
+    n_stations: int
+    #: ``P.hold_candidates`` (decodes the hold of a stop, see "Data layout")
+    holds: Any
     time_objective: bool
     #: best known value of a complete route at the end (``inf`` if none)
     upper: float
@@ -799,7 +852,8 @@ class _LabelSearch:
         edges: list[int] = []
         levels: list[int] = []
         charges: list[ChargeDecision] = []
-        how, energy, nlev = self.how, self.energy, self.n_levels
+        how, energy, nlev, nst = self.how, self.energy, self.n_levels, self.n_stations
+        times = self.primary if self.time_objective else self.secondary
         for j in chain:
             code = how[j]
             if code >= 0:
@@ -807,7 +861,13 @@ class _LabelSearch:
                 edges.append(a)
                 levels.append(k)
             elif code <= -2:
-                charges.append(ChargeDecision(len(edges), -2 - code, energy[j]))
+                c = -2 - code
+                if c < nst:
+                    charges.append(ChargeDecision(len(edges), c, energy[j]))
+                else:  # time-dependent tariff: decode the hold (module docs, "Data layout")
+                    s, h = c % nst, (c // nst) >> 1
+                    hold = self.holds(s, times[par[j]])[h - 1] if h else None
+                    charges.append(ChargeDecision(len(edges), s, energy[j], hold))
         return edges, levels, charges
 
     def settled_nodes(self) -> list[int]:
@@ -851,9 +911,12 @@ def _label_search(
     are never pushed.  ``edge_options`` replaces ``P.edge_options`` (one
     tuple of ``(level, time, energy, drive_cost)`` options per edge).
 
-    With the cost objective and time-dependent waits the 3-D sets compare
-    ``(m, t, e)`` with ``m = g - vot * t`` (money and wear so far, see the
-    module docs); the projection staircases then hold ``(m, e)``.
+    With the cost objective and time-dependent waits or a time-dependent
+    tariff the 3-D sets compare ``(m, t, e)`` with ``m = g - vot * t`` (money
+    and wear so far, see the module docs); the projection staircases then
+    hold ``(m, e)``.  With a time-dependent tariff the cost objective also
+    generates the voluntary holds and same-station restarts of the module
+    docs ("Charging tariffs").
 
     *Performance devices that do not change the result.*  The sequence of
     settled labels -- hence the returned route, the objective value and the
@@ -890,7 +953,10 @@ def _label_search(
     time_obj = objective == "time"
     if not time_obj and objective != "cost":
         raise ValueError(f"unknown objective {objective!r}")
-    dom3 = (not time_obj) and P.time_dependent
+    # clock-dependent prices matter for the cost objective only (module docs)
+    money_td = allow_charging and (not time_obj) and P.tariff_time_dependent
+    dom3 = (not time_obj) and (P.time_dependent or P.tariff_time_dependent)
+    nst = len(P.stations)
     nlev = len(P.speed_factors)
     cap = P.capacity
     emin_eps = P.e_min - EPS
@@ -946,6 +1012,7 @@ def _label_search(
     TG: list[list[float]] = []
     TY: list[list[float]] = []
     MY: list[list[float]] = []
+    MYP: list[list[float]] = []  # money at the targets in the peak period (money_td)
     SY: list[list[float]] = []
     PHI: list[float] = []  # magnitude of the y-dependent part of a charged label (rounding margin)
     JMIN: list[int] = []
@@ -958,15 +1025,21 @@ def _label_search(
             TY.append([f.time_at(y) for y in tg])
             MY.append([f.money_at(y) for y in tg])
             SY.append([f.soh_at(y) for y in tg])
+            if money_td:
+                MYP.append([P.cf_peak[s].money_at(y) for y in tg])
             if tg:
                 PHI.append(TY[-1][-1] if time_obj else vot * TY[-1][-1] + wm * MY[-1][-1] + wd * SY[-1][-1])
             else:
                 PHI.append(0.0)
             # targets below the reserve lead to labels that can never move -- unless
-            # another station of the node can raise the energy further (module docs)
-            alone = len(station_at[P.stations[s].node]) <= 1
+            # another station of the node (or this one, in another price period)
+            # can raise the energy further (module docs)
+            alone = len(station_at[P.stations[s].node]) <= 1 and not (money_td and P.price_changes[s])
             JMIN.append(bisect_left(tg, emin_eps) if alone else 0)
     cf = P.cf
+    cfp = P.cf_peak
+    is_peak = P.is_peak
+    hold_candidates = P.hold_candidates
     setup = P.setup_s
     wait = P.wait_s
     # dominated-parent staircases per station: x ascending, offset strictly descending
@@ -1153,8 +1226,80 @@ def _label_search(
                 nl += 1
                 pushes += 1
 
+        # ------------------------------ charge (time-dependent tariff, cost)
+        if money_td:
+            if is_station[v]:
+                # every stop may also join the queue after a voluntary hold until a
+                # price change of its station, and the station of the stop that
+                # created this label may be used again in the other price period
+                # (module docs, "Charging tariffs"); 3-D dominance, no parent skip
+                t, g = q, p
+                last = last_pk = -1
+                if code <= -2:
+                    c0 = -2 - code
+                    last, last_pk = c0 % nst, (c0 // nst) & 1
+                hv, elv, esv, needv = hb[v], el[v], es[v], need[v]
+                Gc, Gce, G3v = GP[v], GE[v], G3[v]
+                for s in station_at[v]:
+                    tg = TG[s]
+                    L = len(tg)
+                    j0 = bisect_right(tg, x + EPS)
+                    if j0 < JMIN[s]:
+                        j0 = JMIN[s]
+                    if j0 >= L:
+                        continue
+                    f = cf[s]
+                    ty, sy = TY[s], SY[s]
+                    su = setup[s]
+                    fx = f.time_at(x)
+                    sx = f.soh_at(x)
+                    joins = (t, *hold_candidates(s, t))
+                    for h in range(len(joins)):
+                        tj = joins[h]
+                        pk = 1 if is_peak(s, tj) else 0
+                        if s == last and pk == last_pk:
+                            continue  # same price: the stop that created this label could have charged on
+                        if pk:
+                            my, mx = MYP[s], cfp[s].money_at(x)
+                        else:
+                            my, mx = MY[s], f.money_at(x)
+                        wv = wait(s, tj)
+                        ws = wv + su
+                        hold = tj - t
+                        cd = -2 - (s + nst * (2 * h + pk))
+                        for jj in range(j0, L):
+                            y = tg[jj]
+                            ch = ty[jj] - fx
+                            # same arithmetic as evaluate(): t = end of hold; t += w + su + ch
+                            nt = tj + (ws + ch)
+                            ng = g + (vot * (hold + ch + wv + su) + wm * (my[jj] - mx) + wd * (sy[jj] - sx))
+                            generated += 1
+                            nm = ng - vot * nt
+                            if G3v.dominated(Gc, Gce, nm, nt, y):
+                                pruned += 1
+                                continue
+                            d = elv - y
+                            if d > 0.0:
+                                k = ng + hv + d * rate
+                                d = (esv - y) * inv_r
+                                if d > 0.0:
+                                    k += stop if d <= 1.0 else stop * ceil(d)
+                            else:
+                                k = ng + hv
+                                if k < ub and y >= needv:
+                                    ub = k
+                                    ub_lim = k + 1e-10 * abs(k) + 1e-9
+                            if k > ub_lim:
+                                bounded += 1
+                                continue
+                            heappush(heap, (k, -y, nl, ng, nt, v, i, cd))
+                            G3v.add(nm, nt, y)
+                            _stair_add_pe(Gc, Gce, nm, y)
+                            nl += 1
+                            pushes += 1
+
         # ------------------------------------------------------ charge
-        if allow_charging and is_station[v]:
+        elif allow_charging and is_station[v]:
             if time_obj:
                 t, g = p, q
             else:
@@ -1254,6 +1399,8 @@ def _label_search(
     res.pruned_parents = parents_skipped
     res.peak_queue = peak
     res.n_levels = nlev
+    res.n_stations = nst
+    res.holds = hold_candidates
     res.time_objective = time_obj
     res.upper = ub
     return res
@@ -1486,7 +1633,11 @@ class LabelSettingPlanner(Planner):
                 "pruned_parents": res.pruned_parents,
                 "targets": targets,
                 "potential": pot.name,
-                "dominance": "3d (money+wear, time, energy)" if (P.objective == "cost" and P.time_dependent) else "2d",
+                "dominance": (
+                    "3d (money+wear, time, energy)"
+                    if P.objective == "cost" and (P.time_dependent or P.tariff_time_dependent)
+                    else "2d"
+                ),
                 "status": res.status,
                 "bounds_s": t1 - t0,
                 "search_s": t2 - t1,

@@ -22,6 +22,11 @@ computed here, exactly, from the prepared scenario:
   instant of a stop (power is constant between breakpoints);
 * ``stations[s]["wait_profile"]`` -- the FIFO-safe expected-wait profile the
   planners used (:class:`~evroute.queueing.WaitProfile`);
+* with a charging tariff other than ``Tariff()`` only: ``scenario["tariff"]``
+  (:meth:`~evroute.scenario.Tariff.to_dict`), and per station ``peak_s``
+  (its peak period as clock intervals ``[a, b)`` in seconds of the day) and
+  ``price_factors`` (``{"offpeak": [below, above], "peak": [below, above]}``
+  high-SoC price factors);
 * ``pareto_points`` -- the criteria vectors of every Pareto front member;
 * ``reliability`` -- a Monte Carlo estimate of how often the route strands or
   arrives short under uncertain consumption and random queues
@@ -57,7 +62,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, Sequence
 
 from ..plan import RoutePlan
-from ..scenario import PreparedScenario, Scenario
+from ..scenario import PreparedScenario, Scenario, Tariff
 
 __all__ = [
     "FORMAT",
@@ -429,6 +434,7 @@ def _scenario_block(scenario: Scenario, P: PreparedScenario) -> dict[str, Any]:
             },
             "conditions": asdict(scenario.conditions),
             "preferences": prefs,
+            **({"tariff": scenario.tariff.to_dict()} if scenario.tariff != Tariff() else {}),
             "meta": {k: v for k, v in meta.items() if k in ("generator", "preset", "data_version", "seed", "disclaimer")},
             "prepared": P.summary(),
         }
@@ -453,7 +459,17 @@ def _stations_block(P: PreparedScenario) -> list[dict[str, Any]]:
                 "wait_profile": P.wait_profiles[i].to_dict(),
             }
         )
+        if P.tariff != Tariff():
+            out[-1].update(_station_tariff(P, i))
     return _clean(out)
+
+
+def _station_tariff(P: PreparedScenario, i: int) -> dict[str, Any]:
+    """Peak period and price factors of station ``i`` (scenarios with a tariff only)."""
+    return {
+        "peak_s": [list(iv) for iv in P.peak_intervals[i]],
+        "price_factors": {"offpeak": list(P.tariff.factors(False)), "peak": list(P.tariff.factors(True))},
+    }
 
 
 def _network_block(scenario: Scenario) -> dict[str, Any]:
@@ -475,14 +491,17 @@ def results_payload(
     ``{"scenario": ..., "results": [...], "wait_profiles": [...]}`` -- what
     the live server returns from ``POST /api/plan`` (the network and the
     station list stay in the page).  ``wait_profiles`` follow the station
-    order and change with ``queue_aware`` / ``time_dependent_waits``.
+    order and change with ``queue_aware`` / ``time_dependent_waits``; with a
+    charging tariff other than ``Tariff()``, ``station_tariffs`` lists the
+    ``peak_s`` and ``price_factors`` of every station (they change with the
+    tariff and the departure-independent busy hours).
     """
     P = scenario.prepare()
     infos = _algorithm_infos()
     opts_all: dict[str, Mapping[str, Any]] = dict(VIEWER_OPTIONS)
     if options:
         opts_all.update(options)
-    return {
+    data = {
         "scenario": _scenario_block(scenario, P),
         "results": [
             _result_dict(P, p, infos, trace_events, max_alternatives, opts_all.get(p.algorithm), robustness_runs)
@@ -490,6 +509,9 @@ def results_payload(
         ],
         "wait_profiles": [_clean(prof.to_dict()) for prof in P.wait_profiles],
     }
+    if P.tariff != Tariff():
+        data["station_tariffs"] = _clean([_station_tariff(P, i) for i in range(len(P.stations))])
+    return data
 
 
 def viewer_payload(

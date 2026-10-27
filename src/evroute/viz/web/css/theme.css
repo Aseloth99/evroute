@@ -61,6 +61,7 @@
   --c-queue: #f59e0b;
   --c-setup: #b4aca6;
   --c-charge: #10a37f;
+  --c-hold: #8b5cf6;   /* voluntary hold for a cheaper tariff */
 
   /* map */
   --map-water: #d4e2ee;
@@ -137,6 +138,7 @@
   --c-queue: #fbbf24;
   --c-setup: #7d756f;
   --c-charge: #34d399;
+  --c-hold: #a78bfa;
 
   --map-water: #0a1220;
   --map-land: #151d2b;

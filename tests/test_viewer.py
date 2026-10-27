@@ -402,6 +402,115 @@ def test_js_model_reproduces_the_evaluator(tmp_path, scenario, payload):
         assert (x, y) == (pytest.approx(wx, abs=0.05), pytest.approx(wy, abs=0.05))
 
 
+# ------------------------------------------------------------------ charging tariffs
+def _peak_line(tariff=None):
+    """O --60 km--> S --150 km--> D, one 50 kW charger at S reached at 19:30; the cost
+    optimum under a 16-20 h peak price waits until 20:00 (a voluntary hold)."""
+    from evroute import NetworkBuilder, Tariff
+    from evroute.scenario import Conditions, Preferences, Query, Scenario, Station
+    from evroute.vehicle import get_vehicle
+
+    b = NetworkBuilder()
+    o = b.add_node(0.0, 0.0, 100.0, name="O")
+    s = b.add_node(60e3, 0.0, 100.0, name="S")
+    d = b.add_node(210e3, 0.0, 100.0, name="D")
+    b.add_road(o, s, road_class="motorway")
+    b.add_road(s, d, road_class="motorway")
+    st = [Station(0, s, 50.0, "DC", price_per_kwh=0.5, setup_s=180.0, plugs=2, daily_sessions=40.0, name="S")]
+    return Scenario("peak line", b.build(), st, get_vehicle("compact50"),
+                    Query(o, d, initial_soc=0.4, departure_s=19 * 3600.0), Conditions(temperature_c=20.0),
+                    Preferences(objective="cost", value_of_time_per_h=15.0, charge_step_soc=0.05),
+                    tariff=tariff or Tariff())
+
+
+@pytest.fixture(scope="module")
+def tariff_case():
+    from evroute import Tariff
+
+    sc = _peak_line(Tariff(peak_hours=((16, 20),), peak_factor=3.0, high_soc_factor=1.2))
+    plans = run_all(sc, ["greedy", "bls-astar"], trace=True)
+    return sc, plans, viewer_payload(sc, plans, lang="en", robustness_runs=20)
+
+
+def test_neutral_payload_has_no_tariff_data(payload, scenario):
+    """Without a tariff the viewer shows nothing new: no tariff keys, no holds."""
+    assert "tariff" not in payload["scenario"]
+    assert not any("peak_s" in st or "price_factors" in st for st in payload["stations"])
+    for r in payload["results"]:
+        assert r["hold_time_s"] == 0.0 and all(s["hold_s"] == 0.0 and s["peak"] is False for s in r["stops"])
+    assert "station_tariffs" not in export.results_payload(scenario, [], robustness_runs=0)
+
+
+def test_tariff_payload_and_hold_timeline(tariff_case):
+    sc, plans, d = tariff_case
+    assert d["scenario"]["tariff"] == sc.tariff.to_dict()
+    assert d["stations"][0]["peak_s"] == [[16 * 3600.0, 20 * 3600.0]]
+    assert d["stations"][0]["price_factors"] == {"offpeak": [1.0, 1.2], "peak": [3.0, 3.0 * 1.2]}
+    r = next(r for r in d["results"] if r["algorithm"] == "bls-astar")
+    (st,) = r["stops"]
+    assert st["hold_s"] == pytest.approx(1800.0) and st["peak"] is False
+    assert r["hold_time_s"] == pytest.approx(1800.0) and r["summary"]["hold_time_s"] == pytest.approx(1800.0)
+    # the node timeline tiles the stop: arrival, hold, queue (at the end of the hold), set-up, charging
+    i = st["position"]
+    assert r["node_depart_s"][i] == pytest.approx(
+        r["node_arrive_s"][i] + st["hold_s"] + st["wait_s"] + st["setup_s"] + st["charge_s"], abs=0.05)
+    assert st["wait_s"] == pytest.approx(sc.prepare().wait_s(0, st["arrival_s"] + st["hold_s"]))
+    assert st["curve"]["t"][-1] == pytest.approx(st["charge_s"], abs=0.02)  # counts from the start of charging
+    # the live API carries the station periods with the planned scenario
+    data = export.results_payload(sc, plans, robustness_runs=0)
+    assert data["station_tariffs"] == [{"peak_s": [[57600.0, 72000.0]], "price_factors": d["stations"][0]["price_factors"]}]
+    json.dumps(d, allow_nan=False)
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_js_model_animates_the_hold(tmp_path, tariff_case):
+    """model.js: the car waits at the station (state 'hold', energy unchanged) before it queues."""
+    _, _, d = tariff_case
+    ri = next(k for k, r in enumerate(d["results"]) if r["algorithm"] == "bls-astar")
+    st = d["results"][ri]["stops"][0]
+    t0, h, w, su = st["arrival_s"], st["hold_s"], st["wait_s"], st["setup_s"]
+    probes = [[ri, t0 + 1.0], [ri, t0 + h / 2], [ri, t0 + h - 1.0], [ri, t0 + h + w / 2], [ri, t0 + h + w + su / 2],
+              [ri, t0 + h + w + su + st["charge_s"] / 2]]
+    data = tmp_path / "req.json"
+    data.write_text(json.dumps({"payload": d, "waits": [], "probes": probes}), encoding="utf-8")
+    script = tmp_path / "harness.js"
+    script.write_text(_JS_HARNESS, encoding="utf-8")
+    res = subprocess.run(["node", str(script), str(WEB_DIR), str(data)], capture_output=True, text=True, timeout=60)
+    assert res.returncode == 0, res.stderr
+    states = json.loads(res.stdout)["states"]
+    assert [s[0] for s in states] == ["hold", "hold", "hold", "wait", "setup", "charge"]
+    for s in states[:5]:
+        assert s[2] == pytest.approx(st["energy_in_kwh"], abs=1e-4)
+    assert st["energy_in_kwh"] < states[5][2] < st["energy_out_kwh"]
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_ui_strings_exist_in_both_languages(tmp_path):
+    """Every TR key has an EN twin and every literal I.t('key') / data-i18n key exists."""
+    harness = r"""
+const fs = require('fs'), vm = require('vm');
+const dir = process.argv[2];
+const ctx = { console, Intl, document: { documentElement: { setAttribute() {} } } };
+ctx.window = ctx; vm.createContext(ctx);
+vm.runInContext(fs.readFileSync(dir + '/js/i18n.js', 'utf8'), ctx);
+const S = ctx.EVR.i18n.STR;
+process.stdout.write(JSON.stringify({ tr: Object.keys(S.tr), en: Object.keys(S.en) }));
+"""
+    script = tmp_path / "keys.js"
+    script.write_text(harness, encoding="utf-8")
+    res = subprocess.run(["node", str(script), str(WEB_DIR)], capture_output=True, text=True, timeout=60)
+    assert res.returncode == 0, res.stderr
+    keys = json.loads(res.stdout)
+    assert sorted(keys["tr"]) == sorted(keys["en"])
+    used = set()
+    for name in JS_FILES:
+        used.update(re.findall(r"I\.t\('([a-z0-9_]+)'", (WEB_DIR / "js" / name).read_text(encoding="utf-8")))
+    used.update(re.findall(r'data-i18n(?:-aria|-title)?="([a-z0-9_]+)"', (WEB_DIR / "index.html").read_text(encoding="utf-8")))
+    assert used and not used - set(keys["en"])
+    for k in ("st_hold_offpeak", "hold", "stop_hold_offpeak", "tariff_toggle", "kv_tariff_peak"):
+        assert k in keys["en"]
+
+
 # ------------------------------------------------------------------ server
 @pytest.fixture(scope="module")
 def server():
@@ -506,6 +615,8 @@ def test_server_plan(server):
         ({"origin": "Atlantis"}, "origin"),
         ({"scenario": "no-such-preset"}, "scenario"),
         ({"surprise": 1}, "unknown field"),
+        ({"tariff": "90"}, "tariff"),
+        ({"tariff": True}, "tariff"),
         ([1, 2, 3], "JSON object"),
     ],
 )
@@ -546,3 +657,31 @@ def test_build_plan_scenario_unit():
     assert (base.query.origin, base.query.destination) == (0, 15)
     with pytest.raises(PlanRequestError):
         build_plan_scenario(base, {"reserve_soc": 0.9})
+
+
+def test_build_plan_scenario_tariff_switch():
+    from evroute import Tariff
+    from evroute.generators.presets import DEMO_TARIFF, get_scenario
+
+    base = grid_scenario(rows=4, cols=4, seed=2)
+    assert build_plan_scenario(base, {})[0].tariff == Tariff()
+    assert build_plan_scenario(base, {"tariff": "80"})[0].tariff == DEMO_TARIFF
+    preset = get_scenario("turkey-karaman-istanbul-tariff")
+    assert build_plan_scenario(preset, {})[0].tariff == DEMO_TARIFF  # absent: the preset's own tariff
+    assert build_plan_scenario(preset, {"tariff": "flat"})[0].tariff == Tariff()
+    assert preset.tariff == DEMO_TARIFF  # the base scenario is not modified
+
+
+def test_server_tariff_switch(server):
+    status, _, body = _get(server, "/api/scenario?name=grid-small")
+    p = json.loads(body)
+    assert status == 200 and p["demo_tariff"]["high_soc_factor"] > 1.0 and "tariff" not in p["scenario"]
+    base = server.base_scenario("grid-small")
+    status, data = _post(server, "/api/plan", {"algorithms": ["bls-astar"], "tariff": "80", "objective": "cost",
+                                              "departure_s": "15:00"})
+    assert status == 200, data
+    assert data["scenario"]["tariff"]["peak_hours"] == [[16.0, 20.0]]
+    assert len(data["station_tariffs"]) == len(base.stations)
+    assert data["station_tariffs"][0]["peak_s"] == [[57600.0, 72000.0]]
+    status, data = _post(server, "/api/plan", {"algorithms": ["bls-astar"], "tariff": "flat"})
+    assert status == 200 and "tariff" not in data["scenario"] and "station_tariffs" not in data

@@ -176,7 +176,7 @@
     border: '--border', borderStrong: '--border-strong',
     text: '--text', text2: '--text-2', text3: '--text-3', accent: '--accent',
     ok: '--ok', warn: '--warn', bad: '--bad',
-    cDrive: '--c-drive', cQueue: '--c-queue', cSetup: '--c-setup', cCharge: '--c-charge',
+    cDrive: '--c-drive', cQueue: '--c-queue', cSetup: '--c-setup', cCharge: '--c-charge', cHold: '--c-hold',
     mapWater: '--map-water', mapLand: '--map-land',
     roadCasing: '--road-casing', roadMotorway: '--road-motorway', roadTrunk: '--road-trunk',
     roadPrimary: '--road-primary', roadMinor: '--road-minor',

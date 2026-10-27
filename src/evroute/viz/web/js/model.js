@@ -11,7 +11,9 @@
  * consecutive segments
  *
  *     drive(i) : [depart_i, arrive_{i+1}]   edge i, energy linear in time
- *     wait     : [arrival, arrival + wait]  queue at a station (energy constant)
+ *     hold     : [arrival, arrival + hold]  voluntary hold for a cheaper price
+ *                                           period (charging tariffs; usually absent)
+ *     wait     : [.., .. + wait]            queue at a station (energy constant)
  *     setup    : [.., .. + setup]           plugging in / out (energy constant)
  *     charge   : [.., .. + charge]          energy follows the exact charging
  *                                           trajectory (stop.curve breakpoints)
@@ -243,6 +245,7 @@
       if (here) {
         for (const s of here) {
           let t = s.arrival_s;
+          if (s.hold_s > 0) { segs.push({ k: 'hold', t0: t, t1: t + s.hold_s, i, stop: s }); t += s.hold_s; }
           if (s.wait_s > 0) { segs.push({ k: 'wait', t0: t, t1: t + s.wait_s, i, stop: s }); t += s.wait_s; }
           if (s.setup_s > 0) { segs.push({ k: 'setup', t0: t, t1: t + s.setup_s, i, stop: s }); t += s.setup_s; }
           if (s.charge_s > 0) { segs.push({ k: 'charge', t0: t, t1: t + s.charge_s, i, stop: s }); t += s.charge_s; }
@@ -330,7 +333,7 @@
   /**
    * State of route `r` at trip time `t` [s]:
    * {kind, x, y, heading, dist, energy, soc, speed, elev, stop, left, power, road, i}
-   * kind is one of start | drive | wait | setup | charge | done | stranded | none.
+   * kind is one of start | drive | hold | wait | setup | charge | done | stranded | none.
    */
   function stateAt(model, r, t) {
     const nodes = r.nodes || [];
@@ -396,7 +399,7 @@
     // heading: direction of arrival, or of departure when standing at the origin
     const a = g.i > 0 ? nodes[g.i - 1] : v;
     const b = g.i > 0 ? v : nodes[Math.min(1, L - 1)];
-    const end = s.arrival_s + s.wait_s + s.setup_s + s.charge_s;
+    const end = stopEnd(s);
     let energy = s.energy_in_kwh, power = 0;
     if (g.k === 'charge') {
       const c = s.curve;
@@ -422,12 +425,25 @@
     };
   }
 
+  /** Is station `st` in its peak price period at clock time `tod` [s]?  (`st.peak_s`: clock intervals [a, b), charging tariffs only) */
+  function isPeakAt(st, tod) {
+    const ivs = st && st.peak_s;
+    if (!ivs || !ivs.length) return false;
+    const t = ((tod % DAY) + DAY) % DAY;
+    return ivs.some((iv) => t >= iv[0] && t < iv[1]);
+  }
+
+  /** Trip time at which stop `s` ends (hold, queue, set-up and charging after its arrival). */
+  function stopEnd(s) {
+    return s.arrival_s + (s.hold_s || 0) + s.wait_s + s.setup_s + s.charge_s;
+  }
+
   /** Index of the stop whose dwell contains `t`, or -1. */
   function stopIndexAt(r, t) {
     const stops = r._stops || [];
     for (let k = 0; k < stops.length; k++) {
       const s = stops[k];
-      if (t >= s.arrival_s && t <= s.arrival_s + s.wait_s + s.setup_s + s.charge_s) return k;
+      if (t >= s.arrival_s && t <= stopEnd(s)) return k;
     }
     return -1;
   }
@@ -446,5 +462,5 @@
     return p[p.length - 1][1];
   }
 
-  EVR.model = { Model, prepareRoute, localTitle, stateAt, stopIndexAt, socAtDistance, waitAt, stationClass, CLASS_ORDER };
+  EVR.model = { Model, prepareRoute, localTitle, stateAt, stopIndexAt, stopEnd, isPeakAt, socAtDistance, waitAt, stationClass, CLASS_ORDER };
 })(window.EVR = window.EVR || {});

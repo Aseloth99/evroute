@@ -469,6 +469,20 @@ input[type="range"]:focus-visible::-webkit-slider-thumb { box-shadow: var(--focu
 .stop-grid b { font-variant-numeric: tabular-nums; font-weight: 650; white-space: nowrap; }
 .stop-grid .q b { color: var(--warn); }
 .stops-empty { color: var(--text-3); font-size: 13px; padding: 6px 2px; }
+/* charging tariffs: price-period pills and the voluntary hold of a stop */
+.tariff-pill { font-weight: 650; font-size: 10px; padding: 1px 6px; border-radius: 5px; white-space: nowrap; }
+.tariff-pill.peak { background: var(--warn-soft); color: var(--warn); }
+.tariff-pill.offpeak { background: var(--ok-soft); color: var(--ok); }
+.tariff-pill.high { background: color-mix(in srgb, var(--c-hold) 14%, transparent); color: var(--c-hold); }
+.stop-hold {
+  display: flex; align-items: center; gap: 7px;
+  margin: -2px 0 7px; padding: 4px 8px;
+  border-radius: 8px;
+  font-size: 11.5px; font-weight: 600; line-height: 1.35;
+  color: var(--c-hold);
+  background: color-mix(in srgb, var(--c-hold) 11%, transparent);
+}
+.stop-hold i { width: 9px; height: 9px; border-radius: 50%; border: 2px dotted currentColor; flex: none; }
 
 /* ------------------------------------------------------------------ HUD */
 .hud {
@@ -521,6 +535,7 @@ input[type="range"]:focus-visible::-webkit-slider-thumb { box-shadow: var(--focu
 .hud-status.charge { background: color-mix(in srgb, var(--c-charge) 16%, transparent); color: var(--c-charge); }
 .hud-status.charge .dot { animation: pulse 1s ease-in-out infinite; }
 .hud-status.queue { background: var(--warn-soft); color: var(--warn); }
+.hud-status.hold { background: color-mix(in srgb, var(--c-hold) 14%, transparent); color: var(--c-hold); }
 .hud-status.setup { background: var(--surface-3); }
 .hud-status.done { background: var(--ok-soft); color: var(--ok); }
 .hud-status.stranded { background: var(--bad-soft); color: var(--bad); }
@@ -649,6 +664,7 @@ input[type="range"]:focus-visible::-webkit-slider-thumb { box-shadow: var(--focu
 .tl-wait { background: var(--c-queue); }
 .tl-setup { background: var(--c-setup); }
 .tl-charge { background: var(--c-charge); }
+.tl-hold { background: var(--c-hold); }
 .timeline-progress {
   position: absolute; left: 0; top: 8px; height: 8px; width: 0;
   border-radius: 999px 0 0 999px;

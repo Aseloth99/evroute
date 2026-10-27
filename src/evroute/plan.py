@@ -23,12 +23,17 @@ class ChargeDecision:
 
     ``position`` indexes the plan's node sequence: ``0`` is the origin and
     ``len(edges)`` the destination.  The battery is charged up to
-    ``target_kwh`` (no-op if it already holds that much).
+    ``target_kwh`` (no-op if it already holds that much).  ``hold_until_s``
+    is a voluntary hold: the vehicle waits at the station until this trip
+    time before it joins the queue (e.g. for the end of a peak-price
+    period, :class:`~evroute.scenario.Tariff`); ``None`` or a time not after
+    the arrival means no hold.
     """
 
     position: int
     station: int
     target_kwh: float
+    hold_until_s: float | None = None
 
 
 @dataclass
@@ -45,7 +50,16 @@ class PlanDecision:
 
 @dataclass
 class ChargeStop:
-    """A measured charging stop."""
+    """A measured charging stop.
+
+    The vehicle arrives at ``arrival_s``, holds voluntarily for ``hold_s``
+    seconds, joins the queue (``join_s``; this instant sets the price
+    period, ``peak``), waits ``wait_s``, plugs in (``setup_s``) and charges
+    for ``charge_s`` seconds.  After a hold, ``hold_until_s`` is the exact
+    trip time at which the vehicle joined the queue (the decision's
+    ``hold_until_s``): ``arrival_s + hold_s`` can differ from it in the last
+    bit, which may be the other side of a price change.
+    """
 
     station: int
     node: int
@@ -65,14 +79,24 @@ class ChargeStop:
     station_power_kw: float
     station_kind: str
     station_name: str = ""
+    #: voluntary hold before joining the queue [s]
+    hold_s: float = 0.0
+    #: the session was priced in the station's peak period
+    peak: bool = False
+    #: trip time at which the vehicle joined the queue after a hold (``None``: no hold)
+    hold_until_s: float | None = None
+
+    @property
+    def join_s(self) -> float:
+        return self.arrival_s if self.hold_until_s is None else self.hold_until_s
 
     @property
     def departure_s(self) -> float:
-        return self.arrival_s + self.wait_s + self.setup_s + self.charge_s
+        return self.join_s + self.wait_s + self.setup_s + self.charge_s
 
     @property
     def dwell_s(self) -> float:
-        return self.wait_s + self.setup_s + self.charge_s
+        return self.hold_s + self.wait_s + self.setup_s + self.charge_s
 
 
 @dataclass
@@ -141,6 +165,8 @@ class RoutePlan:
     wait_time_s: float = 0.0
     setup_time_s: float = 0.0
     charge_time_s: float = 0.0
+    #: voluntary holds before joining a queue (part of ``total_time_s``)
+    hold_time_s: float = 0.0
     distance_m: float = 0.0
     energy_consumed_kwh: float = 0.0
     energy_regen_kwh: float = 0.0
@@ -191,6 +217,7 @@ class RoutePlan:
             "drive_time_s": round(self.drive_time_s, 1),
             "charge_time_s": round(self.charge_time_s, 1),
             "wait_time_s": round(self.wait_time_s + self.setup_time_s, 1),
+            "hold_time_s": round(self.hold_time_s, 1),
             "distance_km": round(self.distance_m / 1000.0, 2),
             "stops": self.num_stops,
             "energy_kwh": round(self.energy_consumed_kwh - self.energy_regen_kwh, 2),

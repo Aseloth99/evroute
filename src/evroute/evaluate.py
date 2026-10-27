@@ -17,8 +17,13 @@ algorithm, so it doubles as the correctness oracle in the test-suite:
 Rules (shared with all algorithms):
 
 * the battery is clamped at full capacity when regenerating;
-* every listed stop pays its expected queueing delay (evaluated at the
-  arrival time) and the setup time, even if no energy is added;
+* a stop may start with a voluntary hold (``ChargeDecision.hold_until_s``):
+  the vehicle waits until that trip time and then joins the queue;
+* every listed stop pays its expected queueing delay (evaluated at the time
+  it joins the queue: the arrival time, or the end of the hold) and the
+  setup time, even if no energy is added;
+* the money of a stop is that of the station's price period at the time it
+  joins the queue (:meth:`~evroute.scenario.PreparedScenario.money_cf`);
 * charging targets below the current energy add nothing.
 """
 
@@ -103,7 +108,7 @@ def evaluate(
     arrive_e, depart_e = [0.0] * n, [0.0] * n
     node_dist = [0.0] * n
     stops: list[ChargeStop] = []
-    drive_t = wait_t = setup_t = charge_t = 0.0
+    drive_t = wait_t = setup_t = charge_t = hold_t = 0.0
     consumed = regen = charged = grid = money = soh_charge = 0.0
     drive_cost = 0.0
     stranded_at: float | None = None
@@ -120,20 +125,29 @@ def evaluate(
             if c.target_kwh > P.e_charge_cap + TOL_KWH:
                 violations.append(f"charging target {c.target_kwh:.3f} kWh above cap {P.e_charge_cap:.3f}")
             target = min(c.target_kwh, P.e_charge_cap)
+            t_arr = t
+            hold = 0.0
+            hu = c.hold_until_s
+            if hu is not None:
+                if not math.isfinite(hu):
+                    violations.append(f"hold time {hu!r} of the stop at station {s} is not finite")
+                elif hu > t:
+                    hold = hu - t
+                    t = hu  # join the queue at the end of the hold
             w = P.wait_s(s, t) if wait_override is None else wait_override[len(stops)]
             su = P.setup_s[s]
             e_in = e
             e_out = max(e, target)
             eff = P.vehicle.charge_eff_ac if st.kind == "AC" else P.vehicle.charge_eff_dc
             ch = f.charge_time(e_in, e_out)
-            mo = f.money(e_in, e_out)
+            mo = P.money_cf(s, t).money(e_in, e_out)  # price period at the time of joining
             so = f.soh(e_in, e_out)
             stops.append(
                 ChargeStop(
                     station=s,
                     node=v,
                     position=i,
-                    arrival_s=t,
+                    arrival_s=t_arr,
                     wait_s=w,
                     setup_s=su,
                     charge_s=ch,
@@ -148,9 +162,13 @@ def evaluate(
                     station_power_kw=st.power_kw,
                     station_kind=st.kind,
                     station_name=st.name,
+                    hold_s=hold,
+                    peak=P.is_peak(s, t),
+                    hold_until_s=t if hold > 0.0 else None,
                 )
             )
             t += w + su + ch
+            hold_t += hold
             wait_t += w
             setup_t += su
             charge_t += ch
@@ -213,6 +231,7 @@ def evaluate(
         wait_time_s=wait_t,
         setup_time_s=setup_t,
         charge_time_s=charge_t,
+        hold_time_s=hold_t,
         distance_m=dist,
         energy_consumed_kwh=consumed,
         energy_regen_kwh=regen,

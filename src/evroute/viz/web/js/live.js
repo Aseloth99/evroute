@@ -23,7 +23,7 @@
         origin: U.$('#in-origin'), destination: U.$('#in-destination'), swap: U.$('#btn-swap'), pickSeg: U.$('#pick-seg'),
         vehicle: U.$('#in-vehicle'), soc: U.$('#in-soc'), temp: U.$('#in-temp'), reserve: U.$('#in-reserve'), arrive: U.$('#in-arrive'),
         objective: U.$('#in-objective'), depart: U.$('#in-depart'), vot: U.$('#in-vot'), votUnit: U.$('#vot-unit'),
-        eco: U.$('#in-eco'), queue: U.$('#in-queue'), algos: U.$('#algo-picks'), plan: U.$('#btn-plan'), error: U.$('#plan-error'),
+        eco: U.$('#in-eco'), queue: U.$('#in-queue'), tariff: U.$('#in-tariff'), fieldTariff: U.$('#field-tariff'), algos: U.$('#algo-picks'), plan: U.$('#btn-plan'), error: U.$('#plan-error'),
         outSoc: U.$('#out-soc'), outTemp: U.$('#out-temp'), outReserve: U.$('#out-reserve'), outArrive: U.$('#out-arrive'),
       };
       this.el.card.hidden = false;
@@ -93,6 +93,12 @@
       el.votUnit.textContent = `(${app.model.currency}${I.t('per_hour')})`;
       el.eco.checked = (prefs.speed_factors || [1]).length > 1;
       el.queue.checked = prefs.queue_aware !== false;
+      // charging-tariff switch: the server's demonstration tariff (or the preset's own tariff)
+      const demo = p.demo_tariff || null;
+      const base = (p.scenario || {}).tariff || null;
+      el.fieldTariff.hidden = !(demo || base);
+      el.tariff.checked = !!sc.tariff;
+      el.fieldTariff.title = `${EVR.panels.tariffText(base || demo)} · ${I.t('tariff_illustrative')}`;
       for (const inp of [el.soc, el.temp, el.reserve, el.arrive]) inp._upd();
       // algorithm checkboxes
       const have = new Set(app.model.results.map((r) => r.algorithm));
@@ -157,6 +163,8 @@
         speed_factors: el.eco.checked ? [1.0, 0.9, 0.8] : [1.0],
         queue_aware: el.queue.checked,
         departure_s: ((hh || 0) * 3600 + (mm || 0) * 60),
+        // on: the preset's own tariff, else the demonstration tariff ("80"); off: "flat"
+        tariff: el.fieldTariff.hidden ? undefined : el.tariff.checked ? ((app.payload.scenario || {}).tariff ? undefined : '80') : 'flat',
       };
     }
 

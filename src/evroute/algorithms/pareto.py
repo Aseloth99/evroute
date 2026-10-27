@@ -80,6 +80,29 @@ charging curve and the wait and setup are not paid twice), and one to
 ``y <= e_A`` by ``A`` itself (see the module docs of
 :mod:`evroute.algorithms.labels`).
 
+Charging tariffs
+================
+
+With a time-dependent :class:`~evroute.scenario.Tariff`
+(``P.tariff_time_dependent``) the money of a stop depends on the price
+period at the time it joins the queue (``P.money_cf(s, t)``), and money is
+always a criterion here.  As for the cost objective of BLS (module docs of
+:mod:`evroute.algorithms.labels`, "Charging tariffs"), every station
+expansion at trip time ``t`` charges at once and, with the same targets,
+after a voluntary hold until each price change of the station in
+``(t, t + 24 h]`` (``P.hold_candidates(s, t)``); a label created by a stop
+at ``s`` may stop at ``s`` again in the other price period.  The dominance
+rule is unchanged and stays exact: a label ``A`` that dominates ``B`` can
+follow ``B``, holding at every stop until the start of the period in which
+``B`` joins the queue (a price change, hence a generated hold, never later
+than ``B``'s join time); with FIFO queues it starts every session no later,
+pays the same prices on no more energy and arrives no later with no less
+energy.  A hold takes time, so every transition still increases ``t``
+(Lemma 1), and the completion bounds use the cheapest money of all periods.
+The how code of such a stop is ``-2 - (s + n_stations * (2 * h + peak))``
+(``h = 0``: no hold, ``h >= 1``: hold until ``P.hold_candidates(s,
+t_parent)[h - 1]``; ``peak``: the price period).
+
 Search order (Martins 1984, goal-directed)
 ==========================================
 
@@ -426,12 +449,13 @@ def chargeable_rates(P: PreparedScenario) -> tuple[float, float, float]:
     bins that intersect the chargeable range ``[min(e_min, e_init), e_charge_cap]``.
 
     Each rate is minimised separately (a lower bound for every criterion on
-    its own).  ``(0, 0, 0)`` without stations.
+    its own), the money over every price period (``P.cf_variants``).
+    ``(0, 0, 0)`` without stations.
     """
     lo = min(P.e_min, P.e_init) - EPS
     hi = P.e_charge_cap
     sec = money = soh = INF
-    for f in P.cf:
+    for f in P.cf_variants:
         eb = f.e_breaks
         for i, pw in enumerate(f.power_kw):
             if eb[i + 1] <= lo or eb[i] >= hi:
@@ -614,7 +638,7 @@ class _ParetoSearch:
     """Label store, destination front and counters of one search."""
 
     __slots__ = (
-        "energy", "front", "generated", "how", "money", "n_levels", "node", "parent",
+        "energy", "front", "generated", "holds", "how", "money", "n_levels", "n_stations", "node", "parent",
         "peak_queue", "pruned", "pruned_front", "pushes", "replaced", "settled", "status", "time", "wear",
     )
     time: list[float]
@@ -635,6 +659,9 @@ class _ParetoSearch:
     replaced: int
     peak_queue: int
     n_levels: int
+    n_stations: int
+    #: ``P.hold_candidates`` (decodes the hold of a stop, see the module docs)
+    holds: Any
 
     def reconstruct(self, i: int) -> tuple[list[int], list[int], list[ChargeDecision]]:
         """Edges, levels and charging stops of the partial route of label ``i``."""
@@ -647,7 +674,7 @@ class _ParetoSearch:
         edges: list[int] = []
         levels: list[int] = []
         charges: list[ChargeDecision] = []
-        how, energy, nlev = self.how, self.energy, self.n_levels
+        how, energy, nlev, nst, par = self.how, self.energy, self.n_levels, self.n_stations, self.parent
         for j in chain:
             code = how[j]
             if code >= 0:
@@ -655,7 +682,13 @@ class _ParetoSearch:
                 edges.append(a)
                 levels.append(k)
             elif code <= -2:
-                charges.append(ChargeDecision(len(edges), -2 - code, energy[j]))
+                c = -2 - code
+                if c < nst:
+                    charges.append(ChargeDecision(len(edges), c, energy[j]))
+                else:  # time-dependent tariff: decode the hold (module docs, "Charging tariffs")
+                    s, h = c % nst, (c // nst) >> 1
+                    hold = self.holds(s, self.time[par[j]])[h - 1] if h else None
+                    charges.append(ChargeDecision(len(edges), s, energy[j], hold))
         return edges, levels, charges
 
 
@@ -726,9 +759,13 @@ def _pareto_search(
     # ------------------------------------------------- charging tables
     station_at = P.station_at
     is_station = P.is_station_node
+    # clock-dependent prices: holds and same-station restarts (module docs)
+    money_td = P.tariff_time_dependent
+    nst = len(P.stations)
     TG: list[list[float]] = []
     TY: list[list[float]] = []
     MY: list[list[float]] = []
+    MYP: list[list[float]] = []  # money at the targets in the peak period (money_td)
     SY: list[list[float]] = []
     JMIN: list[int] = []
     for s in range(len(P.stations)):
@@ -738,13 +775,19 @@ def _pareto_search(
         TY.append([f.time_at(y) for y in tg])
         MY.append([f.money_at(y) for y in tg])
         SY.append([f.soh_at(y) for y in tg])
+        if money_td:
+            MYP.append([P.cf_peak[s].money_at(y) for y in tg])
         # targets below the reserve lead to labels that can never move -- unless
-        # another station of the node can raise the energy further
-        alone = len(station_at[P.stations[s].node]) <= 1
+        # another station of the node (or this one, in another price period) can
+        # raise the energy further
+        alone = len(station_at[P.stations[s].node]) <= 1 and not (money_td and P.price_changes[s])
         JMIN.append(bisect_left(tg, emin_eps) if alone else 0)
     cf = P.cf
+    cfp = P.cf_peak
     setup = P.setup_s
     wait = P.wait_s
+    is_peak = P.is_peak
+    hold_candidates = P.hold_candidates
 
     # ---------------------------------------------------- label store
     TT: list[float] = []
@@ -914,8 +957,87 @@ def _pareto_search(
                 nl += 1
                 pushes += 1
 
+        # ---------------------------------- charge (time-dependent tariff)
+        if money_td:
+            if is_station[v]:
+                # a stop may also join the queue after a voluntary hold until a
+                # price change of its station, and the station of the stop that
+                # created this label may be used again in the other price period
+                # (module docs, "Charging tariffs")
+                last = last_pk = -1
+                code = HOW[i]
+                if code <= -2:
+                    c0 = -2 - code
+                    last, last_pk = c0 % nst, (c0 // nst) & 1
+                hv = hwd[v]
+                env = eneed[v]
+                pv = pot[v]
+                Ms, Es = SM[v], SE[v]
+                A3 = S3[v] if S3 is not None else None
+                for s in station_at[v]:
+                    tg = TG[s]
+                    L = len(tg)
+                    j0 = bisect_right(tg, x + EPS)
+                    if j0 < JMIN[s]:
+                        j0 = JMIN[s]
+                    if j0 >= L:
+                        continue
+                    f = cf[s]
+                    ty, sy = TY[s], SY[s]
+                    fx = f.time_at(x)
+                    sx = f.soh_at(x)
+                    su = setup[s]
+                    joins = (t, *hold_candidates(s, t))
+                    for h in range(len(joins)):
+                        tj = joins[h]
+                        pk = 1 if is_peak(s, tj) else 0
+                        if s == last and pk == last_pk:
+                            continue  # same price: the stop that created this label could have charged on
+                        if pk:
+                            my, mx = MYP[s], cfp[s].money_at(x)
+                        else:
+                            my, mx = MY[s], f.money_at(x)
+                        ws = wait(s, tj) + su
+                        cd = -2 - (s + nst * (2 * h + pk))
+                        for jj in range(j0, L):
+                            y = tg[jj]
+                            # same arithmetic as evaluate(): money += M(y) - M(x)
+                            nm = m + (my[jj] - mx)
+                            nw = w + (sy[jj] - sx)
+                            nk = nw if use_wear else 0.0
+                            generated += 1
+                            nmq = nm * nfm
+                            j = bisect_right(Ms, nmq)
+                            if j and Es[j - 1] >= y and (A3 is None or A3.dominated(nmq, nk * nfw, y)):
+                                pruned += 1
+                                continue
+                            if FM:
+                                d = env - y
+                                if d > 0.0:
+                                    j = bisect_right(FM, (nm + d * mrate) * fm)
+                                    if j and FW[j - 1] <= (nk + hv + d * srate) * fw:
+                                        pruned_front += 1
+                                        continue
+                                else:
+                                    j = bisect_right(FM, nm * fm)
+                                    if j and FW[j - 1] <= (nk + hv) * fw:
+                                        pruned_front += 1
+                                        continue
+                            # same arithmetic as evaluate(): t = end of hold; t += wait + setup + charge
+                            nt = tj + (ws + (ty[jj] - fx))
+                            TT_a(nt)
+                            MM_a(nm)
+                            WW_a(nw)
+                            EN_a(y)
+                            ND_a(v)
+                            PAR_a(i)
+                            HOW_a(cd)
+                            heappush(heap, (nt + pv, nm, nk, -y, nl))
+                            nl += 1
+                            pushes += 1
+
         # ------------------------------------------------------ charge
-        if is_station[v]:
+        elif is_station[v]:
             last = -2 - HOW[i]  # station of the stop that created this label (< 0: none)
             hv = hwd[v]
             env = eneed[v]
@@ -985,6 +1107,8 @@ def _pareto_search(
     res.replaced = replaced
     res.peak_queue = peak
     res.n_levels = nlev
+    res.n_stations = nst
+    res.holds = hold_candidates
     return res
 
 
@@ -1025,7 +1149,7 @@ def _parse_epsilon(value: Any, criteria: tuple[str, ...]) -> dict[str, float]:
 def _validate_model(P: PreparedScenario) -> None:
     """The lexicographic search needs non-negative increments in every criterion."""
     for s, f in enumerate(P.cf):
-        if min(f.money_per_kwh) < 0.0 or min(f.soh_pct_per_kwh) < 0.0:
+        if min(f.money_per_kwh) < 0.0 or min(f.soh_pct_per_kwh) < 0.0 or min(P.cf_peak[s].money_per_kwh) < 0.0:
             raise ValueError(f"station {s}: negative price or wear rate is not supported")
         if min(P.wait_profiles[s].waits_s) + P.setup_s[s] < 0.0:
             raise ValueError(f"station {s}: negative wait + setup time is not supported")

@@ -5,6 +5,8 @@ Examples::
     evroute scenarios
     evroute plan turkey-karaman-istanbul
     evroute plan turkey-karaman-istanbul --from Konya --to Ankara --soc 0.35 -a cfp
+    evroute plan turkey-karaman-istanbul --depart 14:00 --tariff 80 --objective cost
+    evroute plan turkey-karaman-istanbul --peak 16-20 --peak-factor 1.2 --high-soc-factor 1.5
     evroute compare turkey-antalya-ankara --temp -5
     evroute viz turkey-karaman-istanbul -o karaman-istanbul.html
     evroute viz corridor -o corridor.html --no-animate --lang en
@@ -18,6 +20,16 @@ Commands that take a scenario accept a preset name or the path of a scenario
 ``.json`` file; ``serve`` takes preset names only.  Bad input (an unknown
 name, an out-of-range value, an unreadable file) is reported as one
 ``error: ...`` line on stderr with exit code 2.
+
+Charging tariff (:class:`~evroute.scenario.Tariff`): ``--tariff 80`` switches
+on the illustrative demonstration tariff
+(:data:`~evroute.generators.presets.DEMO_TARIFF`: +30 % above 80 % SoC,
+16:00-20:00 peak at +15 %, x2 above 80 % in the peak), ``--tariff flat``
+switches any tariff off; ``--high-soc``, ``--high-soc-factor``, ``--peak``,
+``--peak-factor``, ``--peak-high-soc-factor`` and ``--busy`` then set single
+fields.  ``plan`` adds a ``hold`` column to its stop table when a stop waits
+for a cheaper price period, and a ``tariff`` column for a scenario with a
+tariff.
 """
 
 from __future__ import annotations
@@ -121,7 +133,75 @@ def _apply_overrides(sc, args: argparse.Namespace):
             sc = sc.with_(vehicle=get_vehicle(args.vehicle))
         except KeyError as exc:
             raise UsageError(exc.args[0]) from None
-    return sc
+    return _apply_tariff(sc, args)
+
+
+#: ``--option`` -> :class:`~evroute.scenario.Tariff` field of the numeric tariff overrides
+_TARIFF_OPTIONS = {
+    "high_soc": "high_soc",
+    "high_soc_factor": "high_soc_factor",
+    "peak_factor": "peak_factor",
+    "peak_high_soc_factor": "peak_high_soc_factor",
+    "busy": "busy_utilisation",
+}
+
+
+def _apply_tariff(sc, args: argparse.Namespace):
+    """``--tariff`` (a whole tariff) first, then the single-field tariff options.
+
+    The values are checked by :meth:`Scenario.validate` afterwards (one
+    ``error:`` line), like every other override.
+    """
+    shortcut = getattr(args, "tariff", None)
+    if shortcut is not None:
+        from .scenario import Tariff
+
+        if shortcut.strip().lower() == "80":
+            from .generators.presets import DEMO_TARIFF
+
+            sc = sc.with_(tariff=DEMO_TARIFF)
+        elif shortcut.strip().lower() == "flat":
+            sc = sc.with_(tariff=Tariff())
+        else:
+            raise UsageError(
+                f"--tariff must be 80 (the illustrative demonstration tariff) or flat (no tariff), got {shortcut!r}"
+            )
+    t: dict[str, Any] = {}
+    for opt, name in _TARIFF_OPTIONS.items():
+        value = getattr(args, opt, None)
+        if value is not None:
+            t[name] = value
+    if getattr(args, "peak", None) is not None:
+        t["peak_hours"] = _peak_hours(args.peak)
+    return sc.with_tariff(**t) if t else sc
+
+
+def _peak_hours(spec: str) -> tuple[tuple[float, float], ...]:
+    """``"16-20"``, ``"7-9,16-20"``, ``"22-6"`` (wraps midnight), ``"16:30-20"`` or
+    ``"none"`` -> ``Tariff.peak_hours`` (clock hours)."""
+    if spec.strip().lower() == "none":
+        return ()
+    usage = f"--peak must be clock hours START-END[,START-END...] such as 16-20, 7-9,16-20 or 22-6, got {spec!r}"
+    out = []
+    for item in spec.split(","):
+        m = re.fullmatch(r"\s*(\d{1,2}(?:\.\d+|:\d{2})?)\s*-\s*(\d{1,2}(?:\.\d+|:\d{2})?)\s*", item)
+        if not m:
+            raise UsageError(usage)
+        a, b = (_clock_hours(g, usage) for g in m.groups())
+        if a == b:
+            raise UsageError(f"--peak interval {item.strip()!r} is empty (start = end)")
+        out.append((a, b))
+    return tuple(out)
+
+
+def _clock_hours(text: str, usage: str) -> float:
+    """``"16"`` -> 16.0, ``"16.5"`` -> 16.5, ``"16:30"`` -> 16.5 (range checked by ``Tariff.validate``)."""
+    if ":" in text:
+        h, mnt = text.split(":")
+        if int(mnt) > 59:
+            raise UsageError(usage)
+        return int(h) + int(mnt) / 60.0
+    return float(text)
 
 
 def _algorithm(name: str) -> str:
@@ -159,12 +239,28 @@ def _table(rows: list[list[str]], header: list[str], left: int = 1) -> str:
     return "\n".join([line, sep, *body])
 
 
+def _tariff_label(stop, tariff) -> str:
+    """Price period and high-SoC tier of one stop, e.g. ``"peak >80%"`` (``"-"``: base price)."""
+    parts = []
+    if tariff.peak_hours or tariff.busy_utilisation is not None:
+        parts.append("peak" if stop.peak else "off-peak")
+    lo, hi = tariff.factors(stop.peak)
+    if hi != lo and stop.soc_out > tariff.high_soc + 1e-9 and stop.energy_out_kwh > stop.energy_in_kwh:
+        parts.append(f">{100 * tariff.high_soc:.0f}%")  # energy bought in the high-SoC tier
+    return " ".join(parts) or "-"
+
+
 def _print_plan(plan, sc) -> None:
+    from .scenario import Tariff
+
     print(plan)
     if not plan.feasible:
         return
     net = sc.network
     dep = sc.query.departure_s
+    # extra columns only when they say something: no change for plans without holds / tariff
+    holds = any(s.hold_s > 0.0 for s in plan.stops)
+    tariff = sc.tariff if sc.tariff != Tariff() else None
     rows = []
     for i, s in enumerate(plan.stops, 1):
         rows.append(
@@ -173,18 +269,23 @@ def _print_plan(plan, sc) -> None:
                 s.station_name or net.node_name.get(s.node, f"node {s.node}"),
                 f"{s.station_kind} {s.station_power_kw:.0f} kW",
                 format_clock(dep + s.arrival_s),
+                *([format_duration(s.hold_s) if s.hold_s > 0.0 else "-"] if holds else []),
                 f"{s.wait_s / 60:.0f} min",
                 f"{s.charge_s / 60:.0f} min",
                 f"{100 * s.soc_in:.0f}% -> {100 * s.soc_out:.0f}%",
+                *([_tariff_label(s, tariff)] if tariff else []),
                 f"{s.money:.2f} {plan.currency}",
             ]
         )
     if rows:
-        print(_table(rows, ["#", "station", "charger", "arrive", "queue", "charge", "SoC", "cost"], left=3))
+        header = ["#", "station", "charger", "arrive", *(["hold"] if holds else []), "queue", "charge", "SoC",
+                  *(["tariff"] if tariff else []), "cost"]
+        print(_table(rows, header, left=3))
+    hold = f" | hold {format_duration(plan.hold_time_s)}" if plan.hold_time_s > 0.0 else ""
     print(
         f"arrival {format_clock(dep + plan.total_time_s)} | drive {format_duration(plan.drive_time_s)}"
         f" | charge {format_duration(plan.charge_time_s)} | queue+setup "
-        f"{format_duration(plan.wait_time_s + plan.setup_time_s)} | battery wear {plan.soh_total_pct:.4f} %SoH"
+        f"{format_duration(plan.wait_time_s + plan.setup_time_s)}{hold} | battery wear {plan.soh_total_pct:.4f} %SoH"
     )
 
 
@@ -357,6 +458,25 @@ def _scenario_options(p: argparse.ArgumentParser) -> None:
     p.add_argument("--no-queue", action="store_true", help="ignore charging queues")
     p.add_argument("--step", type=float, help="charging-target grid step (SoC fraction)")
     p.add_argument("--safety", type=float, help="consumption safety factor (>= 1)")
+    g = p.add_argument_group(
+        "charging tariff",
+        "Prices per kWh by state of charge and time of day; a factor multiplies the station price. "
+        "--tariff is applied first, the other options then change single values.",
+    )
+    g.add_argument(
+        "--tariff", metavar="{80,flat}",
+        help="80: the demonstration tariff (illustrative values: x1.3 above 80 %% SoC, peak 16-20 at x1.15, "
+             "x2 above 80 %% in the peak); flat: no tariff",
+    )
+    g.add_argument("--high-soc", type=float, metavar="S", help="SoC above which the high-SoC price applies (default 0.8)")
+    g.add_argument("--high-soc-factor", type=float, metavar="F", help="price factor above --high-soc (default 1)")
+    g.add_argument("--peak", metavar="H1-H2[,H3-H4]",
+                   help="daily peak hours, e.g. 16-20 or 7-9,16-20; 22-6 wraps midnight; none: no peak hours")
+    g.add_argument("--peak-factor", type=float, metavar="F", help="price factor in the peak period (default 1)")
+    g.add_argument("--peak-high-soc-factor", type=float, metavar="F",
+                   help="high-SoC factor in the peak period, on top of --peak-factor (default: --high-soc-factor)")
+    g.add_argument("--busy", type=float, metavar="U",
+                   help="also a peak hour at a station whose expected charger utilisation is >= U (e.g. 0.7)")
 
 
 def build_parser() -> argparse.ArgumentParser:

@@ -18,7 +18,7 @@ from .algorithms import available, describe, get_planner, plan
 from .evaluate import evaluate
 from .network import NetworkBuilder, RoadNetwork
 from .plan import ChargeDecision, PlanDecision, RoutePlan
-from .scenario import Conditions, PreparedScenario, Preferences, Query, Scenario, Station
+from .scenario import Conditions, PreparedScenario, Preferences, Query, Scenario, Station, Tariff
 from .vehicle import VEHICLES, ChargingCurve, Vehicle, get_vehicle
 
 __version__ = "1.0.0"
@@ -37,6 +37,7 @@ __all__ = [
     "RoutePlan",
     "Scenario",
     "Station",
+    "Tariff",
     "Vehicle",
     "available",
     "describe",

@@ -32,8 +32,8 @@ beautiful animated viewer.  Read this file completely before writing code.
 | `energy.py` | `PhysicsEnergyModel.traverse(net, e, speed_factor) -> Traversal(time_s, energy_kwh, ...)` |
 | `charging.py` | `ChargingFunction`: exact piecewise-linear `time_at(e)`=F(e), `energy_at(t)`=F⁻¹(t), `charge_time(e1,e2)`, `energy_after(e, sec)`, `money(e1,e2)`, `soh(e1,e2)`, `e_breaks`, `t_breaks`, `breakpoints_between(e1,e2)`, `power_at(e)` |
 | `queueing.py` | Erlang-C M/M/c waits, FIFO-safe `WaitProfile` |
-| `scenario.py` | `Scenario` (serialisable instance), `Station`, `Conditions`, `Preferences`, `Query`, `PreparedScenario` |
-| `plan.py` | `PlanDecision`, `ChargeDecision`, `RoutePlan`, `ChargeStop`, `SearchStats`, `SearchTrace` |
+| `scenario.py` | `Scenario` (serialisable instance), `Station`, `Conditions`, `Preferences`, `Query`, `Tariff` (high-SoC and peak-hour prices), `PreparedScenario` |
+| `plan.py` | `PlanDecision`, `ChargeDecision` (with an optional voluntary hold `hold_until_s`), `RoutePlan`, `ChargeStop`, `SearchStats`, `SearchTrace` |
 | `evaluate.py` | `evaluate(prepared, decision, ...) -> RoutePlan`, `infeasible_plan(...)`, `check_objective(plan)` |
 | `search.py` | `dijkstra`, `bellman_ford`, `path_from_pred`, `path_from_reverse_pred`, `min_level_weights`, `LowerBounds` (`time_lb`, `energy_lb`, `cost_lb`, `h_time(v,e)`, `h_cost(v,e)`, `h(v,e)`, `deficit(v,e)`) |
 | `algorithms/` | `Planner` base class (`_plan(prepared, *, trace) -> RoutePlan`), lazy `REGISTRY`, `plan(scenario, name)` |
@@ -56,16 +56,31 @@ P.edge_time[k][e], P.edge_energy[k][e]
 P.stations                 # list[Station];  station index s = position in this list
 P.station_at[node]         # -> list of station indices at that node
 P.is_station_node[node]    # bool
-P.cf[s]                    # ChargingFunction of station s (energy units, exact)
+P.cf[s]                    # ChargingFunction of station s (energy units, exact); money: off-peak price
+                           #   (the only price of a station in its peak period all day)
 P.wait_s(s, trip_s)        # expected queueing delay when arriving trip_s seconds after departure
 P.setup_s[s]               # plug-in/out overhead, paid at every stop
 P.time_dependent           # True if waits depend on arrival time (FIFO guaranteed)
 P.target_grid              # sorted charging targets [kWh] on the charge_step_soc grid (<= e_charge_cap)
 P.objective                # "time" or "cost"
 P.drive_cost(t, c)         # generalised cost of a drive segment
-P.charge_cost(s, e1, e2, charge_s, wait_s)  # generalised cost of a stop (incl. setup)
+P.charge_cost(s, e1, e2, charge_s, wait_s, *, join_s=None, hold_s=0.0)  # generalised cost of a stop (incl. setup)
 P.vot_per_s, P.w_money, P.w_deg, P.drive_soh_per_kwh, P.p_max, P.min_money_rate, P.min_soh_rate
+# charging tariff (scenario.tariff: Tariff; Tariff() is neutral and changes nothing)
+P.tariff                   # the Tariff
+P.cf_peak[s]               # same breakpoints/powers/wear as P.cf[s], peak money (`P.cf_peak is P.cf` if no peak price)
+P.cf_variants              # every ChargingFunction whose money can apply (bounds: minimise over these)
+P.peak_intervals[s]        # peak period of s: clock intervals [a, b) in seconds of the day
+P.price_changes[s]         # clock times [s of the day] at which the price of s changes (() if constant)
+P.tariff_time_dependent    # True if some price depends on the clock
+P.is_peak(s, trip_s)       # is s in its peak period at that trip time?
+P.money_cf(s, trip_s)      # P.cf[s] or P.cf_peak[s]: the money of a session joining the queue at trip_s
+P.hold_candidates(s, t)    # sorted trip times in (t, t + 24 h] at which the price of s changes
 ```
+
+With an active high-SoC tier every charging function has a breakpoint at
+`high_soc x capacity` (same power on both sides, so charging times are
+unchanged), which makes it a charging target of BLS/Pareto as well.
 
 ### 1.2 Semantics every algorithm must respect (the evaluator enforces them)
 
@@ -79,13 +94,21 @@ P.vot_per_s, P.w_money, P.w_deg, P.drive_soh_per_kwh, P.p_max, P.min_money_rate,
    stop at the origin follows).
 3. Arrival at the destination needs `>= P.e_dest_min`.
 4. A charging stop at station `s` reached at trip time `t` with energy `x`
-   to target `y` costs `P.wait_s(s, t) + P.setup_s[s] + P.cf[s].charge_time(x, y)`
-   seconds, money `P.cf[s].money(x, y)`, wear `P.cf[s].soh(x, y)`.  A listed stop
-   always pays wait + setup, even if `y <= x`.  Targets must be `<= P.e_charge_cap`.
+   to target `y` joins the queue at `j = t`, or at `j = hold_until_s` if its
+   `ChargeDecision` holds voluntarily until a later time (the hold is
+   `j - t`), and costs `(j - t) + P.wait_s(s, j) + P.setup_s[s] +
+   P.cf[s].charge_time(x, y)` seconds, money `P.money_cf(s, j).money(x, y)`
+   (the price period is fixed when the vehicle joins the queue), wear
+   `P.cf[s].soh(x, y)`.  A listed stop always pays wait + setup, even if
+   `y <= x`.  Targets must be `<= P.e_charge_cap`.  The evaluator computes
+   the end of a stop as `t = j; t += wait + setup + charge`; planners use
+   the same arithmetic.
 5. Objective `"time"` = total trip time; `"cost"` = generalised cost
    `vot*T + w_money*money + w_deg*(soh_drive + soh_charge)`, which equals the sum
-   of `P.drive_cost(...)` over driven edges plus `P.charge_cost(...)` over stops.
-6. Output a `PlanDecision(edges, levels, charges)` and return
+   of `P.drive_cost(...)` over driven edges plus `P.charge_cost(..., join_s=j,
+   hold_s=j - t)` over stops (`T` includes the holds).
+6. Output a `PlanDecision(edges, levels, charges)` (`ChargeDecision(position,
+   station, target_kwh, hold_until_s=None)`) and return
    `evaluate(P, decision, algorithm=self.name, internal_objective=<your value>,
    stats=SearchStats(...), trace=trace_or_None)`.  `ChargeDecision.position` is
    the index of the stop in the node sequence (`0` = origin, `len(edges)` =
@@ -115,8 +138,8 @@ P.vot_per_s, P.w_money, P.w_deg, P.drive_soh_per_kwh, P.p_max, P.min_money_rate,
 State = (node, energy) with *continuous* energy (no rounding of consumption).
 Labels: `(key, t, g, e, node, parent, how)`.  Dominance at a node: time
 objective `t' <= t and e' >= e`; cost objective with static waits
-`g' <= g and e' >= e`; cost objective with time-dependent waits
-(`P.time_dependent`) `m' <= m, t' <= t and e' >= e` with
+`g' <= g and e' >= e`; cost objective with time-dependent waits or a time-dependent tariff
+(`P.time_dependent or P.tariff_time_dependent`) `m' <= m, t' <= t and e' >= e` with
 `m = g - P.vot_per_s * t`, the money and wear spent so far (comparing
 `(g, t, e)` is unsound: a falling FIFO queue can absorb the head start of an
 earlier label while its money disadvantage persists, `docs/algorithms.md`
@@ -128,7 +151,13 @@ created the label (consecutive stops at *other* stations of a node are
 allowed, any number of times) and every target `y` in
 `targets = P.target_grid ∪ {interior breakpoints of P.cf[s] ≤ e_charge_cap}`
 with `y > e`, push a charged label (targets below the reserve only at a node
-with several stations, i.e. at the origin with `e_init < e_min`).  A* key =
+with several stations, i.e. at the origin with `e_init < e_min`).  With the
+cost objective and `P.tariff_time_dependent` the same targets are also
+pushed after a voluntary hold until each `P.hold_candidates(s, t)` (money of
+the period at the join time, hold paid at `vot`), and the station that
+created the label may be used again in the *other* price period
+(`docs/algorithms.md` and the module docs of `labels.py`, "Charging
+tariffs"); the time objective never holds.  A* key =
 `primary + h(v, e)` with the default potential `AStarPotential.tight`
 (`potential="basic"`: `LowerBounds.h(v, e)`).  Stop when the first label at
 the destination with `e >= P.e_dest_min` is popped.  Options:
@@ -176,7 +205,9 @@ Details and proofs: module docs of `cfp.py`, `docs/algorithms.md` §4.
 
 Martins-style multi-criteria label setting over `(t, money, wear, -e)` with the
 same transitions as BLS (charging targets on the target set, consecutive
-stops at different stations of a node included).  Goal-directed order
+stops at different stations of a node included; with a time-dependent
+tariff also the voluntary holds and same-station restarts of BLS's cost
+objective, since money is always a criterion).  Goal-directed order
 (`t + T_lb(v)`; `goal_directed=False` restores plain Martins), pruning
 against the destination front with consistent completion bounds, optional
 ε-dominance (`epsilon`, `epsilon_scope`) and two criteria
@@ -209,9 +240,28 @@ for `"cost"`) and put all evaluated front members (sorted by time) into
 
 `RoutePlan.to_dict()` contains `nodes`, `edges`, `levels`, `stops` (list of
 `ChargeStop` dicts), per-node `node_arrive_s`, `node_depart_s`,
-`node_energy_arrive`, `node_energy_depart`, `node_dist_m`, totals,
-`summary`, `stats`, `trace` (`{"nodes": [...], "keys": [...]}`) and
+`node_energy_arrive`, `node_energy_depart`, `node_dist_m`, totals (among
+them `hold_time_s`, the voluntary holds, part of `total_time_s`),
+`summary` (with `hold_time_s`), `stats`, `trace` (`{"nodes": [...], "keys": [...]}`) and
 `alternatives` (Pareto front members).
+
+A stop dict has `arrival_s`, `hold_s` (voluntary hold before joining the
+queue, usually 0), `wait_s`, `setup_s`, `charge_s` -- in this order on the
+clock, so the stop ends at `arrival_s + hold_s + wait_s + setup_s +
+charge_s` -- the energies and SoCs, `money` (priced in the period at the
+time of joining the queue), `peak` (`true` if that was the station's peak
+period), `hold_until_s` (after a hold the exact trip time of joining the
+queue, else `null`; rebuild a decision's hold from it, not from `arrival_s
++ hold_s`, which can round to the other side of a price change),
+`soh_pct`, the station data and, in the viewer payload, `curve` (`t` counts
+from the start of charging, after hold, wait and set-up).
+
+Only for a scenario whose tariff is not `Tariff()`: `scenario.tariff`
+(`Tariff.to_dict()`: `high_soc`, `high_soc_factor`, `peak_hours` as
+`[[start_h, end_h], ...]`, `peak_factor`, `peak_high_soc_factor`,
+`busy_utilisation`), and per station `peak_s` (`[[a, b], ...]`, clock
+seconds) and `price_factors` (`{"offpeak": [below, above], "peak": [below,
+above]}`, multiplying `price_per_kwh` below / above `high_soc`).
 
 ## 4. Testing expectations
 

@@ -369,6 +369,7 @@
       switch (st.kind) {
         case 'start': cls = 'setup'; txt = I.t('st_start'); break;
         case 'drive': cls = 'drive'; txt = `${I.t('st_drive')}${st.road ? ' · ' + st.road : ''}`; break;
+        case 'hold': cls = 'hold'; txt = `${I.t(st.stop.peak ? 'st_hold' : 'st_hold_offpeak')} · ${sname} · ${I.t('min_left', { m: I.minutes(st.left) })}`; break;
         case 'wait': cls = 'queue'; txt = `${I.t('st_queue')} · ${sname} · ${I.t('min_left', { m: I.minutes(st.left) })}`; break;
         case 'setup': cls = 'setup'; txt = `${I.t('st_setup')} · ${sname}`; break;
         case 'charge': cls = 'charge'; txt = `${I.t('st_charge')} · ${I.num(st.power, 0)} kW · ${I.t('min_left', { m: I.minutes(st.left) })}`; break;
@@ -404,6 +405,7 @@
         else if (x.st.kind === 'stranded') { txt = `✕ ${I.km(x.st.dist, 0)}`; cls += ' bad'; }
         else if (x.st.kind === 'charge') txt = `⚡ ${I.pct(x.st.soc, 0)}`;
         else if (x.st.kind === 'wait') txt = `⏳ ${I.minutes(x.st.left)}`;
+        else if (x.st.kind === 'hold') txt = `⏸ ${I.minutes(x.st.left)}`;
         else txt = I.pct(x.prog, 0);
         return U.el('li', { style: { '--algo': app.colorOf(x.r) } },
           U.el('span', { class: 'rank', text: String(k + 1) }),
@@ -530,13 +532,13 @@
             upto: st.i, tip, glow: !race, dash: r.feasible ? null : [8, 6],
           });
         }
-        // charging (solid, green), queue (dashed, amber) and plug-in rings
+        // charging (solid, green), queue (dashed, amber), plug-in and tariff-hold (dotted, violet) rings
         const now = performance.now();
         for (const { st } of cars) {
-          if (st.kind !== 'charge' && st.kind !== 'wait' && st.kind !== 'setup') continue;
+          if (st.kind !== 'charge' && st.kind !== 'wait' && st.kind !== 'setup' && st.kind !== 'hold') continue;
           const x = T.ox + st.x * T.s, y = T.oy - st.y * T.s;
-          const color = st.kind === 'charge' ? th.cCharge : st.kind === 'wait' ? th.cQueue : th.cSetup;
-          const period = st.kind === 'charge' ? 1300 : 2200;
+          const color = st.kind === 'charge' ? th.cCharge : st.kind === 'wait' ? th.cQueue : st.kind === 'hold' ? th.cHold : th.cSetup;
+          const period = st.kind === 'charge' ? 1300 : st.kind === 'hold' ? 3200 : 2200;
           ctx.beginPath();
           ctx.arc(x, y, 15, 0, Math.PI * 2);
           ctx.fillStyle = U.rgba(color, 0.16);
@@ -547,7 +549,7 @@
             ctx.arc(x, y, 13 + ph * (race ? 20 : 34), 0, Math.PI * 2);
             ctx.strokeStyle = U.rgba(color, (1 - ph) * 0.9);
             ctx.lineWidth = 3.2 - ph * 2;
-            ctx.setLineDash(st.kind === 'wait' ? [5, 4] : []);
+            ctx.setLineDash(st.kind === 'wait' ? [5, 4] : st.kind === 'hold' ? [2, 4] : []);
             ctx.stroke();
           }
           ctx.setLineDash([]);
@@ -598,12 +600,15 @@
           ctx.stroke();
           ctx.restore();
         }
-        if (st.kind === 'charge' || st.kind === 'wait') {
+        if (st.kind === 'charge' || st.kind === 'wait' || st.kind === 'hold') {
           const x = T.ox + st.x * T.s, y = T.oy - st.y * T.s;
           const txt = st.kind === 'charge'
             ? `⚡ ${I.num(st.power, 0)} kW · ${I.pct(st.soc, 0)} · ${I.t('min_left', { m: I.minutes(st.left) })}`
-            : `⏳ ${I.t('in_queue_left', { m: I.minutes(st.left) })}`;
-          drawTag(ctx, x, y - 8, txt, st.kind === 'charge' ? th.cCharge : th.cQueue, th, boxes, true);
+            : st.kind === 'hold'
+              ? `⏸ ${I.t(st.stop.peak ? 'hold_tag' : 'hold_tag_offpeak', { m: I.minutes(st.left) })}`
+              : `⏳ ${I.t('in_queue_left', { m: I.minutes(st.left) })}`;
+          const tagColor = st.kind === 'charge' ? th.cCharge : st.kind === 'hold' ? th.cHold : th.cQueue;
+          drawTag(ctx, x, y - 8, txt, tagColor, th, boxes, true);
         }
       }
     }

@@ -153,6 +153,9 @@
 
     currentPrefs() { return (this.model.scenario && this.model.scenario.preferences) || {}; }
 
+    /** The scenario's charging tariff (Tariff.to_dict()), or null without one (the payload omits a neutral tariff). */
+    tariff() { return (this.model.scenario && this.model.scenario.tariff) || null; }
+
     clockTod() {
       const a = this.anim;
       const t = a && a.enabled && a.mode !== 'search' ? a.t : 0;
@@ -361,6 +364,12 @@
       if (Array.isArray(data.wait_profiles)) {
         data.wait_profiles.forEach((p, i) => { if (this.model.stations[i]) this.model.stations[i].wait_profile = p; });
       }
+      // peak periods and price factors follow the tariff of the planned scenario (absent: no tariff)
+      const tariffs = Array.isArray(data.station_tariffs) ? data.station_tariffs : null;
+      this.model.stations.forEach((st, i) => {
+        const x = tariffs && tariffs[i];
+        if (x) { st.peak_s = x.peak_s; st.price_factors = x.price_factors; } else { delete st.peak_s; delete st.price_factors; }
+      });
       this.liveQuery = null;
       this.model.setResults(data.results || []);
       this.visible = new Set(this.model.results.map((r, i) => i));

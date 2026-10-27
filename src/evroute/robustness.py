@@ -41,6 +41,11 @@ Queueing delays (``wait_model``):
 * ``"expected"`` -- exactly ``P.wait_s(s, t)`` at the realised arrival time;
 * ``"none"`` -- no queueing at all.
 
+A voluntary hold of the plan (``ChargeDecision.hold_until_s``, e.g. for the
+end of a peak-price period) is kept: the vehicle joins the queue at the
+planned trip time, or on arrival if it arrives later, and the wait is drawn
+at that time.
+
 The exponential law is a deliberately simple dispersion model that keeps the
 mean.  In a stationary M/M/c queue the delay is zero with probability
 ``1 - C(c, a)`` and exponential with rate ``c mu - lambda`` otherwise (Gross
@@ -81,7 +86,8 @@ Outcomes
 
 Every run replays the plan with the arithmetic of
 :func:`evroute.evaluate.evaluate` (regeneration clamped at full battery,
-every listed stop pays wait + setup, targets clamped at ``e_charge_cap``).
+every listed stop pays wait + setup after its hold, if any, targets clamped
+at ``e_charge_cap``).
 Let ``m`` be the lowest energy the battery holds *while driving*: the
 departure energy at the origin and the arrival energy at every later node
 (exactly the states the evaluator checks against the reserve).
@@ -339,7 +345,8 @@ class _Route:
 
     ``stops_at[i]`` lists the stops at node position ``i`` in the order in
     which :func:`~evroute.evaluate.evaluate` processes them, each as
-    ``(station, clamped_target, charging_function, setup_s, wait_offset)``.
+    ``(station, clamped_target, charging_function, setup_s, wait_offset,
+    hold_until)`` (``hold_until = -inf`` without a voluntary hold).
     """
 
     __slots__ = (
@@ -377,7 +384,7 @@ class _Route:
         wait_base = 1 + net.num_edges
         n_st = max(len(P.stations), 1)
 
-        stops_at: list[list[tuple[int, float, Any, float, int]]] = [[] for _ in nodes]
+        stops_at: list[list[tuple[int, float, Any, float, int, float]]] = [[] for _ in nodes]
         visits: dict[int, int] = {}
         ordered: list[ChargeDecision] = []
         for c in decision.charges:  # sorted by position (stable) like the evaluator
@@ -390,14 +397,17 @@ class _Route:
             visits[s] = occ + 1
             target = min(c.target_kwh, P.e_charge_cap)
             offset = _stream_offset(wait_base + occ * n_st + s)
-            stops_at[c.position].append((s, target, P.cf[s], P.setup_s[s], offset))
+            hold = -math.inf if c.hold_until_s is None else c.hold_until_s
+            stops_at[c.position].append((s, target, P.cf[s], P.setup_s[s], offset, hold))
             ordered.append(c)
         self.stops_at = [tuple(x) for x in stops_at]
         self.charges = ordered
 
     def decision_with_targets(self, targets: Sequence[float]) -> PlanDecision:
-        """Same route and stops, charging targets replaced (in stop order)."""
-        charges = [ChargeDecision(c.position, c.station, y) for c, y in zip(self.charges, targets)]
+        """Same route and stops (holds included), charging targets replaced (in stop order)."""
+        charges = [
+            ChargeDecision(c.position, c.station, y, c.hold_until_s) for c, y in zip(self.charges, targets)
+        ]
         return PlanDecision(list(self.decision.edges), list(self.decision.levels), charges)
 
 
@@ -491,7 +501,9 @@ def _simulate(
         for i in range(n_nodes):
             stops = stops_at[i]
             if stops:
-                for s, y, f, su, w_off in stops:
+                for s, y, f, su, w_off, hold in stops:
+                    if hold > t:  # voluntary hold: join the queue later (as evaluate())
+                        t = hold
                     if wcode == 2:
                         z = (key + w_off) & M
                         z = ((z ^ (z >> 30)) * M1) & M
@@ -680,8 +692,9 @@ def _decision(plan: RoutePlan | PlanDecision) -> tuple[PlanDecision, str]:
         return plan.decision, plan.algorithm
     # Older/foreign plans: rebuild from the measured stops.  The measured
     # departure energy is used as target, which equals the decided target
-    # unless the decided stop added nothing.
-    charges = [ChargeDecision(st.position, st.station, st.energy_out_kwh) for st in plan.stops]
+    # unless the decided stop added nothing; a measured hold is kept (its
+    # exact end: arrival_s + hold_s may round to the other side of a price change).
+    charges = [ChargeDecision(st.position, st.station, st.energy_out_kwh, st.hold_until_s) for st in plan.stops]
     return PlanDecision(list(plan.edges), list(plan.levels), charges), plan.algorithm
 
 

@@ -131,6 +131,28 @@ class WaitProfile:
         return {"knots_s": self.knots_s, "waits_s": [round(x, 2) for x in self.waits_s]}
 
 
+def hourly_utilisation(
+    daily_sessions: float, profile: Sequence[float], mean_service_min: float, plugs: int
+) -> list[float]:
+    """Expected utilisation ``rho(h) = lambda(h) / (plugs * mu)`` of each clock hour.
+
+    Same arrival rates and service rate as :func:`station_wait_profile`;
+    ``rho >= 1`` means that the queue of that hour is unstable (``inf`` for a
+    station without plugs that has demand).  Used for congestion pricing
+    (``Tariff.busy_utilisation``).
+    """
+    total = sum(profile) or 1.0
+    mean_h = mean_service_min / 60.0
+    out = []
+    for share in profile:
+        lam = daily_sessions * share / total
+        if plugs > 0:
+            out.append(lam * mean_h / plugs)
+        else:
+            out.append(float("inf") if lam > 0.0 else 0.0)
+    return out
+
+
 def station_wait_profile(
     daily_sessions: float,
     profile: Sequence[float],

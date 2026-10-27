@@ -39,10 +39,13 @@ Endpoints
          "algorithms": ["greedy", "bls-astar"], "vehicle": "sedan75",
          "initial_soc": 0.8, "temperature_c": 18, "reserve_soc": 0.1,
          "min_arrival_soc": 0.1, "objective": "time", "value_of_time_per_h": 250,
-         "speed_factors": [1.0, 0.9, 0.8], "queue_aware": true, "departure_s": 28800}
+         "speed_factors": [1.0, 0.9, 0.8], "queue_aware": true, "departure_s": 28800,
+         "tariff": "80"}
 
     ``origin``/``destination`` are node ids or place names, ``departure_s``
-    seconds after midnight or ``"HH:MM"``.  The answer is
+    seconds after midnight or ``"HH:MM"``, ``tariff`` ``"80"`` (the
+    illustrative :data:`~evroute.generators.presets.DEMO_TARIFF`) or
+    ``"flat"`` (no tariff; absent: the preset's own tariff).  The answer is
     :func:`evroute.viz.export.results_payload` plus ``"errors"`` (algorithms
     that failed) and ``"elapsed_ms"``.  Invalid requests get status 400 and
     ``{"error": message}``; bodies above :data:`MAX_BODY_BYTES` get 413.
@@ -95,7 +98,7 @@ _PLAN_FIELDS = frozenset(
     {
         "scenario", "origin", "destination", "algorithms", "vehicle", "initial_soc", "temperature_c",
         "reserve_soc", "min_arrival_soc", "objective", "value_of_time_per_h", "speed_factors",
-        "queue_aware", "departure_s", "lang",
+        "queue_aware", "departure_s", "lang", "tariff",
     }
 )
 _ASSET_TYPES = {".css": "text/css; charset=utf-8", ".js": "text/javascript; charset=utf-8"}
@@ -224,6 +227,19 @@ def build_plan_scenario(base: Scenario, body: Mapping[str, Any]) -> tuple[Scenar
     if p:
         sc = sc.with_preferences(**p)
 
+    # --------------------------------------------------------------- tariff
+    tariff = body.get("tariff")
+    if tariff is not None:
+        from .generators.presets import DEMO_TARIFF
+        from .scenario import Tariff
+
+        if tariff == "80":
+            sc = sc.with_(tariff=DEMO_TARIFF)
+        elif tariff == "flat":
+            sc = sc.with_(tariff=Tariff())
+        else:
+            raise PlanRequestError("tariff must be '80' (the demonstration tariff) or 'flat' (no tariff)")
+
     # ------------------------------------------------------------ algorithms
     algos = body.get("algorithms")
     if algos is None:
@@ -306,10 +322,12 @@ class ViewerServer(ThreadingHTTPServer):
         """Live-mode viewer payload without results."""
         from .viz.export import viewer_payload
 
+        from .generators.presets import DEMO_TARIFF
+
         sc = self.base_scenario(name)
         return viewer_payload(
             sc, [], lang=self.lang, animate=True, live=True,
-            extra={"scenario_preset": name or self.default_scenario},
+            extra={"scenario_preset": name or self.default_scenario, "demo_tariff": DEMO_TARIFF.to_dict()},
         )
 
     def page(self) -> bytes:

@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import json
 import math
+from bisect import bisect_right
+from collections.abc import Sequence
 from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Any, Literal
@@ -21,7 +23,13 @@ from typing import Any, Literal
 from .charging import ChargingFunction, build_charging_function
 from .energy import PhysicsEnergyModel
 from .network import RoadNetwork
-from .queueing import HIGHWAY_PROFILE, URBAN_PROFILE, WaitProfile, station_wait_profile
+from .queueing import (
+    HIGHWAY_PROFILE,
+    URBAN_PROFILE,
+    WaitProfile,
+    hourly_utilisation,
+    station_wait_profile,
+)
 from .units import SECONDS_PER_DAY, SECONDS_PER_HOUR
 from .vehicle import Vehicle, get_vehicle
 
@@ -64,6 +72,14 @@ class Station:
         if isinstance(prof, str):
             prof = list(URBAN_PROFILE if prof == "urban" else HIGHWAY_PROFILE)
         return station_wait_profile(self.daily_sessions, prof, self.mean_service_min, self.plugs)
+
+    def utilisation(self) -> list[float]:
+        """Expected utilisation ``rho(h) = lambda(h) / (plugs * mu)`` of each clock hour
+        (the demand of :meth:`wait_profile`; drives ``Tariff.busy_utilisation``)."""
+        prof = self.demand_profile
+        if isinstance(prof, str):
+            prof = list(URBAN_PROFILE if prof == "urban" else HIGHWAY_PROFILE)
+        return hourly_utilisation(self.daily_sessions, prof, self.mean_service_min, self.plugs)
 
 
 @dataclass
@@ -124,6 +140,141 @@ class Query:
 
 
 @dataclass
+class Tariff:
+    """Charging prices that depend on the state of charge and on the clock.
+
+    Two practices make some charging sessions dearer:
+
+    * *the 80 % rule*: charging above ``high_soc`` is slow and blocks a plug,
+      so operators (and the other drivers) penalise it -- every kWh stored
+      above ``high_soc x capacity`` is charged at ``high_soc_factor`` times
+      the price;
+    * *peak hours*: ``peak_hours`` are local clock intervals ``[start, end)``
+      in hours, e.g. ``((16, 20),)``; an interval may wrap midnight
+      (``(22, 6)``), and they repeat every day.  With ``busy_utilisation`` a
+      station is also in its peak period during every clock hour in which the
+      expected utilisation ``rho(h) = lambda(h) / (plugs x mu)`` of its queue
+      model (:meth:`Station.utilisation`) is at least that value, so
+      congestion pricing follows the Erlang-C demand profiles and the periods
+      differ per station.
+
+    A kWh stored at station ``s`` costs ``s.price_per_kwh`` times::
+
+                    below high_soc     above high_soc
+        off-peak    1                  high_soc_factor
+        peak        peak_factor        peak_factor x (peak_high_soc_factor
+                                                      if not None else high_soc_factor)
+
+    (divided by the charging efficiency, as every price).  The period of a
+    charging session is fixed when the vehicle joins the station's queue: on
+    arrival, or at the end of a voluntary hold
+    (:attr:`~evroute.plan.ChargeDecision.hold_until_s`).  The clock is the
+    departure time of day plus the trip time, modulo 24 h -- the clock of the
+    queue model.  ``Tariff()`` is neutral: every kWh costs the station price.
+    """
+
+    #: SoC above which the high-SoC tier applies.
+    high_soc: float = 0.8
+    #: Price factor above ``high_soc`` (off-peak).
+    high_soc_factor: float = 1.0
+    #: Daily peak intervals ``(start, end)`` in clock hours, ``[start, end)``.
+    peak_hours: tuple[tuple[float, float], ...] = ()
+    #: Price factor in the peak period (below ``high_soc``).
+    peak_factor: float = 1.0
+    #: High-SoC factor in the peak period (``None``: ``high_soc_factor``).
+    peak_high_soc_factor: float | None = None
+    #: Utilisation from which a clock hour of a station is a peak hour (``None``: off).
+    busy_utilisation: float | None = None
+
+    def __post_init__(self) -> None:
+        try:  # lists (e.g. from JSON) -> tuples; anything else is reported by validate()
+            self.peak_hours = tuple(tuple(iv) for iv in self.peak_hours)
+        except TypeError:
+            pass
+
+    def factors(self, peak: bool) -> tuple[float, float]:
+        """Price factors ``(below high_soc, above high_soc)`` of the off-peak or the peak period."""
+        if not peak:
+            return 1.0, self.high_soc_factor
+        hi = self.high_soc_factor if self.peak_high_soc_factor is None else self.peak_high_soc_factor
+        return self.peak_factor, self.peak_factor * hi
+
+    def peak_intervals(self, utilisation: Sequence[float] | None = None) -> tuple[tuple[float, float], ...]:
+        """Peak period of one station: sorted, disjoint clock intervals ``[a, b)``
+        in seconds of the day (``((0, 86400),)`` all day, ``()`` never).
+
+        ``utilisation`` holds the station's 24 hourly utilisations
+        (:meth:`Station.utilisation`); it is only read with ``busy_utilisation``.
+        """
+        hour, day = SECONDS_PER_HOUR, SECONDS_PER_DAY
+        raw: list[tuple[float, float]] = []
+        for a, b in self.peak_hours:
+            a, b = float(a) * hour, float(b) * hour
+            if a < b:
+                raw.append((a, b))
+            elif a > b:  # wraps midnight
+                raw.append((a, day))
+                raw.append((0.0, b))
+        if self.busy_utilisation is not None and utilisation is not None:
+            for h, rho in enumerate(list(utilisation)[:24]):
+                if rho >= self.busy_utilisation:
+                    raw.append((h * hour, (h + 1) * hour))
+        raw = sorted((a, b) for a, b in raw if b > a)
+        merged: list[tuple[float, float]] = []
+        for a, b in raw:
+            if merged and a <= merged[-1][1]:
+                if b > merged[-1][1]:
+                    merged[-1] = (merged[-1][0], b)
+            else:
+                merged.append((a, b))
+        return tuple(merged)
+
+    def validate(self) -> None:
+        """Raise :class:`ValueError` for a value outside the model's domain:
+        ``0 < high_soc < 1``, factors ``> 0``, peak hours in ``[0, 24]``,
+        ``busy_utilisation > 0``."""
+        _check_number("tariff.high_soc", self.high_soc, 0.0, 1.0, open_lo=True, open_hi=True)
+        _check_number("tariff.high_soc_factor", self.high_soc_factor, 0.0, open_lo=True)
+        _check_number("tariff.peak_factor", self.peak_factor, 0.0, open_lo=True)
+        if self.peak_high_soc_factor is not None:
+            _check_number("tariff.peak_high_soc_factor", self.peak_high_soc_factor, 0.0, open_lo=True)
+        if self.busy_utilisation is not None:
+            _check_number("tariff.busy_utilisation", self.busy_utilisation, 0.0, open_lo=True)
+        hours = self.peak_hours
+        if not isinstance(hours, tuple) or not all(isinstance(iv, tuple) and len(iv) == 2 for iv in hours):
+            raise ValueError(f"tariff.peak_hours must be a sequence of (start, end) pairs, got {hours!r}")
+        for a, b in hours:
+            _check_number("tariff.peak_hours start", a, 0.0, 24.0)
+            _check_number("tariff.peak_hours end", b, 0.0, 24.0)
+
+    def to_dict(self) -> dict[str, Any]:
+        d = asdict(self)
+        d["peak_hours"] = [list(iv) for iv in self.peak_hours]
+        return d
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> "Tariff":
+        return cls(**d)
+
+
+def _price_changes(intervals: tuple[tuple[float, float], ...]) -> tuple[float, ...]:
+    """Clock times in ``[0, 86400)`` at which a station enters or leaves its peak period."""
+    day = SECONDS_PER_DAY
+    if not intervals or intervals == ((0.0, day),):
+        return ()
+    wrap = intervals[0][0] == 0.0 and intervals[-1][1] == day  # contiguous across midnight
+    out = set()
+    for a, b in intervals:
+        if not (a == 0.0 and wrap):
+            out.add(a)
+        if b < day:
+            out.add(b)
+        elif not wrap:
+            out.add(0.0)
+    return tuple(sorted(out))
+
+
+@dataclass
 class Scenario:
     """A complete, serialisable EV routing instance."""
 
@@ -137,6 +288,8 @@ class Scenario:
     currency: str = "EUR"
     description: str = ""
     meta: dict[str, Any] = field(default_factory=dict)
+    #: Charging prices by state of charge and time of day (neutral by default).
+    tariff: Tariff = field(default_factory=Tariff)
 
     def __post_init__(self) -> None:
         self._prepared: PreparedScenario | None = None
@@ -151,7 +304,8 @@ class Scenario:
         is rebuilt, so a plan never uses stale derived data.  The network is
         treated as immutable.
         """
-        key = repr((self.query, self.conditions, self.preferences, self.stations, self.vehicle, self.currency))
+        key = repr((self.query, self.conditions, self.preferences, self.stations, self.vehicle, self.currency,
+                    self.tariff))
         if self._prepared is None or key != self._prepared_key:
             self._prepared = PreparedScenario(self)
             self._prepared_key = key
@@ -162,8 +316,9 @@ class Scenario:
 
         Origin, destination and station nodes must be nodes of the network;
         SoC fractions lie in ``[0, 1]`` (``max_charge_soc`` in ``(0, 1]``),
-        ``safety_factor >= 1``, ``charge_step_soc > 0``, and the departure
-        time and temperature are finite.  Called by :meth:`prepare`, so an
+        ``safety_factor >= 1``, ``charge_step_soc > 0``, the departure
+        time and temperature are finite and the tariff is valid
+        (:meth:`Tariff.validate`).  Called by :meth:`prepare`, so an
         out-of-range value is never clamped or wrapped silently.
         """
         n = self.network.num_nodes
@@ -187,6 +342,9 @@ class Scenario:
         _check_number("max_charge_soc", pref.max_charge_soc, 0.0, 1.0, open_lo=True)
         _check_number("safety_factor", pref.safety_factor, 1.0)
         _check_number("charge_step_soc", pref.charge_step_soc, 0.0, open_lo=True)
+        if not isinstance(self.tariff, Tariff):
+            raise ValueError(f"tariff must be a Tariff, got {type(self.tariff).__name__}")
+        self.tariff.validate()
 
     def with_(self, **changes: Any) -> "Scenario":
         """Copy with replaced top-level fields (the cache is not shared)."""
@@ -201,6 +359,9 @@ class Scenario:
     def with_conditions(self, **changes: Any) -> "Scenario":
         return self.with_(conditions=replace(self.conditions, **changes))
 
+    def with_tariff(self, **changes: Any) -> "Scenario":
+        return self.with_(tariff=replace(self.tariff, **changes))
+
     # ------------------------------------------------------ serialisation
     def to_dict(self) -> dict[str, Any]:
         """JSON-ready, lossless description of the instance.
@@ -209,14 +370,17 @@ class Scenario:
         an instance that plans bit-identically: the network is stored
         unrounded (see :meth:`RoadNetwork.to_dict`), floats survive JSON
         exactly (``repr``), and the only normalisations are tuple -> list
-        (``speed_factors`` and the vehicle's charging curve become tuples
-        again on loading) and non-string ``meta`` keys -> strings.  The
-        result is a fixed point: ``to_dict`` of the reloaded scenario is equal
-        to the dict it was loaded from.
+        (``speed_factors``, the tariff's ``peak_hours`` and the vehicle's
+        charging curve become tuples again on loading) and non-string
+        ``meta`` keys -> strings.  The result is a fixed point: ``to_dict`` of
+        the reloaded scenario is equal to the dict it was loaded from.  The
+        ``"tariff"`` key is only written for a tariff other than ``Tariff()``
+        (a missing key loads as the neutral tariff), so instances without a
+        tariff keep their exact earlier JSON form.
         """
         prefs = asdict(self.preferences)
         prefs["speed_factors"] = [float(f) for f in self.preferences.speed_factors]
-        return {
+        d = {
             "format": "evroute-scenario/1",
             "name": self.name,
             "description": self.description,
@@ -227,8 +391,11 @@ class Scenario:
             "query": asdict(self.query),
             "conditions": asdict(self.conditions),
             "preferences": prefs,
-            "meta": _json_ready(self.meta),
         }
+        if self.tariff != Tariff():
+            d["tariff"] = self.tariff.to_dict()
+        d["meta"] = _json_ready(self.meta)
+        return d
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "Scenario":
@@ -248,6 +415,7 @@ class Scenario:
             conditions=Conditions(**d.get("conditions", {})),
             preferences=Preferences(**prefs),
             meta=d.get("meta", {}),
+            tariff=Tariff.from_dict(d["tariff"]) if "tariff" in d else Tariff(),
         )
 
     def save(self, path: str | Path) -> None:
@@ -274,6 +442,18 @@ class PreparedScenario:
     ``edge_energy[k][e]`` give time [s] and planning energy [kWh] at level
     ``k``; ``edge_options[e]`` lists the non-dominated ``(k, time, energy,
     drive_cost)`` tuples algorithms should iterate over.
+
+    Charging prices (:class:`Tariff`): ``cf[s]`` carries the money of
+    station ``s`` outside its peak period (of its only period if it is in
+    its peak period all day), so code that is not tariff-aware is right
+    whenever prices do not depend on the clock.  With an active high-SoC
+    tier every charging function has a breakpoint at ``high_soc x capacity``
+    (same power on both sides).  ``cf_peak[s]`` has the same breakpoints,
+    powers and wear and the peak money (``cf_peak is cf`` when no station has
+    a peak price).  ``money_cf(s, t)`` is the function whose money applies to
+    a session joining the queue at trip time ``t``; ``tariff_time_dependent``
+    tells whether any price depends on the clock, and ``hold_candidates(s,
+    t)`` lists the price changes a vehicle could wait for.
     """
 
     def __init__(self, scenario: Scenario) -> None:
@@ -349,12 +529,30 @@ class PreparedScenario:
         for v in self.station_at:
             self.is_station_node[v] = True
 
+        # ------------------------------------------------- charging prices
+        tariff = sc.tariff
+        self.tariff = tariff
+        busy = tariff.busy_utilisation is not None
+        #: peak period of every station: clock intervals [a, b) in seconds of the day
+        self.peak_intervals: list[tuple[tuple[float, float], ...]] = [
+            tariff.peak_intervals(st.utilisation() if busy else None) for st in sc.stations
+        ]
+        self._peak_starts = [[a for a, _ in ivs] for ivs in self.peak_intervals]
+        off_lo, off_hi = tariff.factors(False)
+        pk_lo, pk_hi = tariff.factors(True)
+        any_peak = any(self.peak_intervals)
+        peak_money = any_peak and (pk_lo != off_lo or pk_hi != off_hi)
+        # the high-SoC tier needs a breakpoint where the price per kWh changes
+        tiered = off_hi != off_lo or (any_peak and pk_hi != pk_lo)
+        e_high = tariff.high_soc * q
+
         dc_factor = veh.dc_temperature_factor(cond.temperature_c, cond.preconditioning)
         aging = veh.aging
         ac_curve = (0.0, 0.95, 1.0)
-        cache: dict[tuple, ChargingFunction] = {}
+        cache: dict[tuple, tuple[ChargingFunction, ChargingFunction]] = {}
         self.cf: list[ChargingFunction] = []
-        for st in sc.stations:
+        cf_peak: list[ChargingFunction] = []
+        for i, st in enumerate(sc.stations):
             key = (st.kind, round(st.power_kw, 6), round(st.price_per_kwh, 6))
             if key not in cache:
                 if st.kind == "AC":
@@ -368,12 +566,40 @@ class PreparedScenario:
                 def soh_fn(c_rate: float, soc: float, _t: float = temp) -> float:
                     return aging.fade_pct_per_kwh(q, c_rate, soc, _t)
 
-                cache[key] = build_charging_function(
+                f_off = f_pk = build_charging_function(
                     q, soc_breaks, powers, st.power_kw, tf, st.price_per_kwh, eff, soh_fn
                 )
-            self.cf.append(cache[key])
+                if tiered or peak_money:
+                    # split the bin at the high-SoC energy (same power and wear) and
+                    # price every bin: price x factor / charging efficiency
+                    base = f_off.split(e_high) if tiered else f_off
+                    price = st.price_per_kwh
+
+                    def money(lo: float, hi: float, _f: ChargingFunction = base, _p: float = price,
+                              _eff: float = eff) -> list[float]:
+                        return [_p * (hi if e >= e_high else lo) / _eff for e in _f.e_breaks[:-1]]
+
+                    f_off = base.with_money(money(off_lo, off_hi)) if tiered else base
+                    f_pk = base.with_money(money(pk_lo, pk_hi)) if peak_money else f_off
+                cache[key] = (f_off, f_pk)
+            f_off, f_pk = cache[key]
+            # a station that is in its peak period all day has no other price
+            self.cf.append(f_pk if self.peak_intervals[i] == ((0.0, SECONDS_PER_DAY),) else f_off)
+            cf_peak.append(f_pk)
+        #: charging functions with the peak money (``is self.cf`` when no peak price exists)
+        self.cf_peak: list[ChargingFunction] = cf_peak if peak_money else self.cf
+        #: every charging function whose money can apply (bounds take the minimum over them)
+        self.cf_variants: list[ChargingFunction] = self.cf if self.cf_peak is self.cf else self.cf + [
+            f for f, ivs in zip(cf_peak, self.peak_intervals, strict=True) if ivs
+        ]
+        #: clock times [s of the day] at which the price of each station changes
+        self.price_changes: list[tuple[float, ...]] = [
+            _price_changes(ivs) if peak_money else () for ivs in self.peak_intervals
+        ]
+        #: ``True`` if the price of some station depends on the time of day
+        self.tariff_time_dependent = any(self.price_changes)
         self.p_max = max((f.max_power_kw for f in self.cf), default=1.0)
-        self.min_money_rate = min((min(f.money_per_kwh) for f in self.cf), default=0.0)
+        self.min_money_rate = min((min(f.money_per_kwh) for f in self.cf_variants), default=0.0)
         self.min_soh_rate = min((min(f.soh_pct_per_kwh) for f in self.cf), default=0.0)
         self.setup_s = [float(st.setup_s) for st in sc.stations]
 
@@ -408,16 +634,76 @@ class PreparedScenario:
         """Expected queueing delay when arriving ``trip_s`` after departure."""
         return self.wait_profiles[station](self.departure_s + trip_s)
 
+    def is_peak(self, station: int, trip_s: float) -> bool:
+        """Is ``station`` in its peak period ``trip_s`` seconds after departure?"""
+        if not self.peak_intervals[station]:
+            return False
+        return self._peak_at_clock(station, (self.departure_s + trip_s) % SECONDS_PER_DAY)
+
+    def _peak_at_clock(self, station: int, clock_s: float) -> bool:
+        i = bisect_right(self._peak_starts[station], clock_s) - 1
+        return i >= 0 and clock_s < self.peak_intervals[station][i][1]
+
+    def money_cf(self, station: int, trip_s: float) -> ChargingFunction:
+        """Charging function whose money applies to a session at ``station`` that
+        joins the queue ``trip_s`` seconds after departure (``cf`` or ``cf_peak``)."""
+        if self.cf_peak is self.cf or not self.price_changes[station]:
+            return self.cf[station]
+        return self.cf_peak[station] if self.is_peak(station, trip_s) else self.cf[station]
+
+    def hold_candidates(self, station: int, trip_s: float) -> list[float]:
+        """Sorted trip times in ``(trip_s, trip_s + 24 h]`` at which the price of
+        ``station`` changes (``[]`` if it does not depend on the clock).
+
+        A vehicle that waits until one of them joins the queue in the new price
+        period: float rounding of the clock is corrected so that
+        :meth:`is_peak` already reports the new period at the returned time.
+        """
+        changes = self.price_changes[station]
+        if not changes:
+            return []
+        clock = (self.departure_s + trip_s) % SECONDS_PER_DAY
+        out = []
+        for x in changes:
+            d = x - clock
+            if d <= 0.0:
+                d += SECONDS_PER_DAY
+            h = trip_s + d
+            new = self._peak_at_clock(station, x)
+            for _ in range(10_000):  # a few ulps at most
+                if h > trip_s and self.is_peak(station, h) == new:
+                    break
+                h = math.nextafter(h, math.inf)
+            out.append(h)
+        out.sort()
+        return out
+
     def drive_cost(self, time_s: float, energy_kwh: float) -> float:
         """Generalised cost of a drive segment (time + driving wear)."""
         return self.vot_per_s * time_s + self.w_deg * self.drive_soh_per_kwh * max(energy_kwh, 0.0)
 
-    def charge_cost(self, station: int, e_from: float, e_to: float, charge_s: float, wait_s: float) -> float:
-        """Generalised cost of one charging stop including waiting/setup."""
+    def charge_cost(
+        self,
+        station: int,
+        e_from: float,
+        e_to: float,
+        charge_s: float,
+        wait_s: float,
+        *,
+        join_s: float | None = None,
+        hold_s: float = 0.0,
+    ) -> float:
+        """Generalised cost of one charging stop including waiting/setup.
+
+        ``join_s`` is the trip time at which the vehicle joins the queue (it
+        selects the price period, default: the off-peak money of ``cf``) and
+        ``hold_s`` a voluntary hold before that, paid at the value of time.
+        """
         f = self.cf[station]
+        fm = f if join_s is None else self.money_cf(station, join_s)
         return (
-            self.vot_per_s * (charge_s + wait_s + self.setup_s[station])
-            + self.w_money * f.money(e_from, e_to)
+            self.vot_per_s * (hold_s + charge_s + wait_s + self.setup_s[station])
+            + self.w_money * fm.money(e_from, e_to)
             + self.w_deg * f.soh(e_from, e_to)
         )
 
@@ -439,15 +725,19 @@ class PreparedScenario:
         }
 
 
-def _check_number(name: str, value: Any, lo: float = -math.inf, hi: float = math.inf, *, open_lo: bool = False) -> None:
+def _check_number(
+    name: str, value: Any, lo: float = -math.inf, hi: float = math.inf, *, open_lo: bool = False, open_hi: bool = False
+) -> None:
     """Raise :class:`ValueError` unless ``value`` is a finite number in ``[lo, hi]``
-    (``(lo, hi]`` with ``open_lo``)."""
+    (``(lo, hi]`` with ``open_lo``, ``[lo, hi)`` with ``open_hi``)."""
     if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
         raise ValueError(f"{name} must be a finite number, got {value!r}")
-    if value < lo or (open_lo and value == lo) or value > hi:
+    if value < lo or (open_lo and value == lo) or value > hi or (open_hi and value == hi):
         if hi == math.inf:
             raise ValueError(f"{name} must be {'>' if open_lo else '>='} {lo:g}, got {value!r}")
-        raise ValueError(f"{name} must lie in {'(' if open_lo else '['}{lo:g}, {hi:g}], got {value!r}")
+        raise ValueError(
+            f"{name} must lie in {'(' if open_lo else '['}{lo:g}, {hi:g}{')' if open_hi else ']'}, got {value!r}"
+        )
 
 
 def _json_ready(obj: Any) -> Any:

@@ -140,6 +140,33 @@ class ChargingFunction:
         """Smallest money and SoH cost per kWh over all bins (for bounds)."""
         return min(self.money_per_kwh), min(self.soh_pct_per_kwh)
 
+    # ----------------------------------------------------------- variants
+    def split(self, e: float) -> "ChargingFunction":
+        """Copy with an extra energy breakpoint at ``e``.
+
+        Both halves of the split bin keep its power, money and wear rate, so
+        charging times, money and wear are those of ``self`` (up to the float
+        rounding of the cumulative tables).  Returns ``self`` if ``e`` is a
+        breakpoint already or outside ``(0, capacity)``.  Used for the
+        high-SoC price tier of :class:`~evroute.scenario.Tariff`.
+        """
+        eb = self.e_breaks
+        if not 0.0 < e < self.capacity or e in eb:
+            return self
+        i = self._bin(e)
+        return ChargingFunction(
+            [*eb[: i + 1], e, *eb[i + 1 :]],
+            [*self.power_kw[: i + 1], *self.power_kw[i:]],
+            [*self.money_per_kwh[: i + 1], *self.money_per_kwh[i:]],
+            [*self.soh_pct_per_kwh[: i + 1], *self.soh_pct_per_kwh[i:]],
+        )
+
+    def with_money(self, money_per_kwh: Sequence[float]) -> "ChargingFunction":
+        """Copy with the same breakpoints, powers and wear, and other money per bin."""
+        return ChargingFunction(
+            list(self.e_breaks), list(self.power_kw), [float(m) for m in money_per_kwh], list(self.soh_pct_per_kwh)
+        )
+
 
 def build_charging_function(
     capacity_kwh: float,

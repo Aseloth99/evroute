@@ -30,6 +30,54 @@
     return I.pct(v, v > 0 && v < 0.095 ? 1 : 0);
   }
 
+  /* -------------------------------------------------------- charging tariff */
+  /** Price factor without trailing zeros: 1.3 -> "×1,3" (tr) / "×1.3" (en). */
+  function fmtF(f) {
+    return `×${I._nf({ minimumFractionDigits: 0, maximumFractionDigits: 2 }).format(f)}`;
+  }
+
+  /** Price factors of a tariff dict (Tariff.to_dict()): {off: [below, above], peak: [below, above]}. */
+  function tariffFactors(t) {
+    const hi = t.peak_high_soc_factor === null || t.peak_high_soc_factor === undefined ? t.high_soc_factor : t.peak_high_soc_factor;
+    return { off: [1, t.high_soc_factor], peak: [t.peak_factor, t.peak_factor * hi] };
+  }
+
+  /** Clock intervals of the peak period plus the busy-hour rule, e.g. "16:00–20:00". */
+  function peakWhen(t) {
+    const parts = (t.peak_hours || []).map((iv) => `${I.clock(iv[0] * 3600, false)}–${I.clock(iv[1] * 3600, false)}`);
+    if (U.isNum(t.busy_utilisation)) parts.push(I.t('tariff_busy', { u: I.pct(t.busy_utilisation, 0) }));
+    return parts.join(' + ');
+  }
+
+  /** One-line description of a tariff dict, e.g. "above 80 %: ×1.3 · peak 16:00–20:00: ×1.15 (above 80 %: ×2.3)". */
+  function tariffText(t) {
+    if (!t) return '';
+    const f = tariffFactors(t);
+    const p = I.pct(t.high_soc, 0);
+    const parts = [];
+    if (f.off[1] !== 1) parts.push(I.t('tariff_high', { p, f: fmtF(f.off[1]) }));
+    const when = peakWhen(t);
+    if (when) {
+      let txt = I.t('tariff_peak', { h: when, f: fmtF(f.peak[0]) });
+      if (f.peak[1] !== f.peak[0]) txt += ` (${I.t('tariff_high', { p, f: fmtF(f.peak[1]) })})`;
+      parts.push(txt);
+    }
+    return parts.join(' · ') || I.t('tariff_flat');
+  }
+
+  /** Tariff pills of one stop: its price period and whether energy was bought above the high-SoC threshold. */
+  function stopTariffPills(t, s) {
+    const out = [];
+    if ((t.peak_hours && t.peak_hours.length) || U.isNum(t.busy_utilisation)) {
+      out.push(U.el('span', { class: `tariff-pill ${s.peak ? 'peak' : 'offpeak'}`, text: I.t(s.peak ? 'tariff_peak_short' : 'tariff_offpeak_short') }));
+    }
+    const f = tariffFactors(t)[s.peak ? 'peak' : 'off'];
+    if (f[1] !== f[0] && s.soc_out > t.high_soc + 1e-9 && s.energy_out_kwh > s.energy_in_kwh) {
+      out.push(U.el('span', { class: 'tariff-pill high', text: I.t('tariff_high_short', { p: I.pct(t.high_soc, 0) }), title: I.t('tariff_high', { p: I.pct(t.high_soc, 0), f: fmtF(f[1] / f[0]) }) }));
+    }
+    return out;
+  }
+
   /** Columns of the comparison table: [key, label, value(r), format(v, r), better, title]. */
   function columns(app) {
     const cur = app.model.currency;
@@ -44,6 +92,7 @@
       ['drive', 'th_drive', (r) => (r._ok ? r.drive_time_s : null), (v) => I.hms(v), 'min'],
       ['charge', 'th_charge', (r) => (r._ok ? r.charge_time_s : null), (v) => I.hms(v), 'min'],
       ['wait', 'th_wait', (r) => (r._ok ? r.wait_time_s + r.setup_time_s : null), (v) => I.hms(v), 'min'],
+      ['hold', 'th_hold', (r) => (r._ok ? r.hold_time_s || 0 : null), (v) => I.hms(v), 'min', I.t('hold_title')],
       ['dist', 'th_distance', (r) => (r._ok ? r.distance_m : null), (v) => I.km(v, 0), 'min'],
       ['stops', 'th_stops', (r) => (r._ok ? (r.stops || []).length : null), (v) => I.num(v, 0), 'min'],
       ['energy', 'th_energy', (r) => (r._ok ? r.energy_consumed_kwh - r.energy_regen_kwh : null), (v) => `${I.num(v, 1)} kWh`, 'min'],
@@ -137,8 +186,10 @@
       kids.push(U.el('div', { class: 'summary-route', text: `${od} · ${I.t('departs')} ${I.clock(app.model.departure)}` }));
       if (r._ok) {
         const th = app.theme;
-        const total = r.drive_time_s + r.wait_time_s + r.setup_time_s + r.charge_time_s || 1;
+        const hold = r.hold_time_s || 0;   // voluntary holds for a cheaper tariff (charging tariffs only)
+        const total = r.drive_time_s + hold + r.wait_time_s + r.setup_time_s + r.charge_time_s || 1;
         const parts = [['drive', r.drive_time_s, th.cDrive], ['queue', r.wait_time_s, th.cQueue], ['setup', r.setup_time_s, th.cSetup], ['charge', r.charge_time_s, th.cCharge]];
+        if (hold > 0) parts.splice(1, 0, ['hold', hold, th.cHold]);
         kids.push(U.el('div', { class: 'summary-bar', role: 'img', 'aria-label': I.t('chart_time') },
           parts.map(([, v, c]) => U.el('i', { style: { width: `${(100 * v / total).toFixed(2)}%`, background: c } }))));
         kids.push(U.el('div', { class: 'summary-bar-legend' },
@@ -191,10 +242,15 @@
         return;
       }
       const cur = app.model.currency;
+      const tariff = app.tariff();
       const items = stops.map((s, k) => {
         const st = app.model.stations[s.station] || {};
         const cls = st.cls || (s.station_kind === 'AC' ? 'AC' : 'DC');
         const inPct = U.clamp(s.soc_in, 0, 1) * 100, outPct = U.clamp(s.soc_out, 0, 1) * 100;
+        const hold = s.hold_s > 0
+          ? U.el('div', { class: 'stop-hold' }, U.el('i', { 'aria-hidden': 'true' }),
+            U.el('span', { text: I.t(s.peak ? 'stop_hold' : 'stop_hold_offpeak', { m: I.minutes(s.hold_s), c: I.clock(app.model.departure + s.arrival_s + s.hold_s) }) }))
+          : null;
         const li = U.el('li', { class: 'stop', tabindex: '0', style: { '--algo': app.colorOf(r) }, dataset: { k: String(k) } },
           U.el('div', { class: 'stop-num', text: String(s._num) }),
           U.el('div', { class: 'stop-body' },
@@ -203,7 +259,9 @@
               U.el('span', { text: I.clock(app.model.departure + s.arrival_s) })),
             U.el('div', { class: 'stop-kind' },
               U.el('span', { class: `kind-pill kind-${cls}`, text: cls }),
-              U.el('span', { text: `${I.num(s.station_power_kw, 0)} kW${st.operator ? ' · ' + st.operator : ''} · ${I.pct(s.soc_in, 0)} → ${I.pct(s.soc_out, 0)}` })),
+              U.el('span', { text: `${I.num(s.station_power_kw, 0)} kW${st.operator ? ' · ' + st.operator : ''} · ${I.pct(s.soc_in, 0)} → ${I.pct(s.soc_out, 0)}` }),
+              tariff ? stopTariffPills(tariff, s) : null),
+            hold,
             U.el('div', { class: 'soc-bar', role: 'img', 'aria-label': `${I.pct(s.soc_in, 0)} → ${I.pct(s.soc_out, 0)}` },
               U.el('i', { class: 'soc-in', style: { width: `${inPct}%` } }),
               U.el('i', { class: 'soc-add', style: { left: `${inPct}%`, width: `${Math.max(0, outPct - inPct)}%` } })),
@@ -227,7 +285,8 @@
     renderTable() {
       const app = this.app;
       const anyRel = app.model.results.some((r) => r.reliability);
-      const cols = columns(app).filter((c) => anyRel || (c[0] !== 'pstrand' && c[0] !== 'pshort'));
+      const anyHold = app.model.results.some((r) => r.hold_time_s > 0);
+      const cols = columns(app).filter((c) => (anyRel || (c[0] !== 'pstrand' && c[0] !== 'pshort')) && (anyHold || c[0] !== 'hold'));
       const res = app.model.results.slice();
       // best values among feasible results
       const best = {};
@@ -316,7 +375,21 @@
         ['kv_network', I.t('nodes_edges', { n: I.num(net.n, 0), m: I.num(net.m, 0) })],
         ['kv_stations', I.num(net.stations.length, 0)],
       ];
-      U.setChildren(this.el.kv, rows.flatMap(([k, val]) => [U.el('dt', { text: I.t(k) }), U.el('dd', { text: val, title: val })]));
+      const t = app.tariff();
+      const n0 = rows.length;
+      if (t) {
+        // charging tariff (only for a scenario that has one): the high-SoC price and the peak period
+        const f = tariffFactors(t);
+        const p = I.pct(t.high_soc, 0);
+        const when = peakWhen(t);
+        if (f.off[1] !== 1 || f.peak[1] !== f.peak[0]) {
+          const hi = when && f.peak[1] !== f.off[1] ? `${fmtF(f.off[1])} · ${I.t('tariff_peak_short')} ${fmtF(f.peak[1])}` : fmtF(f.off[1]);
+          rows.push(['kv_tariff_high', hi, I.t('kv_tariff_high', { p })]);
+        }
+        if (when) rows.push(['kv_tariff_peak', `${when} · ${fmtF(f.peak[0])}`]);
+        if (rows.length === n0) rows.push(['kv_tariff', I.t('tariff_flat')]);
+      }
+      U.setChildren(this.el.kv, rows.flatMap(([k, val, label]) => [U.el('dt', { text: label || I.t(k) }), U.el('dd', { text: val, title: val })]));
       const disc = sc.meta && sc.meta.disclaimer;
       this.el.disclaimer.hidden = !disc;
       this.el.disclaimer.textContent = disc || '';
@@ -329,9 +402,10 @@
         routes.map((r) => U.el('span', { style: { '--algo': app.colorOf(r) } }, U.el('i'), r.title)),
         U.el('span', {}, U.el('i', { class: 'dash' }), I.t('reserve_line')),
         U.el('span', {}, U.el('i', { class: 'area' }), I.t('elev_profile')));
+      const parts = [['drive', th.cDrive], ['queue', th.cQueue], ['setup', th.cSetup], ['charge', th.cCharge]];
+      if (app.model.results.some((r) => r.hold_time_s > 0)) parts.splice(1, 0, ['hold', th.cHold]);
       U.setChildren(this.el.legendTime,
-        [['drive', th.cDrive], ['queue', th.cQueue], ['setup', th.cSetup], ['charge', th.cCharge]].map(([k, c]) =>
-          U.el('span', {}, U.el('i', { class: 'sq', style: { background: c } }), I.t(k))));
+        parts.map(([k, c]) => U.el('span', {}, U.el('i', { class: 'sq', style: { background: c } }), I.t(k))));
     }
 
     /* -------------------------------------------------------- station tip */
@@ -357,6 +431,7 @@
           U.el('span', { text: I.t('tip_power') }), U.el('span', { text: `${st.kind} ${I.num(st.power_kw, 0)} kW` }),
           U.el('span', { text: I.t('tip_plugs') }), U.el('span', { text: I.num(st.plugs, 0) }),
           U.el('span', { text: I.t('tip_price') }), U.el('span', { text: `${I.money(st.price_per_kwh, cur)}/kWh` }),
+          ...tipTariff(st, tod, cur),
           U.el('span', { text: I.t('tip_wait', { c: I.clock(tod, false) }) }), U.el('span', { text: I.minutes(M.waitAt(st.wait_profile, tod)) }));
       }
       kids.push(grid);
@@ -367,5 +442,17 @@
     }
   }
 
-  EVR.panels = { Panels, guaranteeBadge };
+  /** Station tooltip rows of a charging tariff: the price below the high-SoC threshold now ([] without a tariff). */
+  function tipTariff(st, tod, cur) {
+    const f = st.price_factors;
+    if (!f || !st.peak_s) return [];
+    const peak = M.isPeakAt(st, tod);
+    const below = (peak ? f.peak : f.offpeak)[0];
+    return [
+      U.el('span', { text: I.t('tip_tariff', { c: I.clock(tod, false) }) }),
+      U.el('span', { text: `${I.money(st.price_per_kwh * below, cur)}/kWh · ${I.t(peak ? 'tariff_peak_short' : 'tariff_offpeak_short')}` }),
+    ];
+  }
+
+  EVR.panels = { Panels, guaranteeBadge, tariffText, tariffFactors };
 })(window.EVR = window.EVR || {});

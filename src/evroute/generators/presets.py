@@ -15,7 +15,10 @@ Every preset is a builder plus default arguments.  ``get_scenario(name,
 * :class:`~evroute.scenario.Preferences` fields (``objective``,
   ``reserve_soc``, ``speed_factors``, ...);
 * ``name``, which renames the resulting scenario (the preset name itself is
-  positional-only, so this never collides).
+  positional-only, so this never collides);
+* ``tariff``, a :class:`~evroute.scenario.Tariff` (or a dict of its fields)
+  that replaces the scenario's charging tariff; a preset may set one in its
+  defaults (``turkey-karaman-istanbul-tariff`` uses :data:`DEMO_TARIFF`).
 
 Networks are cached by the generators, so building a preset twice costs
 almost nothing; stations are fresh copies every time.  Register your own
@@ -30,12 +33,43 @@ import inspect
 from dataclasses import dataclass, field, replace
 from typing import Any, Callable
 
-from ..scenario import Scenario
+from ..scenario import Scenario, Tariff
 from .basic import grid_scenario
 from .synthetic import corridor_scenario, country_scenario, random_geometric_scenario, split_overrides
 from .turkey import turkey_scenario
 
-__all__ = ["Preset", "PRESETS", "get_scenario", "list_scenarios", "register_scenario"]
+__all__ = ["DEMO_TARIFF", "Preset", "PRESETS", "get_scenario", "list_scenarios", "register_scenario"]
+
+#: Demonstration charging tariff: "the 80 % rule" and an evening peak.  The
+#: values are **illustrative, synthetic** choices (like the station prices of
+#: the case study), not the prices of any operator:
+#:
+#: * every kWh stored above 80 % SoC costs 1.3x the station price;
+#: * 16:00-20:00 local time is the peak period, with 1.15x the price below
+#:   80 % and 2x (1.15 x 2 = 2.3x the station price) above it.
+#:
+#: Used by ``--tariff 80`` on the command line, the
+#: ``turkey-karaman-istanbul-tariff`` preset, the live viewer's tariff
+#: switch and the ``tariffs`` experiment.
+DEMO_TARIFF = Tariff(
+    high_soc=0.8, high_soc_factor=1.3, peak_hours=((16.0, 20.0),), peak_factor=1.15, peak_high_soc_factor=2.0
+)
+
+
+def _as_tariff(value: Any) -> Tariff:
+    """A :class:`Tariff` from a ``Tariff`` or a dict of its fields."""
+    if isinstance(value, Tariff):
+        return value
+    if isinstance(value, dict):
+        return Tariff.from_dict(value)
+    raise TypeError(f"tariff must be a Tariff or a dict of its fields, got {type(value).__name__}")
+
+
+def _json_value(value: Any) -> Any:
+    """``value`` as stored in listings and ``meta``: tuples -> lists, a tariff -> its dict."""
+    if isinstance(value, Tariff):
+        return value.to_dict()
+    return list(value) if isinstance(value, tuple) else value
 
 
 @dataclass(frozen=True)
@@ -62,18 +96,23 @@ class Preset:
             "family": self.family,
             "tags": list(self.tags),
             "approx_nodes": self.approx_nodes,
-            "defaults": dict(self.defaults),
+            "defaults": {k: _json_value(v) for k, v in self.defaults.items()},
         }
 
     def build(self, **overrides: Any) -> Scenario:
-        """Instantiate the preset; ``name=`` renames the scenario (every builder, not only some)."""
+        """Instantiate the preset; ``name=`` renames the scenario (every builder, not only some)
+        and ``tariff=`` replaces its charging tariff."""
         params = _builder_params(self.builder)
         kwargs = dict(self.defaults)
+        tariff = kwargs.pop("tariff", None)
         scenario_name = overrides.get("name")
         extra: dict[str, Any] = {}
         for k, v in overrides.items():
             if k == "name":
                 continue  # handled below: not every builder takes a name
+            if k == "tariff":
+                tariff = v  # applied below: no builder takes a tariff
+                continue
             if k in params:
                 kwargs[k] = v
             else:
@@ -84,10 +123,12 @@ class Preset:
             sc = sc.with_conditions(**cond)
         if pref:
             sc = sc.with_preferences(**pref)
+        if tariff is not None:
+            sc = sc.with_(tariff=_as_tariff(tariff))
         meta = dict(sc.meta)
         meta["preset"] = self.name
         if overrides:
-            meta["overrides"] = {k: (list(v) if isinstance(v, tuple) else v) for k, v in overrides.items()}
+            meta["overrides"] = {k: _json_value(v) for k, v in overrides.items()}
         return replace(sc, name=scenario_name or self.name, meta=meta)
 
 
@@ -155,6 +196,19 @@ def _register_builtins() -> None:
         family="turkey", tags=("case-study", "intercity", "TRY"), approx_nodes=1300,
         notes="Starts in Karaman (1030 m), crosses the Konya plateau and the Afyon/Kütahya uplands and ends at "
               "the Marmara coast; with the default C-SUV two charging stops are needed.",
+    )
+    reg(
+        "turkey-karaman-istanbul-tariff",
+        turkey_scenario,
+        "Karaman -> İstanbul leaving at 14:00 under the demonstration tariff (80 % rule, 16:00-20:00 peak).",
+        defaults={"origin": "Karaman", "destination": "İstanbul", "initial_soc": 0.8, "temperature_c": 18.0,
+                  "departure": "14:00", "tariff": DEMO_TARIFF},
+        family="turkey", tags=("case-study", "tariff", "TRY"), approx_nodes=1300,
+        notes="The flagship trip with illustrative charging prices (DEMO_TARIFF): kWh above 80 % SoC cost "
+              "1.3x, and 16:00-20:00 is a peak period (1.15x, 2.3x above 80 %). Leaving at 14:00, the fastest "
+              "plan charges twice in the peak; the cheapest plan (objective='cost') takes other chargers and "
+              "waits a few minutes at the last one for the 20:00 price change. There is no single best "
+              "route: the time-money Pareto front shows the trade-off.",
     )
     reg(
         "turkey-antalya-ankara",

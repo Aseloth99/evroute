@@ -6,10 +6,12 @@
  *                elevation profile of the selected route as a shaded area on
  *                a secondary axis, the reserve line, charging jumps and the
  *                animated car(s);
- *   TimeChart    stacked bars per algorithm: driving, queue, plug-in, charging;
+ *   TimeChart    stacked bars per algorithm: driving, (tariff hold,) queue,
+ *                plug-in, charging;
  *   ParetoChart  trip time vs money of the Pareto front (point size = battery
  *                wear), other algorithms as reference; click selects a route;
- *   WaitChart    24-hour expected-wait profile of one station;
+ *   WaitChart    24-hour expected-wait profile of one station (with its peak
+ *                price period shaded when the scenario has a charging tariff);
  *   sparkline    small wait profile used in the station tooltip.
  */
 (function (EVR) {
@@ -208,6 +210,25 @@
       ctx.textBaseline = 'bottom';
       ctx.fillText(I.t('reserve_line'), x0 + 6, Y(res) - 3);
 
+      // charging tariff: the SoC above which the high-SoC price applies (only with such a tier)
+      const tariff = app.tariff();
+      const tf = tariff ? EVR.panels.tariffFactors(tariff) : null;
+      if (tf && (tf.off[1] !== tf.off[0] || tf.peak[1] !== tf.peak[0])) {
+        const yt = Math.round(Y(tariff.high_soc)) + 0.5;
+        ctx.save();
+        ctx.setLineDash([2, 3]);
+        ctx.strokeStyle = th.cHold;
+        ctx.globalAlpha = 0.8;
+        ctx.lineWidth = 1.2;
+        ctx.beginPath(); ctx.moveTo(x0, yt); ctx.lineTo(x1, yt); ctx.stroke();
+        ctx.restore();
+        ctx.font = `650 10.5px ${th.font}`;
+        ctx.fillStyle = th.cHold;
+        ctx.textAlign = 'right';
+        ctx.textBaseline = 'bottom';
+        ctx.fillText(I.t('tariff_line', { p: I.pct(tariff.high_soc, 0) }), x1 - 6, yt - 3);
+      }
+
       // selected route: gradient area under its SoC line
       const ordered = routes.filter((r) => r !== sel).concat(routes.includes(sel) ? [sel] : []);
       if (sel && routes.includes(sel)) {
@@ -364,6 +385,7 @@
   /* ====================================================== time breakdown */
   const PARTS = [
     ['drive', 'drive_time_s', 'cDrive'],
+    ['hold', 'hold_time_s', 'cHold'],     // charging tariffs only (absent or 0 otherwise)
     ['queue', 'wait_time_s', 'cQueue'],
     ['setup', 'setup_time_s', 'cSetup'],
     ['charge', 'charge_time_s', 'cCharge'],
@@ -469,6 +491,7 @@
         const r = hover.r;
         const rows = [
           [th.cDrive, I.t('drive'), I.duration(r.drive_time_s)],
+          ...(r.hold_time_s > 0 ? [[th.cHold, I.t('hold'), I.duration(r.hold_time_s)]] : []),
           [th.cQueue, I.t('queue'), I.duration(r.wait_time_s)],
           [th.cSetup, I.t('setup'), I.duration(r.setup_time_s)],
           [th.cCharge, I.t('charge'), I.duration(r.charge_time_s)],
@@ -821,6 +844,20 @@
       gridY(ctx, th, yt, Y, x0, x1, (v) => I.num(v, 0));
       gridX(ctx, th, [0, 3, 6, 9, 12, 15, 18, 21, 24], (hh) => X(hh * 3600), y0, y1, (v) => String(v).padStart(2, '0'));
       axisTitle(ctx, th, I.t('ax_wait'), 12, (y0 + y1) / 2, -Math.PI / 2);
+      // charging tariff: the station's peak price period (clock intervals [a, b))
+      const peaks = (st.peak_s || []).filter((iv) => iv[1] > iv[0]);
+      if (peaks.length) {
+        ctx.save();
+        ctx.fillStyle = U.rgba(th.cHold, th.dark ? 0.16 : 0.10);
+        for (const [a, b] of peaks) ctx.fillRect(X(a), y0, X(b) - X(a), y1 - y0);
+        ctx.font = `650 10px ${th.font}`;
+        ctx.fillStyle = th.cHold;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'bottom';
+        const widest = peaks.reduce((m, iv) => (iv[1] - iv[0] > m[1] - m[0] ? iv : m), peaks[0]);
+        if (X(widest[1]) - X(widest[0]) > 40) ctx.fillText(I.t('tariff_peak_band'), (X(widest[0]) + X(widest[1])) / 2, y1 - 3);
+        ctx.restore();
+      }
       if (ymax <= 1e-9) return;
       const grad = ctx.createLinearGradient(0, y0, 0, y1);
       grad.addColorStop(0, U.rgba(th.cQueue, 0.38));
@@ -854,7 +891,8 @@
       if (sel && sel._stops) {
         for (const s of sel._stops) {
           if (s.station !== si) continue;
-          const t = ((app.model.departure + s.arrival_s) % 86400 + 86400) % 86400;
+          // the wait is evaluated when the stop joins the queue: after a tariff hold, if any
+          const t = ((app.model.departure + s.arrival_s + (s.hold_s || 0)) % 86400 + 86400) % 86400;
           const x = X(t), y = Y(M.waitAt(prof, t) / 60);
           ctx.beginPath();
           ctx.arc(x, y, 5, 0, Math.PI * 2);
@@ -873,7 +911,9 @@
         ctx.strokeStyle = th.crosshair;
         ctx.beginPath(); ctx.moveTo(m.x + 0.5, y0); ctx.lineTo(m.x + 0.5, y1); ctx.stroke();
         ctx.beginPath(); ctx.arc(m.x, Y(v), 3.5, 0, Math.PI * 2); ctx.fillStyle = th.cQueue; ctx.fill();
-        this.setTip(I.clock(t, false), [[th.cQueue, I.t('wait'), I.minutes(v * 60)]], m.x, m.y);
+        const rows = [[th.cQueue, I.t('wait'), I.minutes(v * 60)]];
+        if (st.peak_s) rows.push([th.cHold, I.t('tariff'), I.t(M.isPeakAt(st, t) ? 'tariff_peak_short' : 'tariff_offpeak_short')]);
+        this.setTip(I.clock(t, false), rows, m.x, m.y);
       }
     }
   }
