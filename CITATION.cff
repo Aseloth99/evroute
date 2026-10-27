@@ -2,7 +2,7 @@ cff-version: 1.2.0
 message: "If you use EVRoute in your research, please cite it as below."
 title: "EVRoute: exact, battery-, queue- and degradation-aware route planning for electric vehicles with charging stations"
 version: 1.0.0
-date-released: 2026-10-24
+date-released: 2026-10-27
 license: MIT
 repository-code: "https://github.com/Aseloth99/evroute"
 authors:
