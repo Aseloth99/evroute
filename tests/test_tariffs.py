@@ -25,6 +25,7 @@ import hashlib
 import json
 import math
 import random
+import sys
 
 import pytest
 
@@ -435,7 +436,16 @@ def test_neutral_tariff_reproduces_earlier_plans_and_statistics(preset):
             want = NEUTRAL_REFERENCE[(preset, objective, name)]
             got = (p.objective_value, p.total_time_s, p.money, p.stats.settled, p.stats.generated, p.stats.pushes,
                    [(s.station, s.energy_out_kwh) for s in p.stops])
-            assert got == want, (preset, objective, name)
+            if sys.version_info >= (3, 12):
+                assert got == want, (preset, objective, name)
+            else:
+                # The reference was recorded on Python >= 3.12, whose sum() of floats is compensated
+                # (bpo-100425): older versions differ in the last bits, and float ties can then settle
+                # a handful of labels more or fewer.  Same plan, same values up to rounding.
+                assert got[:3] == pytest.approx(want[:3], rel=1e-12), (preset, objective, name)
+                assert got[3:6] == pytest.approx(want[3:6], rel=1e-3), (preset, objective, name)
+                assert [s for s, _ in got[6]] == [s for s, _ in want[6]], (preset, objective, name)
+                assert [e for _, e in got[6]] == pytest.approx([e for _, e in want[6]], rel=1e-12)
             assert p.hold_time_s == 0.0 and all(s.hold_s == 0.0 and not s.peak for s in p.stops)
             assert all(c.hold_until_s is None for c in p.decision.charges)
 
