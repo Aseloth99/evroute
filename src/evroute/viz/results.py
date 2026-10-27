@@ -24,6 +24,7 @@ anything in between.
 from __future__ import annotations
 
 import argparse
+import bisect
 import csv
 import io
 import json
@@ -74,6 +75,7 @@ SECTION_IDS: tuple[str, ...] = (
     "robustness",
     "eco-speed",
     "vehicles",
+    "tariffs",
 )
 
 #: Algorithms in a fixed order (legends, tables); colours follow the entity.
@@ -100,6 +102,18 @@ CASE_COLORS: tuple[tuple[str, str], ...] = (
 #: Warm (pre-conditioned battery / mild weather) and cold series.
 WARM_COLOR = ("#E8590C", "#E2691F")
 COLD_COLOR = ("#1C7ED6", "#3D97E8")
+
+#: Charging tariffs of the ``tariffs`` experiment in presentation order: key,
+#: title and ``(light, dark)`` colour.  Flat prices are the neutral reference
+#: (``None``: the muted text colour, drawn dashed); the three priced tariffs
+#: are a categorical set validated all-pairs for colour-vision deficiency on
+#: both panel surfaces and kept clear of the algorithm hues.
+TARIFF_STYLES: tuple[tuple[str, LangText, tuple[str, str] | None], ...] = (
+    ("flat", {"tr": "Sabit fiyat", "en": "Flat price"}, None),
+    ("tier", {"tr": "%80 kademesi", "en": "80 % tier"}, ("#6250D6", "#9085E9")),
+    ("peak", {"tr": "Puant saatleri", "en": "Peak hours"}, ("#E0602A", "#DD6A2C")),
+    ("tier+peak", {"tr": "%80 kademesi + puant", "en": "80 % tier + peak"}, ("#C2185B", "#D43D84")),
+)
 
 _CURRENCY_SYMBOL = {"TRY": "₺", "EUR": "€", "USD": "$", "GBP": "£"}
 _TABLE_MAX_ROWS = 600
@@ -441,6 +455,14 @@ class _Checks:
                             "en": "Planned time never decreases with the safety factor"},
         "pareto-nondominated": {"tr": "Hiçbir Pareto planı bir diğerinden her ölçütte açıkça daha iyi değil",
                                 "en": "No Pareto front member is clearly better than another in every criterion"},
+        "tariff-time-optimal": {"tr": "Tarifeden bağımsız: hiçbir plan zaman-optimal plandan hızlı değil ve zaman-optimal plan hiç beklemiyor",
+                                "en": "Under every tariff no plan is faster than the time-optimal one, which never holds"},
+        "tariff-cost-gcost": {"tr": "Maliyet-optimal planın genelleştirilmiş maliyeti zaman-optimal planınkinden yüksek değil",
+                              "en": "The cost-optimal plan's generalised cost is no higher than the time-optimal plan's"},
+        "tariff-cost-money": {"tr": "Maliyet-optimal plan şarj ve batarya yıpranması için zaman-optimal plandan fazla ödemiyor",
+                              "en": "The cost-optimal plan pays no more for charging and battery wear than the time-optimal plan"},
+        "tariff-front-extremes": {"tr": "Cephenin en hızlı planı zaman optimumu; tam bir cephede maliyet-optimal plandan yavaş ve pahalı olmayan bir plan var",
+                                  "en": "The front's fastest plan is the time optimum; a complete front has a plan no slower and no dearer than the cost optimum"},
     }
 
     def __init__(self) -> None:
@@ -1115,6 +1137,227 @@ def _sec_vehicles(exp: Mapping[str, Any], checks: _Checks, ctx: Mapping[str, Any
             "facts": {"fastest": fast["vehicle"] if fast else None, "slowest": slow["vehicle"] if slow else None}}
 
 
+_PLAN_FIELDS = ("time_min", "money", "gcost", "money_wear", "soh_pct", "stops", "holds", "hold_min", "max_soc",
+                "above80_kwh", "peak_stops", "drive_min", "queue_min", "charge_min", "charged_kwh", "runtime_ms")
+
+
+def _dominated_2d(pts: Sequence[tuple[float, float]]) -> int | None:
+    """Index of a point that another point beats clearly in both criteria
+    (:func:`_dominates` on ``(time, money)``), or ``None``; ``O(n log n)``."""
+    order = sorted(range(len(pts)), key=lambda i: pts[i][0])
+    ts = [pts[i][0] for i in order]
+    pre: list[float] = []  # prefix minimum of the money in time order
+    for i in order:
+        pre.append(min(pts[i][1], pre[-1]) if pre else pts[i][1])
+    for i, (t, m) in enumerate(pts):
+        # b beats a clearly iff b.t < a.t - tol(a.t) and b.m < a.m - tol(a.m) (b smaller in both)
+        k = bisect.bisect_left(ts, t - (_REL * abs(t) + 2e-6))
+        if k and pre[k - 1] < m - (_REL * abs(m) + 2e-6):
+            return i
+    return None
+
+
+def _sec_tariffs(exp: Mapping[str, Any], checks: _Checks, ctx: Mapping[str, Any]) -> dict[str, Any] | None:
+    rows = _rows(exp)
+    if not rows:
+        return None
+    members = _rows(exp, "fronts.csv")
+    summary = exp.get("summary") if isinstance(exp.get("summary"), dict) else {}
+    specs = summary.get("tariffs") if isinstance(summary.get("tariffs"), dict) else {}
+    known = [k for k, _, _ in TARIFF_STYLES]
+    present = list(dict.fromkeys(str(r.get("tariff")) for r in rows if r.get("tariff") is not None))
+    tkeys = [k for k in known if k in present] + [k for k in present if k not in known]
+    style = {k: (title, color) for k, title, color in TARIFF_STYLES}
+    tariffs = [{"key": k, "title": style.get(k, ({"tr": k, "en": k}, None))[0], "color": style.get(k, (None, None))[1],
+                "spec": specs.get(k)} for k in tkeys]
+    case_ids = list(dict.fromkeys(str(r.get("case")) for r in rows if r.get("case") is not None))
+    hours = sorted({int(r["departure_h"]) for r in rows if _finite(r.get("departure_h"))})
+    by: dict[tuple[str, int, str, str], dict[str, Any]] = {}
+    for r in rows:
+        if _finite(r.get("departure_h")):
+            by[(str(r.get("case")), int(r["departure_h"]), str(r.get("tariff")), str(r.get("kind")))] = r
+    fronts: dict[tuple[str, int, str], list[dict[str, Any]]] = {}
+    for r in members:
+        if _finite(r.get("departure_h")) and _finite(r.get("time_min")) and _finite(r.get("money")):
+            fronts.setdefault((str(r.get("case")), int(r["departure_h"]), str(r.get("tariff"))), []).append(r)
+    for v in fronts.values():
+        v.sort(key=lambda r: (r["time_min"], r["money"]))
+
+    def plan_dict(r: Mapping[str, Any] | None) -> dict[str, Any] | None:
+        if r is None:
+            return None
+        out = {k: _num(r, k) for k in _PLAN_FIELDS}
+        out["feasible"] = _feasible(r)
+        out["status"] = str(r.get("status") or "")
+        if not out["feasible"]:
+            out["time_min"] = None
+        return out
+
+    cases = []
+    out_fronts: dict[str, list[list[float | None]]] = {}
+    for ci, cid in enumerate(case_ids):
+        meta = case_meta(cid)
+        series: dict[str, list[dict[str, Any]]] = {}
+        for tk in tkeys:
+            pts = []
+            for h in hours:
+                t_row, c_row, f_row = (by.get((cid, h, tk, k)) for k in ("time", "cost", "pareto"))
+                if t_row is None and c_row is None and f_row is None:
+                    continue
+                t, c = plan_dict(t_row), plan_dict(c_row)
+                fr = fronts.get((cid, h, tk), [])
+                front = None
+                if f_row is not None:
+                    front = {"size": int(_num(f_row, "front_size") or len(fr)), "complete": bool(_num(f_row, "complete")),
+                             "status": str(f_row.get("status") or ""), "runtime_ms": _num(f_row, "runtime_ms"),
+                             "settled": _num(f_row, "settled")}
+                    out_fronts[f"{cid}|{h}|{tk}"] = [
+                        [round(m["time_min"], 3), round(m["money"], 2), _round(_num(m, "hold_min"), 2),
+                         _round(_num(m, "max_soc"), 3), _round(_num(m, "above80_kwh"), 2), _num(m, "stops"),
+                         _round(_num(m, "soh_pct"), 5)] for m in fr]
+                label = f"{cid} {h:02d}:00 {tk}"
+                _tariff_checks(checks, label, t, c, fr, front)
+                pts.append({"hour": h, "time": t, "cost": c, "front": front})
+            series[tk] = pts
+        viewer = None
+        vp = Path(exp["dir"]) / cid / "viewer.html"
+        if vp.exists() and ctx.get("out_dir") is not None:
+            viewer = os.path.relpath(vp, ctx["out_dir"]).replace(os.sep, "/")
+        vh = ((summary.get("cases") or {}).get(cid) or {}).get("viewer_departure_h") if isinstance(summary.get("cases"), dict) else None
+        cases.append({"id": cid, "title": meta["title"], "currency": meta["currency"], "case_index": ci,
+                      "series": series, "viewer": viewer, "viewer_hour": vh if _finite(vh) else None})
+
+    # ---- facts: the strongest priced tariff against flat prices
+    main = next((k for k in reversed(tkeys) if k != "flat"), None)
+    prem: list[tuple[float, str, int]] = []
+    save: list[tuple[float, float, float, str, int]] = []
+    holds: list[tuple[float, str, int, str]] = []
+    above_t: list[float] = []
+    above_c: list[float] = []
+    dearer = 0
+    for c in cases:
+        flat = {p["hour"]: p for p in c["series"].get("flat", [])}
+        for tk, pts in c["series"].items():
+            for p in pts:
+                t, k = p["time"], p["cost"]
+                if k and k["feasible"] and (k["holds"] or 0) > 0:
+                    holds.append((k["hold_min"] or 0.0, c["title"], p["hour"], tk))
+                if tk != main or not (t and k and t["feasible"] and k["feasible"]):
+                    continue
+                save.append((t["money"] - k["money"], (t["money"] - k["money"]) / t["money"] * 100.0 if t["money"] else 0.0,
+                             k["time_min"] - t["time_min"], c["title"], p["hour"]))
+                dearer += k["money"] > t["money"] + 1e-6
+                above_t.append(t["above80_kwh"] or 0.0)
+                above_c.append(k["above80_kwh"] or 0.0)
+                f = flat.get(p["hour"])
+                if f and f["time"] and f["time"]["feasible"] and f["time"]["money"]:
+                    prem.append(((t["money"] / f["time"]["money"] - 1.0) * 100.0, c["title"], p["hour"]))
+    sizes = [p["front"]["size"] for c in cases for pts in c["series"].values() for p in pts if p["front"]]
+    incomplete = sum(1 for c in cases for pts in c["series"].values() for p in pts if p["front"] and not p["front"]["complete"])
+    n_main = len(save)
+    top_prem = max(prem, key=lambda x: x[0]) if prem else None
+    top_hold = max(holds, key=lambda x: x[0]) if holds else None
+    holds_main = [x for x in holds if x[3] == main]
+    facts = {
+        "main_tariff": main, "n": n_main,
+        "premium_mean_pct": _mean(x[0] for x in prem), "premium_max_pct": top_prem[0] if top_prem else None,
+        "saving_mean": _mean(x[0] for x in save), "saving_mean_pct": _mean(x[1] for x in save),
+        "extra_time_mean_min": _mean(x[2] for x in save),
+        "holds": len(holds_main), "holds_all": len(holds), "max_hold_min": top_hold[0] if top_hold else None,
+        "front_min": min(sizes) if sizes else None, "front_max": max(sizes) if sizes else None,
+        "fronts": len(sizes), "incomplete_fronts": incomplete,
+        "above80_time_mean_kwh": _mean(above_t), "above80_cost_mean_kwh": _mean(above_c),
+        # not an exactness failure: the generalised cost may trade money for less battery wear
+        "cost_dearer_than_time": dearer,
+    }
+    title = {k: v[0] for k, v in style.items()}
+    cur = cases[0]["currency"] if cases else None
+
+    def finding(lang: str) -> str:
+        if main is None or not n_main:
+            return ""
+        tn = _tariff_title(title, main, lang)
+        if lang == "tr":
+            parts = []
+            if top_prem is not None:
+                parts.append(f"{tn} tarifesinde en hızlı plan şarja sabit fiyata göre ortalama {fmt_pct(facts['premium_mean_pct'], 0, lang)} "
+                             f"fazla ödüyor (en çok {fmt_pct(top_prem[0], 0, lang)}, {top_prem[1]}, {top_prem[2]:02d}:00 kalkış)")
+            parts.append(f"maliyet-optimal plan en hızlıdan ortalama {fmt_money(facts['saving_mean'], cur, lang)} "
+                         f"({fmt_pct(facts['saving_mean_pct'], 0, lang)}) ucuz, bedeli {fmt_minutes(facts['extra_time_mean_min'], lang)} daha uzun yolculuk")
+            s = "; ".join(parts)
+            s = s[0].upper() + s[1:]
+            if holds_main:
+                th = max(holds_main, key=lambda x: x[0])
+                s += (f"; {n_main} yolculuğun {len(holds_main)} tanesinde ucuz fiyat dönemi için istasyonda bekliyor "
+                      f"(en çok {fmt_minutes(th[0], lang)}, {th[1]}, {th[2]:02d}:00)")
+            if facts["front_min"] is not None:
+                s += (f". Tek bir en iyi rota yok: (süre, ücret) cephelerinde {facts['front_min']}–{facts['front_max']} plan var"
+                      + (f" ({facts['fronts']} cepheden {incomplete} tanesi etiket bütçesinde kesildi)" if incomplete else ""))
+            return s + "."
+        parts = []
+        if top_prem is not None:
+            parts.append(f"under the {tn} tariff the fastest plan pays on average {fmt_pct(facts['premium_mean_pct'], 0, lang)} more "
+                         f"for charging than with flat prices (up to {fmt_pct(top_prem[0], 0, lang)}, {top_prem[1]} leaving at {top_prem[2]:02d}:00)")
+        parts.append(f"the cost-optimal plan pays on average {fmt_money(facts['saving_mean'], cur, lang)} "
+                     f"({fmt_pct(facts['saving_mean_pct'], 0, lang)}) less than the fastest for {fmt_minutes(facts['extra_time_mean_min'], lang)} more travel time")
+        s = "; ".join(parts)
+        s = s[0].upper() + s[1:]
+        if holds_main:
+            th = max(holds_main, key=lambda x: x[0])
+            s += (f", and in {len(holds_main)} of {n_main} trips it waits at a station for the cheaper period "
+                  f"(up to {fmt_minutes(th[0], lang)}, {th[1]} at {th[2]:02d}:00)")
+        if facts["front_min"] is not None:
+            s += (f". There is no single best route: the (time, money) fronts hold {facts['front_min']}–{facts['front_max']} plans"
+                  + (f" ({incomplete} of {facts['fronts']} fronts stopped at the label budget)" if incomplete else ""))
+        return s + "."
+
+    return {"data": {"cases": cases, "hours": hours, "tariffs": tariffs, "fronts": out_fronts, "main": main,
+                     "step_pct": 100.0 * float(summary["charge_step_soc"]) if _finite(summary.get("charge_step_soc")) else None,
+                     "budget": summary.get("pareto_max_labels") if _finite(summary.get("pareto_max_labels")) else None,
+                     "high_soc": summary.get("high_soc") if _finite(summary.get("high_soc")) else 0.8},
+            "finding": _both(finding), "facts": facts}
+
+
+def _tariff_title(titles: Mapping[str, LangText], key: str, lang: str) -> str:
+    """Title of tariff ``key`` in ``lang`` (``80 % tier + peak``); unknown keys stay as they are."""
+    t = titles.get(key)
+    return t.get(lang, t.get("en", key)) if t else key
+
+
+def _round(x: float | None, nd: int) -> float | None:
+    return round(x, nd) if x is not None else None
+
+
+def _tariff_checks(checks: _Checks, label: str, t: Mapping[str, Any] | None, c: Mapping[str, Any] | None,
+               front: Sequence[Mapping[str, Any]], info: Mapping[str, Any] | None) -> None:
+    """The exactness checks of one (case, departure, tariff) of the ``tariffs`` experiment."""
+    tf = bool(t and t["feasible"] and t["time_min"] is not None)
+    cf = bool(c and c["feasible"] and c["time_min"] is not None)
+    if tf:
+        tt = t["time_min"]
+        ok = (t["hold_min"] or 0.0) <= 0.0
+        others = ([c["time_min"]] if cf else []) + [m["time_min"] for m in front]
+        slower = [x for x in others if not _leq(tt, x)]
+        checks.add("tariff-time-optimal", ok and not slower, "tariffs",
+                   f"{label}: time-optimal {tt} min, hold {t['hold_min']} min, faster plans {slower[:3]}")
+    if tf and cf:
+        for cid, key in (("tariff-cost-gcost", "gcost"), ("tariff-cost-money", "money_wear")):
+            a, b = c.get(key), t.get(key)
+            if a is not None and b is not None:
+                checks.add(cid, _leq(a, b), "tariffs", f"{label}: cost-optimal {key} {a} > time-optimal {b}")
+    if front:
+        ok, why = True, ""
+        if tf and not _close(front[0]["time_min"], t["time_min"]):
+            ok, why = False, f"fastest member {front[0]['time_min']} min vs time optimum {t['time_min']} min"
+        covered = any(_leq(m["time_min"], c["time_min"]) and _leq(m["money"], c["money"]) for m in front) if cf else True
+        if ok and info and info.get("complete") and not covered:
+            ok, why = False, f"no member covers the cost optimum ({c['time_min']} min, {c['money']})"
+        checks.add("tariff-front-extremes", ok, "tariffs", f"{label}: {why}")
+        bad = _dominated_2d([(m["time_min"], m["money"]) for m in front])
+        checks.add("pareto-nondominated", bad is None, "tariffs",
+                   f"{label}: member {bad} {None if bad is None else (front[bad]['time_min'], front[bad]['money'])} is dominated")
+
+
 _ANALYZERS: dict[str, Callable[[Mapping[str, Any], _Checks, Mapping[str, Any]], dict[str, Any] | None]] = {
     "case-studies": _sec_case_studies,
     "scalability": _sec_scalability,
@@ -1126,6 +1369,7 @@ _ANALYZERS: dict[str, Callable[[Mapping[str, Any], _Checks, Mapping[str, Any]], 
     "robustness": _sec_robustness,
     "eco-speed": _sec_eco,
     "vehicles": _sec_vehicles,
+    "tariffs": _sec_tariffs,
 }
 
 SECTION_TEXT: dict[str, dict[str, LangText]] = {
@@ -1178,6 +1422,11 @@ SECTION_TEXT: dict[str, dict[str, LangText]] = {
         "title": {"tr": "Araçlar", "en": "Vehicles"},
         "meaning": {"tr": "Aynı yolculuk farklı araçlarla: batarya boyutu, tüketim ve şarj eğrisi durak sayısını ve süresini belirler.",
                     "en": "The same trip with different vehicles: battery size, consumption and the charging curve decide how many stops are needed and how long they take."},
+    },
+    "tariffs": {
+        "title": {"tr": "Şarj tarifeleri: %80 kuralı ve puant saatleri", "en": "Charging tariffs: the 80 % rule and peak hours"},
+        "meaning": {"tr": "Örnek (sentetik) tarifelerle aynı yolculuk farklı kalkış saatlerinde: %80 doluluğun üzerindeki kWh daha pahalı, akşam puantında her kWh daha pahalı. Zaman-optimal plan fiyata bakmaz ve hiç beklemez; maliyet-optimal plan zaman değeri, ücret ve yıpranmanın toplamını en aza indirir ve gerekirse ucuz fiyat dönemine kadar istasyonda bekler; Pareto cephesi süre ile ücret arasındaki bütün kesin takasları gösterir. Tüm aramalar %5 SoC şarj ızgarasında kesindir; etiket bütçesinde kesilen bir cephe eksik olarak işaretlenir.",
+                    "en": "The same trip at different departure times under illustrative (synthetic) tariffs: kWh above 80 % state of charge cost more, and every kWh costs more in the evening peak. The time-optimal plan ignores prices and never waits; the cost-optimal plan minimises the value of time plus money plus wear and may wait at a station for the cheaper period; the Pareto front shows every exact trade-off between time and money. All searches are exact on a 5 % SoC charging grid; a front stopped by its label budget is marked incomplete."},
     },
 }
 
@@ -1262,6 +1511,13 @@ def _kpis(sections: Mapping[str, Mapping[str, Any]], checks: Mapping[str, Any]) 
                 _both(lambda L: (f"katsayı {fmt_num(a['factor'], 2, L)} → {fmt_num(b['factor'], 2, L)}" if L == "tr"
                                  else f"safety factor {fmt_num(a['factor'], 2, L)} → {fmt_num(b['factor'], 2, L)}")),
                 "warn" if a["p_breach"] > 0.05 else "ok")
+    tf = sections.get("tariffs", {}).get("facts") or {}
+    if _finite(tf.get("saving_mean")) and tf.get("n"):
+        cur = next((c.get("currency") for c in (sections["tariffs"].get("data") or {}).get("cases", [])), None)
+        kpi("tariffs", "tariffs", {"tr": "Tarifeye göre planlama", "en": "Planning for the tariff"},
+            _both(lambda L: ("−" if tf["saving_mean"] > 0 else "") + fmt_money(abs(tf["saving_mean"]), cur, L)),
+            _both(lambda L: (f"en hızlı plana göre ortalama · +{fmt_minutes(tf['extra_time_mean_min'], L)} · {tf['holds']}/{tf['n']} beklemeli" if L == "tr"
+                             else f"vs the fastest plan, mean · +{fmt_minutes(tf['extra_time_mean_min'], L)} · {tf['holds']}/{tf['n']} with a hold")))
     eco = sections.get("eco-speed", {}).get("facts") or {}
     if eco.get("n"):
         kpi("eco", "eco-speed", {"tr": "Eko hızlar", "en": "Eco speeds"},
@@ -1342,7 +1598,9 @@ def analyze_results(loaded: Mapping[str, Any], *, out_dir: str | Path | None = N
 def _theme_colors() -> dict[str, Any]:
     algos = {a: {"color": list(algorithm_color(a)), "title": {"tr": algo_title(a, "tr"), "en": algo_title(a, "en")},
                  "exact": a in EXACT_ALGOS} for a in list(ALGORITHM_COLORS)}
-    return {"algorithms": algos, "cases": [list(c) for c in CASE_COLORS], "warm": list(WARM_COLOR), "cold": list(COLD_COLOR)}
+    tariffs = {k: {"title": title, "color": list(color) if color else None} for k, title, color in TARIFF_STYLES}
+    return {"algorithms": algos, "cases": [list(c) for c in CASE_COLORS], "warm": list(WARM_COLOR), "cold": list(COLD_COLOR),
+            "tariffs": tariffs}
 
 
 def results_payload(
@@ -1387,6 +1645,9 @@ def _color_css() -> str:
         dark.append(f"--case-{i}: {dc};")
     light += [f"--warm: {WARM_COLOR[0]};", f"--cold: {COLD_COLOR[0]};"]
     dark += [f"--warm: {WARM_COLOR[1]};", f"--cold: {COLD_COLOR[1]};"]
+    for i, (_, _, color) in enumerate(TARIFF_STYLES):
+        light.append(f"--tariff-{i}: {color[0] if color else 'var(--text-3)'};")
+        dark.append(f"--tariff-{i}: {color[1] if color else 'var(--text-3)'};")
     return (":root {\n  " + "\n  ".join(light) + "\n}\n:root[data-theme=\"dark\"] {\n  " + "\n  ".join(dark) + "\n}\n")
 
 

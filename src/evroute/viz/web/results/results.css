@@ -385,6 +385,22 @@ button { cursor: pointer; }
 .pa-grid em { font-style: normal; font-size: 11.5px; color: var(--text-3); margin-left: 6px; font-variant-numeric: tabular-nums; }
 .pa-grid em.good { color: var(--ok); }
 
+/* tariffs: the compared tariffs, the tariff / departure pickers */
+.ta-specs {
+  display: flex; flex-wrap: wrap; gap: 6px 18px; margin: 0; padding: 0; list-style: none;
+  font-size: 12.5px; color: var(--text-2);
+}
+.ta-specs li { display: inline-flex; align-items: center; gap: 7px; min-width: 0; }
+.ta-specs b { font-weight: 680; color: var(--text); white-space: nowrap; }
+.ta-specs span { color: var(--text-3); }
+.ta-key { width: 16px; height: 3px; border-radius: 2px; background: var(--c); flex: none; }
+.ta-key-flat { background: repeating-linear-gradient(90deg, var(--c) 0 5px, transparent 5px 8px); }
+.ta-pick { display: flex; align-items: center; gap: 8px 12px; flex-wrap: wrap; min-width: 0; }
+.ta-pick > .seg { max-width: 100%; }
+.ta-pick-label { font-size: 12px; font-weight: 680; color: var(--text-3); text-transform: uppercase; letter-spacing: .06em; }
+.chip-hold b { color: var(--c-hold); }
+.cc-foot.ta-warn { color: var(--warn); }
+
 /* ------------------------------------------------------------ SVG charts */
 .rc { position: relative; width: 100%; }
 .rc-svg { display: block; overflow: visible; font-family: var(--font); -webkit-tap-highlight-color: transparent; }

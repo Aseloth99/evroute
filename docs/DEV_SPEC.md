@@ -20,8 +20,8 @@ beautiful animated viewer.  Read this file completely before writing code.
 * Install in editable mode (`pip install -e ".[dev]"`, see
   [`CONTRIBUTING.md`](../CONTRIBUTING.md)).  Run the tests of the modules you
   touch (`python -m pytest tests/test_<module>.py -q`) and, before you change
-  an algorithm, the cross-validation suite (`tests/test_crossval.py`, fast and
-  slow tier).
+  an algorithm, the cross-validation suites (`tests/test_crossval.py` and
+  `tests/test_crossval_tariffs.py`, fast and slow tier).
 
 ## 1. Model summary (implemented in the foundation)
 
@@ -76,11 +76,17 @@ P.tariff_time_dependent    # True if some price depends on the clock
 P.is_peak(s, trip_s)       # is s in its peak period at that trip time?
 P.money_cf(s, trip_s)      # P.cf[s] or P.cf_peak[s]: the money of a session joining the queue at trip_s
 P.hold_candidates(s, t)    # sorted trip times in (t, t + 24 h] at which the price of s changes
+                           #   (nudged by a few ulps so that P.is_peak already reports the new period)
 ```
 
 With an active high-SoC tier every charging function has a breakpoint at
 `high_soc x capacity` (same power on both sides, so charging times are
-unchanged), which makes it a charging target of BLS/Pareto as well.
+unchanged), which makes it a charging target of BLS/Pareto as well.  The
+model (price factors, periods, busy hours, the join-time rule, holds) is
+[`model.md` §5](model.md#5-charging-tariffs); which holds a planner must
+consider is [`algorithms.md` §6](algorithms.md#6-charging-tariffs-price-periods-and-voluntary-holds).
+`Scenario.to_dict()` writes the `"tariff"` key only for a tariff other than
+`Tariff()`, so instances without a tariff keep their earlier JSON form.
 
 ### 1.2 Semantics every algorithm must respect (the evaluator enforces them)
 
@@ -198,7 +204,9 @@ Destination: the arrival time of every label generated there (least
 kept outside the heap; the search stops when the smallest key reaches it.
 Exact when waits are static, or FIFO time-dependent with
 `exact_switching=True`; `stats.extra["optimality"]` is then `"proven"`
-(unless `max_labels` was hit).
+(unless `max_labels` was hit).  A charging tariff changes nothing in CFP:
+the time objective never holds (`docs/algorithms.md` §6, Lemma 4), and the
+money of its plans is what `evaluate()` measures.
 Details and proofs: module docs of `cfp.py`, `docs/algorithms.md` §4.
 
 ### 2.3 Pareto (pareto.py)
@@ -215,6 +223,13 @@ against the destination front with consistent completion bounds, optional
 scenario objective (minimum trip time for `"time"`, minimum generalised cost
 for `"cost"`) and put all evaluated front members (sorted by time) into
 `plan.alternatives`.
+
+### 2.4 Heuristics under a tariff
+
+`greedy`, `station-graph`, `genetic` and `naive` never hold.  Their plans go
+through `evaluate()` like every plan, so the money they report is priced in
+the period at each arrival; their internal objectives must stay consistent
+with it (`check_objective` is only required of the exact planners).
 
 ## 3. Viewer data contract (`evroute-viewer/1`)
 
@@ -263,6 +278,15 @@ Only for a scenario whose tariff is not `Tariff()`: `scenario.tariff`
 seconds) and `price_factors` (`{"offpeak": [below, above], "peak": [below,
 above]}`, multiplying `price_per_kwh` below / above `high_soc`).
 
+**Live server** (`server.py`).  The live page's payload (`"live": true`)
+carries `demo_tariff`, the `Tariff.to_dict()` of the illustrative
+`DEMO_TARIFF`, for the page's tariff switch.  `POST /api/plan` accepts
+`"tariff": "80"` (the demonstration tariff) or `"flat"` (no tariff; absent:
+the preset's own tariff) and answers with `results_payload(...)`:
+`{"scenario", "results", "wait_profiles"}` plus, for a tariff other than
+`Tariff()`, `station_tariffs` (per station, in station order, the `peak_s`
+and `price_factors` above).
+
 ## 4. Testing expectations
 
 * Every module gets `tests/test_<module>.py`.
@@ -281,4 +305,9 @@ above]}`, multiplying `price_per_kwh` below / above `high_soc`).
     the Pareto front, and `cfp` is no slower.
 * `tests/test_crossval.py` runs all of these, and more, on seeded random
   instances (summary in `tests/fuzz_report.md`).
+* Charging tariffs: `tests/test_tariffs.py` (model, evaluator, hand-made
+  instances) and `tests/test_crossval_tariffs.py` (random tariffs against an
+  independent price oracle, brute force with holds; `fuzz_report.md` §7).
+  With the neutral `Tariff()` every plan, objective and search statistic
+  must stay identical to the code without tariffs.
 * Keep the default test-suite under ~60 s; mark long tests `@pytest.mark.slow`.

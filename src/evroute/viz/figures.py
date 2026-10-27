@@ -24,6 +24,8 @@ function                          what it shows
                                   :func:`latex_table` gives a booktabs table
 :func:`plot_pareto`               a Pareto front: time vs money, wear as
                                   colour (seaborn scatter)
+:func:`plot_tradeoff`             a time-money front with chosen plans
+                                  (fastest / balanced / cheapest) marked
 :func:`plot_charging_curves`      charging power vs SoC and SoC vs minutes
 :func:`plot_consumption_vs_speed` kWh/100 km vs speed, one panel per
                                   temperature (seaborn lines)
@@ -87,6 +89,7 @@ __all__ = [
     "plot_comparison_table",
     "latex_table",
     "plot_pareto",
+    "plot_tradeoff",
     "plot_charging_curves",
     "plot_consumption_vs_speed",
     "plot_wait_profiles",
@@ -193,7 +196,8 @@ def soc_series(
 
     ``x="distance"`` returns kilometres (charging stops are vertical jumps);
     ``x="time"`` returns trip hours.  With a scenario, every stop in the time
-    series is resolved exactly: flat while queueing and plugging in, then the
+    series is resolved exactly: flat during a voluntary hold
+    (:attr:`~evroute.plan.ChargeStop.hold_s`), while queueing and plugging in, then the
     breakpoints of the station's piecewise-linear charging function
     (:meth:`evroute.charging.ChargingFunction.breakpoints_between`).  Between
     nodes the energy is linear, which is exact for the model's constant-rate
@@ -222,7 +226,7 @@ def soc_series(
                 xs.append(d)
                 ys.append(100.0 * st.energy_out_kwh / q)
                 continue
-            t_plug = st.arrival_s + st.wait_s + st.setup_s
+            t_plug = st.join_s + st.wait_s + st.setup_s  # after a voluntary hold, if any
             xs.append(t_plug / 3600.0)
             ys.append(100.0 * st.energy_in_kwh / q)
             if P is not None and st.energy_out_kwh > st.energy_in_kwh:
@@ -1938,6 +1942,151 @@ def plot_pareto(
         return _finish(fig, path)
 
 
+def _staircase(points: Sequence[tuple[float, float]]) -> tuple[list[float], list[float]]:
+    """Step line through the non-dominated points of ``(x, y)`` (both minimised)."""
+    xs: list[float] = []
+    ys: list[float] = []
+    best = math.inf
+    for x, y in sorted(points):
+        if y < best - 1e-12:
+            if xs:
+                xs.append(x)
+                ys.append(best)
+            xs.append(x)
+            ys.append(y)
+            best = y
+    return xs, ys
+
+
+def plot_tradeoff(
+    front: RoutePlan | Sequence[RoutePlan],
+    marked: Mapping[str, RoutePlan] | None = None,
+    *,
+    zoom_min: float | None = 60.0,
+    width: str | float = "double",
+    aspect: float = 0.4,
+    path: Any = None,
+) -> Any:
+    """The time-money trade-off of one trip: a Pareto front with chosen plans marked.
+
+    ``front`` is the result of the ``pareto`` planner (its ``alternatives``)
+    or a list of member plans; ``marked`` maps a label to a plan, e.g.
+    ``{"Fastest": ..., "Balanced": ..., "Cheapest": ...}``.  The left panel
+    shows every member (trip time vs charging cost) and the non-dominated
+    staircase; members with a voluntary hold (waiting for a cheaper price
+    period) are hollow.  The marked plans get the categorical colours in
+    order, their own marker and a direct label (trip time and money).  With
+    ``zoom_min`` a second panel enlarges the members at most that many
+    minutes slower than the fastest one, with the extra minutes as x -- the
+    steep start of the front, where little time buys much money.  A front
+    cut short by the planner's label budget is flagged.
+    """
+    if isinstance(front, RoutePlan):
+        members = list(front.alternatives) or [front]
+        st = front.stats
+        complete = (st.extra or {}).get("complete", True) if st else True
+    else:
+        members = list(front)
+        complete = True
+    members = [m for m in members if m.feasible]
+    if not members:
+        raise ValueError("no feasible front members to plot")
+    marks = [(k, p) for k, p in (marked or {}).items() if p is not None and p.feasible]
+    cur = members[0].currency
+    t_fast = min(m.total_time_s for m in members + [p for _, p in marks])
+    shapes = ("D", "o", "^", "s", "v", "P")
+    grey = "#9A9A9A"
+    with style.paper():
+        plt = _plt()
+        if zoom_min:
+            fig, axes = plt.subplots(1, 2, figsize=style.figsize(width, aspect),
+                                     gridspec_kw={"width_ratios": [1.25, 1.0]})
+        else:
+            fig, ax0 = _new_fig(width, aspect)
+            axes = [ax0]
+        fs = _rc("font.size")
+
+        def draw(ax: Any, x_of: Any, sel: list[RoutePlan], x_max: float) -> None:
+            sx, sy = _staircase([(x_of(m), m.money) for m in sel])
+            ax.plot(sx, sy, color=style.INK, lw=0.6, alpha=0.7, zorder=2, solid_joinstyle="miter")
+            size = 9.0 if len(sel) > 120 else 16.0
+            plain = [m for m in sel if m.hold_time_s <= 0.0]
+            held = [m for m in sel if m.hold_time_s > 0.0]
+            ax.scatter([x_of(m) for m in plain], [m.money for m in plain], s=size, color=grey, edgecolors="none",
+                       zorder=3)
+            ax.scatter([x_of(m) for m in held], [m.money for m in held], s=size + 4, facecolors=style.SURFACE,
+                       edgecolors=grey, linewidths=0.8, zorder=3)
+            for i, (_, p) in enumerate(marks):
+                if x_of(p) <= x_max + 1e-9:
+                    ax.scatter([x_of(p)], [p.money], s=46, marker=shapes[i % len(shapes)], color=style.categorical(i),
+                               edgecolors=style.SURFACE, linewidths=0.8, zorder=5)
+            ax.grid(color=style.GRID, lw=0.5, zorder=0)
+            ax.set_ylabel(f"Charging cost [{cur}]")
+
+        def label(ax: Any, x_of: Any, x_max: float) -> None:
+            lo, hi = ax.get_xlim()
+            shown = [x_of(p) for _, p in marks if x_of(p) <= x_max + 1e-9]
+            y0, y1 = ax.get_ylim()  # room above the plot, and below it for labels in the right half
+            below = any(x > 0.5 * (lo + hi) for x in shown)
+            ax.set_ylim(y0 - (0.24 if below else 0.04) * (y1 - y0), y1 + 0.12 * (y1 - y0))
+            ref = marks[0][1]
+            for name, p in marks:
+                x = x_of(p)
+                if x > x_max + 1e-9:
+                    continue
+                text = f"{name}\n{format_duration(p.total_time_s)} · {p.money:,.2f} {cur}"
+                if p is not ref:  # the price of the trade against the first marked plan
+                    dm = p.money - ref.money
+                    text += (f"\n+{format_duration(p.total_time_s - ref.total_time_s)},"
+                             f" {'−' if dm < 0 else '+'}{abs(dm):,.2f} {cur}")
+                right = x <= 0.5 * (lo + hi)  # left half: label to the right and above, else left and below
+                ax.annotate(text, (x, p.money), xytext=(9, 4) if right else (-9, -10), textcoords="offset points",
+                            ha="left" if right else "right", va="bottom" if right else "top", fontsize=fs - 0.5,
+                            color=style.INK, linespacing=1.15, zorder=6, path_effects=style.halo(2.5))
+
+        def hours(m: RoutePlan) -> float:
+            return m.total_time_s / 3600.0
+
+        def extra(m: RoutePlan) -> float:
+            return (m.total_time_s - t_fast) / 60.0
+
+        ax = axes[0]
+        draw(ax, hours, members, math.inf)
+        ax.margins(x=0.08, y=0.12)
+        label(ax, hours, math.inf)
+        ax.set_xlabel("Trip time [h]")
+        ax.set_title(f"{len(members)} Pareto-optimal plans", fontsize=fs)
+        if not complete:
+            ax.annotate("front may be incomplete (label budget)", (1.0, 1.0), xycoords="axes fraction",
+                        xytext=(-3, -3), textcoords="offset points", ha="right", va="top", fontsize=fs - 1.5,
+                        color=style.INK_MUTED)
+        if zoom_min:
+            span = 60.0 * zoom_min
+            near = [m for m in members if m.total_time_s <= t_fast + span + 1e-6]
+            lo = min(m.money for m in near + [p for _, p in marks if p.total_time_s <= t_fast + span + 1e-6])
+            hi = max(m.money for m in near + [p for _, p in marks if p.total_time_s <= t_fast + span + 1e-6])
+            pad = 0.05 * (hi - lo or 1.0)
+            ax.add_patch(plt.Rectangle((t_fast / 3600.0, lo - pad), span / 3600.0, hi - lo + 2 * pad, fill=False,
+                                       lw=0.6, ls=(0, (2, 1.5)), ec=style.INK_MUTED, zorder=1))
+            az = axes[1]
+            draw(az, extra, near, zoom_min)
+            az.margins(x=0.06, y=0.1)
+            label(az, extra, zoom_min)
+            az.set_xlabel("Extra time over the fastest plan [min]")
+            az.set_title(f"Zoom: at most {zoom_min:g} min slower ({len(near)} plans)", fontsize=fs)
+        from matplotlib.lines import Line2D
+
+        handles = [Line2D([], [], ls="none", marker=shapes[i % len(shapes)], ms=5.5, mfc=style.categorical(i),
+                          mec=style.SURFACE, mew=0.6, label=name) for i, (name, _) in enumerate(marks)]
+        handles.append(Line2D([], [], ls="none", marker="o", ms=3.5, mfc=grey, mec="none", label="front member"))
+        handles.append(Line2D([], [], ls="none", marker="o", ms=3.8, mfc=style.SURFACE, mec=grey, mew=0.8,
+                              label="waits for a cheaper price period"))
+        fig.tight_layout(w_pad=1.5)
+        fig.legend(handles=handles, loc="lower center", bbox_to_anchor=(0.5, 1.0), ncol=len(handles), frameon=False,
+                   handletextpad=0.3, columnspacing=1.2, borderaxespad=0.0)
+        return _finish(fig, path)
+
+
 # ========================================================= charging curves
 def _vehicles(vehicles: Any) -> list[Any]:
     from ..vehicle import VEHICLES, Vehicle, get_vehicle
@@ -2117,7 +2266,8 @@ def plot_wait_profiles(
     the stations used by ``plans`` are shown, otherwise the ``top`` stations
     with the highest peak wait.  The departure time is marked, and with
     ``plans`` each planned arrival is a marker (the algorithm's shape) on
-    its station's curve.
+    its station's curve -- after a voluntary hold, at the time the vehicle
+    joins the queue, where its wait is evaluated.
     """
     P = scenario.prepare()
     plans = _routed(_as_plans(plans))
@@ -2153,7 +2303,7 @@ def plot_wait_profiles(
             for p in plans:
                 for stop in p.stops:
                     if stop.station == s:
-                        tod = P.time_of_day(stop.arrival_s) / 3600.0
+                        tod = P.time_of_day(stop.join_s) / 3600.0  # the wait applies from here
                         key = round(tod * 60.0)
                         if key not in arrivals:
                             arrivals[key] = (tod, stop.wait_s / 60.0, [])
@@ -2738,9 +2888,12 @@ def make_gallery(
     preset, ``instances`` random origin/destination pairs on the Turkey
     network (static waits, for the gap distribution) and the vehicle
     presets.  Every registered algorithm is run; the Pareto planner uses the
-    web viewer's (time, money) settings on the large network.  ``quick``
-    shrinks the multi-instance study and the corridor front (for smoke
-    tests).  Run as ``python -m evroute.viz.figures [outdir] [--quick]``.
+    web viewer's (time, money) settings on the large network.  The tariff
+    figure (``turkey-karaman-istanbul-tariff``) needs the complete (time,
+    money) front of a 750 km trip under a time-dependent tariff: about 1.5
+    minutes and 10 million labels.  ``quick`` shrinks the multi-instance
+    study, the corridor front and the tariff front (5 % charging grid, for
+    smoke tests).  Run as ``python -m evroute.viz.figures [outdir] [--quick]``.
     """
     import random
 
@@ -2759,11 +2912,12 @@ def make_gallery(
 
         turkey = get_scenario("turkey-karaman-istanbul")
         corridor: Scenario | None = get_scenario("corridor")
+        tariff: Scenario | None = get_scenario("turkey-karaman-istanbul-tariff")
     except Exception:  # presets unavailable: a grid instance still shows every figure
         from ..generators import grid_scenario
 
         turkey = grid_scenario(12, 12, seed=3, initial_soc=0.35, spacing_m=15000.0)
-        corridor = None
+        corridor = tariff = None
     plans = _plan_all(turkey, budget)
     by = {p.algorithm: p for p in plans}
     routed = [p for p in plans if p.edges]
@@ -2820,6 +2974,18 @@ def make_gallery(
         emit("fig_soc_corridor", plot_soc_profile(crouted, corridor, x="time", elevation="panel"))
         if "pareto" in cby and cby["pareto"].feasible:
             emit("fig_pareto_corridor", plot_pareto(cby["pareto"], others=[cby[a] for a in ("greedy", "cfp") if a in cby]))
+    if tariff is not None:
+        # no single best route: the (time, money) front under the demonstration tariff
+        from ..algorithms import plan as run_plan
+
+        tsc = tariff.with_preferences(charge_step_soc=0.05) if quick else tariff
+        fastest = run_plan(tsc, "bls-astar")
+        balanced = run_plan(tsc.with_preferences(objective="cost"), "bls-astar")
+        front = run_plan(tsc, "pareto", criteria=("time", "money"), max_labels=1_000_000 if quick else 10_000_000)
+        if front.alternatives:
+            cheapest = min(front.alternatives, key=lambda p: (p.money, p.total_time_s))
+            emit("fig_tradeoff_tariff",
+                 plot_tradeoff(front, {"Fastest": fastest, "Balanced": balanced, "Cheapest": cheapest}))
     emit("fig_charging_curves", plot_charging_curves())
     emit("fig_consumption", plot_consumption_vs_speed())
     plt.close("all")

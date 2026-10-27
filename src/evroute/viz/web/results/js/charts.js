@@ -895,7 +895,10 @@
   };
 
   /* ============================================================= dumbbell */
-  /** spec: {categories: [{key, label}], pairs: [{cat, a, b, tip}], a: {label, color}, b: {label, color}, y: {label, fmt}} */
+  /**
+   * spec: {categories: [{key, label}], pairs: [{cat, a, b, tip}], a: {label, color}, b: {label, color}, y: {label, fmt, zero}}
+   * (y.zero === false: the axis spans the data instead of starting at 0)
+   */
   RC.dumbbell = function (host, spec) {
     return RC.mount(host, {
       height: spec.height || ((w) => (w < 520 ? 240 : 280)),
@@ -906,7 +909,8 @@
         for (const p of spec.pairs) { if (finite(p.a)) vals.push(p.a); if (finite(p.b)) vals.push(p.b); }
         if (!vals.length) return;
         const top = 30, bottom = 40, y1 = h - bottom, y0 = top;
-        const ax = makeAxis({ ...spec.y, zero: true }, 0, Math.max(...vals), y1, y0, Math.max(3, Math.floor((y1 - y0) / 44)));
+        const zero = spec.y.zero !== false;
+        const ax = makeAxis({ ...spec.y, zero }, zero ? 0 : Math.min(...vals), Math.max(...vals), y1, y0, Math.max(3, Math.floor((y1 - y0) / 44)));
         const Y = ax.scale;
         const fmt = ax.fmt;
         const x0 = Math.max(30, maxW(ax.ticks.map(fmt)) + 14), x1 = w - 12;

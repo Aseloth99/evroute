@@ -23,7 +23,9 @@ energy where its power falls below that of an AC charger next to it, then the
 AC charger -- cheaper, or even faster near full in the cold).  A second stop
 at $j$ itself is never useful: it pays $W_j + \sigma_j$ again for energy the
 first stop could have charged, and $F_j$, the money and the wear are additive
-along the charging curve.  The evaluator checks the reserve on arrival and on
+along the charging curve.  (The one exception is a clock-dependent tariff,
+where a second session at $j$ in the *other* price period can pay off,
+Section 6.)  The evaluator checks the reserve on arrival and on
 departure only, so at the origin with $x_0 < \underline e$ a stop may end
 below the reserve when another stop at the same node follows.  This is
 exactly the set of plans `evaluate()` accepts (up to its float tolerance, see
@@ -322,7 +324,9 @@ consistent lower bounds) is dominated by the destination front, as in NAMOA\*
 (Mandow & Pérez de la Cruz, 2010).  The transitions (including consecutive
 stops) are those of BLS.  The fastest front member equals BLS with objective
 time and the cheapest equals BLS with objective cost — both equalities are
-asserted in the test-suite.
+asserted in the test-suite.  With a clock-dependent charging tariff the
+transitions include the voluntary holds of Section 6 (money is always a
+criterion here), and the dominance rule is unchanged.
 
 *Goal-directed order.*  Labels are popped in lexicographic order of the key
 $(t + T_{lb}(v),\ \mathcal M,\ \mathcal W)$, ties broken by larger energy.
@@ -359,7 +363,158 @@ wear within $10^{-9}$); vectors equal within these tolerances keep the member
 that arrived first.  The front is thus mutually non-dominated up to rounding
 (BUG-1 of the cross-validation suite).
 
-## 6. Baselines
+## 6. Charging tariffs: price periods and voluntary holds
+
+A tariff (`model.md` §5) changes the *money* of a charging session, never its
+time or wear.  The money depends on the energy (the high-SoC factor; its
+threshold $e_h$ is a breakpoint of every charging function, hence a charging
+target of BLS and Pareto) and, with peak hours or busy hours, on the price
+period at the moment $\tau$ the vehicle joins the queue: $p_j(\tau) \in
+\{\text{off-peak}, \text{peak}\}$, money $M^{p_j(\tau)}_j(x, y)$.  Prices that
+depend on the clock (`P.tariff_time_dependent`) create a new decision: a
+vehicle may *hold* before it joins, until a cheaper period begins.  Holds
+cost time, and the question is which holds an exact planner must consider.
+Write $H_j(t)$ for the price changes of station $j$ in $(t, t + 24\,\text{h}]$,
+as trip times (`P.hold_candidates(j, t)`), and $J_j(t) = \{t\} \cup H_j(t)$
+for the *generated join times* of a vehicle that reaches $j$ at $t$.
+
+**Lemma 4 (holds never save time).**  Removing every hold from a plan --
+joining each queue on arrival, same walk, stations and targets -- gives a
+feasible plan that reaches every node no later and with the same energy.
+
+*Proof.*  Induction along the plan.  Energies do not depend on the clock, so
+they and the reserve checks are unchanged.  Let a stop be reached at
+$t' \le t$ (induction hypothesis; $t$ is the arrival in the original plan,
+which joined at $\tau \ge t$).  The new stop leaves the queue at
+$t' + W_j(t') \le t + W_j(t) \le \tau + W_j(\tau)$, by FIFO applied twice,
+and then takes the same set-up and charging time; drive times do not depend
+on the clock.  $\square$
+
+Prices do not enter the trip time, so the **time objective never holds**:
+BLS and BLS-A\* with objective time, CFP and CFP-A\* generate no holds, and
+their optimum does not depend on the prices at all -- except that the
+high-SoC breakpoint $e_h$ joins the target set of BLS (a finer target set is
+never worse; on the default 2 % grid $e_h = 0.8\,Q$ is already a target).
+CFP needs no change: the money of its plan is whatever `evaluate()`
+measures, in the period at the arrival time.  (BLS does not look at the
+clock-dependent money when it chooses among *equally fast* routes, so the
+fastest route it returns need not be the cheapest of them; its trip time is
+optimal regardless.)
+
+For the **cost objective** of BLS / BLS-A\* and for the **Pareto search**
+(money is always one of its criteria) a hold can pay: the balanced plan of
+the README example waits 2.4 minutes at İnegöl for the 20:00 price change
+and saves more than it loses.  When `P.tariff_time_dependent`, every station
+expansion of a label at trip time $t$ generates the usual charging targets
+for every join time $\tau \in J_j(t)$: wait $W_j(\tau)$, money of the period
+$p_j(\tau)$, and for the cost objective $\mathrm{VoT}\cdot(\tau - t)$ for the
+hold.  Lemma 5 shows that these join times are enough.
+
+**Lemma 5 (the earliest join in a period).**  Let a vehicle reach station
+$j$ at $t$ and let $\tau \ge t$ be any join time.  The earliest time
+$\kappa \ge t$ with $p_j(\kappa) = p_j(\tau)$ exists, lies in $J_j(t)$ and
+satisfies $\kappa \le \tau$.
+
+*Proof.*  The peak period is a finite union of half-open intervals
+$[a, b)$ on the daily clock, so both periods are unions of half-open
+intervals and the earliest time of a period at or after $t$ is attained.
+If $p_j(t) = p_j(\tau)$ then $\kappa = t$.  Otherwise $\kappa > t$ is the
+first instant of a maximal interval of period $p_j(\tau)$, i.e. a price
+change.  The pattern repeats every 24 h and $p_j(\tau)$ occurs (at $\tau$),
+so it occurs in $[t, t + 24\,\text{h})$: $\kappa \in H_j(t)$.  $\tau$ itself
+is a time $\ge t$ in that period, hence $\kappa \le \tau$.  $\square$
+
+In words: waiting is only worth it until a price change, and never past the
+first one that starts the price period one would have paid anyway.  A hold
+that ends anywhere else can be shortened to the start of its price period
+(the money stays, the queue is left no later by FIFO), or dropped.
+
+**Theorem 4 (exactness with holds).**  Let labels $A$ and $B$ at the same node
+satisfy $t_A \le t_B$, $m_A \le m_B$ (for Pareto: $\mathcal M_A \le \mathcal
+M_B$ and $\mathcal W_A \le \mathcal W_B$) and $x_A \ge x_B$, where $m$ is the
+weighted money and wear spent so far.  Then every completion of $B$ -- with
+holds until *arbitrary* times -- is matched by a completion of $A$ (or, where
+$A$ may not stop, of a label generated together with $A$) that only uses
+generated join times and reaches the destination no later, with no less
+energy, no more money and no more wear.
+
+*Proof.*  Follow $B$ event by event and keep the invariant (no later, no
+less energy, no more money and wear).  A *drive* keeps it as in Lemma 1.  A
+*stop* of $B$ at station $j$, reached at $t_B$, joining at $\tau_B \ge t_B$ in
+period $p = p_j(\tau_B)$ and charging from $x_B$ to $y$: if $y \le x_A$, $A$
+skips it.  Otherwise $A$ (reaching $j$ at $t_A \le t_B$) joins at the
+$\kappa \in J_j(t_A)$ of Lemma 5 for $\tau = \tau_B$: $\kappa \le \tau_B$ and
+$p_j(\kappa) = p$.  By FIFO, $A$ leaves the queue at $\kappa + W_j(\kappa)
+\le \tau_B + W_j(\tau_B)$; it charges from $x_A \ge x_B$ to the same $y$ in
+no more time ($F_j$ increasing), and pays the same price function $\varphi_p$
+on the sub-interval $[x_A, y] \subseteq [x_B, y]$, likewise for the wear.  Its
+hold is part of its trip time, which stays no later, so
+$\mathrm{VoT}\cdot T$ is ordered as well.  The remaining case is a stop that
+$A$ may not make: $A$ was created by a session at the same station $j$ in the
+same period $p$ (a label never restarts at its station in the same period,
+below).  Then $A$'s parent $C$ joined $j$ in period $p$ and also generated
+the target $y$ with the same join time; that label ends charging at
+$t_A - F_j(x_A) + F_j(y) \le \tau_B + W_j(\tau_B) + \sigma_j + F_j(y) -
+F_j(x_B)$ (as $t_A \le t_B \le \tau_B$ and $F_j(x_A) \ge F_j(x_B)$) with
+money $m_A + M^p_j(x_A, y) \le m_B + M^p_j(x_B, y)$, and continues in place
+of $A$.  $\square$
+
+Applied to the start label, Theorem 4 says that some optimal plan uses only
+generated join times; applied to a settled label and a popped one, that
+discarding dominated labels is exact.  So BLS and BLS-A\* with the cost
+objective return the minimum generalised cost over all plans with targets in
+$\mathcal Y$ and holds until any time, and the Pareto search returns the
+complete front over these plans.  The A\* potentials remain admissible and
+consistent: a hold is part of a stop transition, costs
+$\mathrm{VoT}\cdot\text{hold} \ge 0$ and does not change the energy, so the
+remaining lower bound $h(v, x)$ is unchanged; the charging rates in the
+potentials and in the Pareto completion bounds are the cheapest over both
+price periods (`P.cf_variants`).  The cross-validation suite checks the
+theorem against an exhaustive enumeration that holds until every price
+change, and on the smallest instances against one that may hold until every
+5-minute step of the next 24 hours (`tests/fuzz_report.md` §7).
+
+Two rules of BLS change with a clock-dependent tariff; both are needed for
+Theorem 4.
+
+* *Dominance of the cost objective is 3-D, also with static waits.*  With
+  constant prices and static waits BLS compares $(g, x)$ with $g =
+  \mathrm{VoT}\cdot t + m$: a later label is at a disadvantage only through
+  $\mathrm{VoT}\cdot t$, which $g$ already contains.  Under a clock-dependent
+  tariff it is also at a disadvantage through the prices it can still get:
+  a cheaper but later label $A$ ($g_A \le g_B$, $t_A > t_B$) may arrive after
+  the off-peak period has ended, which $B$ still catches, and could reach the
+  next one only by holding for hours.  Pruning $B$ would lose the optimum, so
+  BLS uses the rule $(m, t, x)$ of Section 1, as for time-dependent waits
+  (`P.time_dependent or P.tariff_time_dependent`).  The Pareto search keeps
+  $(t, \mathcal M, \mathcal W, x)$ apart anyway.
+* *A second session at the same station in the other period.*  The price of
+  a session is fixed when it joins the queue, so splitting a session at a
+  price change can pay: charge in the peak only what is needed until the peak
+  ends, then join the queue again at the off-peak price (and pay $W_j +
+  \sigma_j$ once more) -- the cost optimum of
+  `test_cost_optimum_restarts_at_the_same_station_when_the_peak_ends`.  A
+  label created by a stop at $j$ may therefore stop at $j$ again if the new
+  session joins in the other price period; in the same period the first
+  session could have charged on, so the argument of Section 1 still excludes
+  it.  `evaluate()` accepts such plans; at a single-station origin the first
+  session may then end below the reserve, as between consecutive stops at
+  different stations (Section 1).
+
+*Effort.*  Holds multiply the transitions of a station by up to
+$1 + |H_j(t)|$ (two price changes a day for one peak interval), and the 3-D
+dominance keeps more labels.  BLS-A\* answers the cost objective of the
+README example in under a second, but the complete (time, money) front of
+that 750 km trip creates about 6 million labels (85 s of search) on the
+default 2 % charging grid -- more than the viewer's budget of 1 million,
+hence `max_labels=10_000_000` in the README -- against fewer than 1 million
+(7 s) on the 5 % grid of the `tariffs` experiment.  A possible pruning, not
+implemented: skip a hold into a period that is nowhere cheaper than the
+current one (its price is no lower in every energy band); joining at once
+then finishes no later and pays no more, so Theorem 4 would still hold.  With the neutral `Tariff()`
+none of this applies: no breakpoint, no hold, the same labels as before.
+
+## 7. Baselines
 
 The baselines drive every edge at its fastest speed level, as a navigation
 system would (`fastest_level_only` in the label search they call); only the
@@ -385,7 +540,7 @@ exact planners trade speed for energy.
   representative of the metaheuristics that dominate applied EV-routing
   papers.
 
-## 7. How correctness is verified
+## 8. How correctness is verified
 
 1. An **independent evaluator** (`evaluate.py`) replays every plan from first
    principles; the objective an algorithm claims must match it.
@@ -401,6 +556,14 @@ exact planners trade speed for energy.
    between a slow and a fast charger can be found by dense scanning, and the
    exact dynamic programme over breakpoint energies for consecutive stops
    (Section 4).
+5. **Charging tariffs** (`tests/test_crossval_tariffs.py`,
+   `tests/fuzz_report.md` §7): random tariffs (high-SoC tier, peak
+   intervals that wrap midnight, busy hours) on the instances above, checked
+   against an oracle that re-derives periods, price changes and money from
+   the `Tariff` alone; the invariants of item 2 with holds, the time
+   objective never holding, monotonicity in the prices, and the brute force
+   of item 3 with holds until every price change (on the smallest instances
+   until every 5-minute step of the next 24 hours, Section 6).
 
 ## References
 

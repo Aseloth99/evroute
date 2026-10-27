@@ -348,6 +348,161 @@ def exp_vehicles(out: Path, quick: bool) -> dict[str, Any]:
     return {"rows": len(rows)}
 
 
+# ============================================================ E11 tariffs
+#: Order and names of the tariffs compared by :func:`exp_tariffs`.
+TARIFF_NAMES = ("flat", "tier", "peak", "tier+peak")
+#: SoC above which charged energy counts as "above 80 %" in the tariff rows.
+TARIFF_HIGH_SOC = 0.8
+
+
+def tariff_set() -> dict[str, Any]:
+    """The tariffs of the ``tariffs`` experiment, built from the illustrative
+    :data:`~evroute.generators.presets.DEMO_TARIFF`: flat prices, its 80 % tier
+    alone, its evening peak alone (no extra high-SoC factor) and both."""
+    from ..generators.presets import DEMO_TARIFF
+    from ..scenario import Tariff
+
+    d = DEMO_TARIFF
+    return {
+        "flat": Tariff(),
+        "tier": Tariff(high_soc=d.high_soc, high_soc_factor=d.high_soc_factor),
+        "peak": Tariff(peak_hours=d.peak_hours, peak_factor=d.peak_factor),
+        "tier+peak": d,
+    }
+
+
+def tariff_metrics(plan, capacity_kwh: float, vot_per_s: float) -> dict[str, Any]:
+    """What a tariff changes in ``plan``: the highest SoC charged to, the energy
+    charged above :data:`TARIFF_HIGH_SOC`, voluntary holds, sessions priced in
+    the peak and ``money_wear`` = generalised cost minus the value of time
+    (weighted charging money + battery-wear money)."""
+    hi = TARIFF_HIGH_SOC * capacity_kwh
+    stops = plan.stops if plan.feasible else []
+    return {
+        "max_soc": max((s.soc_out for s in stops), default=math.nan),
+        "above80_kwh": sum(max(0.0, s.energy_out_kwh - max(s.energy_in_kwh, hi)) for s in stops),
+        "holds": sum(1 for s in stops if s.hold_s > 0.0),
+        "hold_min": plan.hold_time_s / 60.0,
+        "peak_stops": sum(1 for s in stops if s.peak),
+        "money_wear": plan.generalized_cost - vot_per_s * plan.total_time_s if plan.feasible else math.nan,
+    }
+
+
+def exp_tariffs(out: Path, quick: bool) -> dict[str, Any]:
+    """Charging tariffs ("the 80 % rule", peak hours): time- and cost-optimal
+    plans and the (time, money) Pareto front by departure time.
+
+    Every search runs on a 5 % SoC charging grid (so that the exact fronts
+    fit the viewer's label budget); a front stopped by the budget is written
+    with ``complete = 0``.  ``results.csv`` has one row per plan (``kind`` =
+    ``time``, ``cost`` or ``pareto``), ``fronts.csv`` one row per front member.
+    """
+    from ..viz.export import VIEWER_OPTIONS
+
+    tariffs = tariff_set()
+    names = ["flat", "tier+peak"] if quick else list(TARIFF_NAMES)
+    hours = [14, 18] if quick else list(range(6, 23, 2))
+    step = 0.05
+    budget = 200_000 if quick else int(VIEWER_OPTIONS["pareto"]["max_labels"])
+    crit = ("time", "money")
+    rows: list[dict[str, Any]] = []
+    members: list[dict[str, Any]] = []
+    showcase: dict[str, tuple[float, int, Any, list[Any]]] = {}
+    for case in CASES[:2]:
+        for h in hours:
+            for name in names:
+                sc = _scenario(case, departure=f"{h:02d}:00", tariff=tariffs[name]).with_preferences(charge_step_soc=step)
+                P = sc.prepare()
+                key = {"case": case, "departure_h": h, "tariff": name}
+                plans = {"time": safe_plan(sc, "bls-astar"),
+                         "cost": safe_plan(sc.with_preferences(objective="cost"), "bls-astar")}
+                for kind, p in plans.items():
+                    if p is not None:
+                        rows.append({**plan_row(p, **key, kind=kind), **tariff_metrics(p, P.capacity, P.vot_per_s)})
+                pf = safe_plan(sc.with_preferences(objective="cost"), "pareto", criteria=crit, max_labels=budget)
+                if pf is None:
+                    continue
+                ex = pf.stats.extra if pf.stats else {}
+                front = sorted(pf.alternatives or ([pf] if pf.feasible else []), key=lambda a: (a.total_time_s, a.money))
+                st = pf.stats
+                rows.append({**key, "kind": "pareto", "algorithm": pf.algorithm, "feasible": int(bool(front)),
+                             "front_size": len(front), "complete": int(ex.get("status") == "exhausted"),
+                             "runtime_ms": st.runtime_s * 1000.0 if st else math.nan,
+                             "settled": st.settled if st else 0, "generated": st.generated if st else 0,
+                             "status": str(ex.get("status", ""))})
+                for i, a in enumerate(front):
+                    m = tariff_metrics(a, P.capacity, P.vot_per_s)
+                    members.append({**key, "member": i, "time_min": a.total_time_s / 60.0, "money": a.money,
+                                    "soh_pct": a.soh_total_pct, "stops": a.num_stops, "holds": m["holds"],
+                                    "hold_min": m["hold_min"], "max_soc": m["max_soc"], "above80_kwh": m["above80_kwh"]})
+                # the viewer shows the trip whose cost-optimal plan saves most under the full tariff:
+                # the cost objective's BLS-A* plan and the front (its fastest member is the time optimum)
+                t, c = plans["time"], plans["cost"]
+                if name == names[-1] and t is not None and c is not None and t.feasible and c.feasible:
+                    gain = t.money - c.money
+                    if case not in showcase or gain > showcase[case][0]:
+                        showcase[case] = (gain, h, sc.with_preferences(objective="cost"), [c, pf])
+            print(f"  tariffs: {case} {h:02d}:00 done")
+        write_csv(out / "results.csv", rows)  # after every case: a long run keeps what it measured
+        write_csv(out / "fronts.csv", members)
+    summary: dict[str, Any] = {"tariffs": {n: tariffs[n].to_dict() for n in names}, "high_soc": TARIFF_HIGH_SOC,
+                               "charge_step_soc": step, "pareto_max_labels": budget, "criteria": list(crit),
+                               "cases": {}}
+    for case in CASES[:2]:
+        per: dict[str, Any] = {}
+        for name in names:
+            sel = {k: [r for r in rows if r["case"] == case and r["tariff"] == name and r["kind"] == k]
+                   for k in ("time", "cost", "pareto")}
+            per[name] = {
+                "time_money_mean": describe(r["money"] for r in sel["time"] if r["feasible"]).get("mean"),
+                "cost_money_mean": describe(r["money"] for r in sel["cost"] if r["feasible"]).get("mean"),
+                "cost_holds": sum(r["holds"] for r in sel["cost"]),
+                "front_sizes": [r["front_size"] for r in sel["pareto"]],
+                "incomplete_fronts": sum(1 for r in sel["pareto"] if not r["complete"]),
+            }
+        if case in showcase:
+            per["viewer_departure_h"] = showcase[case][1]
+        summary["cases"][case] = per
+    write_json(out / "summary.json", summary)
+    tex = []
+    for case, per in summary["cases"].items():
+        for name in names:
+            v = per[name]
+            sizes = v["front_sizes"]
+            tex.append([case.replace("turkey-", ""), name, v["time_money_mean"], v["cost_money_mean"], v["cost_holds"],
+                        f"{min(sizes)}--{max(sizes)}" if sizes else "--", v["incomplete_fronts"]])
+    (out / "table.tex").write_text(
+        latex_table(tex, ["case", "tariff", "money (time-opt.)", "money (cost-opt.)", "holds", "front size", "incomplete"],
+                    "Charging tariffs: mean charging cost of the time- and cost-optimal plans over the departures, "
+                    "voluntary holds and (time, money) front sizes.", "tab:tariffs", "llrrrrr")
+    )
+    for case, (_, h, sc, plans) in showcase.items():
+        try:
+            from ..viz.export import build_viewer_html
+
+            build_viewer_html(sc, [p for p in plans if p is not None], out / case / "viewer.html", lang="tr",
+                              title=f"{case_title(case)} · {h:02d}:00")
+        except Exception as exc:
+            print(f"  ! viewer for {case}: {exc}")
+    if _has_mpl() and rows:
+        for case in CASES[:2]:
+            series = {}
+            for name in names:
+                sel = sorted((r for r in rows if r["case"] == case and r["tariff"] == name and r["kind"] == "time"),
+                             key=lambda r: r["departure_h"])
+                series[name] = ([r["departure_h"] for r in sel], [r["money"] if r["feasible"] else math.nan for r in sel])
+            plots.line_plot(series, "departure hour", "charging cost of the fastest plan", out / f"fig_money_{case}")
+    return {"rows": len(rows), "members": len(members)}
+
+
+def case_title(case: str) -> str:
+    """``turkey-karaman-istanbul`` -> ``Karaman → İstanbul`` (from the preset's defaults)."""
+    from ..generators.presets import PRESETS
+
+    d = (PRESETS[case].info().get("defaults") or {}) if case in PRESETS else {}
+    return f"{d['origin']} → {d['destination']}" if d.get("origin") and d.get("destination") else case
+
+
 EXPERIMENTS: dict[str, Callable[[Path, bool], dict[str, Any]]] = {
     "case-studies": exp_case_studies,
     "scalability": exp_scalability,
@@ -359,6 +514,7 @@ EXPERIMENTS: dict[str, Callable[[Path, bool], dict[str, Any]]] = {
     "robustness": exp_robustness,
     "eco-speed": exp_eco_speed,
     "vehicles": exp_vehicles,
+    "tariffs": exp_tariffs,
 }
 
 

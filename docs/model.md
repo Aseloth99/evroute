@@ -93,10 +93,90 @@ their charging functions are not concave there.  The exact planners do not
 need concavity (CFP's default candidate set covers rising power,
 [`algorithms.md` §4](algorithms.md#4-cfp--charging-function-propagation-continuous-charging)).  Charging
 from $x$ to $y$ takes $F_j(y) - F_j(x)$ seconds, costs
-$\pi_j (y - x)/\eta_c$ money and causes wear $\int_x^y \omega_j(e)\,de$
-(`charging.ChargingFunction`).
+$\pi_j (y - x)/\eta_c$ money (with a charging tariff: §5) and causes wear
+$\int_x^y \omega_j(e)\,de$ (`charging.ChargingFunction`).
 
-## 5. Queues
+## 5. Charging tariffs
+
+A single price $\pi_j$ per kWh hides two practices that make some charging
+sessions dearer than others.  *The 80 % rule*: above about 80 % SoC the
+charging power falls (§4), so a car that keeps charging there occupies a
+fast charger for little energy; operators discourage it with a higher
+price, and the drivers waiting behind it do not like it either.  *Peak
+hours*: chargers and the grid are busiest at certain times of day, and
+energy costs more then.  A `scenario.Tariff` describes both; the default
+`Tariff()` is neutral and changes nothing.
+
+**Price factors.**  Let $e_h = s_h Q$ be the energy at the high-SoC
+threshold $s_h$ (`high_soc`, default 0.8).  A kWh stored at station $j$ in
+price period $p \in \{\text{off-peak}, \text{peak}\}$ costs
+$\pi_j\,\varphi_p(e)/\eta_c$ with
+
+| period | $e < e_h$ | $e \ge e_h$ |
+|---|---|---|
+| off-peak | $1$ | $f_h$ (`high_soc_factor`) |
+| peak | $f_p$ (`peak_factor`) | $f_p \cdot f_{ph}$ (`peak_high_soc_factor`, $= f_h$ if not given) |
+
+so the money of a session from $x$ to $y$ is
+$M_j^p(x, y) = \int_x^y \pi_j \varphi_p(e)/\eta_c \, de$, piecewise linear
+in both energies.  When the factor changes at $e_h$ (in either period),
+every charging function gets an extra energy breakpoint at $e_h$: the SoC
+bin that contains it is split into two bins with the same power and wear,
+so $F_j$ and the wear are unchanged, and each bin carries its own money per
+kWh.  $e_h$ thereby becomes a charging target of BLS and the Pareto search
+(their default target set contains the breakpoints of every charging
+function), and "charge to exactly 80 %" is a plan they can find.
+
+**Price periods.**  `peak_hours` are daily clock intervals $[a, b)$ in hours,
+e.g. `((16, 20),)`; an interval with $a > b$ wraps midnight
+(`(22, 6)` $= [22, 24) \cup [0, 6)$), one with $a = b$ is empty, and every
+interval repeats every day.
+With `busy_utilisation` $= u^*$ a station is also in its peak period during
+every clock hour $h$ in which the expected utilisation of its queue model
+(§6, `Station.utilisation`)
+
+$$ \rho_j(h) = \frac{\lambda_j(h)}{c_j\,\mu_j} $$
+
+is at least $u^*$, so congestion pricing follows the hourly demand profiles
+of the Erlang-C model and the peak periods differ from station to station.
+The union of these intervals is the peak period $\mathcal P_j \subseteq
+[0, 24\,\text{h})$ of station $j$; all other times are off-peak.  The
+*price changes* of $j$ are the clock times at which $\mathcal P_j$ begins or
+ends (none if it is empty or the whole day).  The clock of trip time $t$ is
+$c(t) = (t_{dep} + t) \bmod 24\,\text{h}$, the clock of the queue model.
+
+**The join-time rule.**  The price period of a charging session is fixed
+when the vehicle joins the station's queue, at trip time $\tau$:
+$p_j(\tau) = \text{peak}$ iff $c(\tau) \in \mathcal P_j$, and the whole
+session is priced with $\varphi_{p_j(\tau)}$, however long it lasts.
+A car that joins at 15:52 and charges until 19:03 pays the off-peak price
+for all of it, although a 16:00-20:00 peak began meanwhile (the cheapest
+plan of the README example).
+
+**Voluntary holds.**  A stop may wait before it joins the queue: a hold
+until $\tau \ge t$, the arrival time (`ChargeDecision.hold_until_s`; `None`
+or a time $\le t$ means no hold).  A stop charging from $x$ to $y$ then
+takes
+
+$$ (\tau - t) + W_j(\tau) + \sigma_j + F_j(y) - F_j(x) \ \text{seconds}, $$
+
+with the expected wait at the join time $\tau$, costs $M_j^{p_j(\tau)}(x, y)$
+and causes the usual wear.  The hold is part of the trip time, so the
+generalised cost pays $\mathrm{VoT}\cdot(\tau - t)$ for it.  With FIFO queues
+($t + W_j(t)$ non-decreasing) a hold never makes a stop end earlier: it only
+pays when the vehicle joins in a cheaper price period.  Which holds the
+exact planners consider, and why that is enough, is the subject of
+[`algorithms.md` §6](algorithms.md#6-charging-tariffs-price-periods-and-voluntary-holds).
+
+`Tariff.validate()` (called by `Scenario.validate()`) requires
+$0 < s_h < 1$, all factors $> 0$, peak hours in $[0, 24]$ and $u^* > 0$.
+The scenario JSON has a `"tariff"` key only for a tariff other than
+`Tariff()`.  The demonstration tariff `generators.presets.DEMO_TARIFF`
+($f_h = 1.3$, peak 16:00-20:00 with $f_p = 1.15$ and $f_{ph} = 2$, i.e.
+2.3 times the price above 80 % in the peak) uses illustrative, synthetic
+values, like the station prices of the Turkey case study.
+
+## 6. Queues
 
 Station $j$ has $c_j$ plugs, mean session length $1/\mu_j$ and an hourly
 arrival rate $\lambda_j(h)$ (daily sessions × demand profile).  The expected
@@ -110,7 +190,7 @@ $t + W_j(t)$ is non-decreasing (FIFO), which keeps time-dependent
 label-setting exact (`queueing.WaitProfile`).  Each stop also pays a set-up
 time $\sigma_j$ (parking, plugging, payment).
 
-## 6. Battery wear
+## 7. Battery wear
 
 SoH loss per kWh of throughput (`vehicle.AgingModel`):
 
@@ -121,18 +201,19 @@ e^{k_c (c - c_0)^+}\;\Big(1 + k_s \tfrac{(s - s_0)^+}{1 - s_0}\Big)\;
 with C-rate $c = p/Q$ and SoC $s$; driving uses $c = 0.3$, $s = 0.5$.  Wear is
 monetised with a cost per SoH percentage point.
 
-## 7. Objectives
+## 8. Objectives
 
 A route is a walk $v_0 = o, \ldots, v_n = d$ with speed levels and a set of
-charging stops $(i, j, y)$ = (position, station, target energy).  With trip
-time $\mathcal T$, money $\mathcal M$ and wear $\mathcal W$:
+charging stops $(i, j, y)$ = (position, station, target energy), each with an
+optional hold (§5).  With trip time $\mathcal T$ (holds included), money
+$\mathcal M$ (priced with the tariff, §5) and wear $\mathcal W$:
 
 * **time**: minimise $\mathcal T$;
 * **generalised cost**: minimise
   $\mathrm{VoT}\cdot\mathcal T + w_m \mathcal M + w_w\, C_{SoH}\,\mathcal W$;
 * **multi-criteria**: the Pareto set of $(\mathcal T, \mathcal M, \mathcal W)$.
 
-## 8. Uncertainty (evaluation only)
+## 9. Uncertainty (evaluation only)
 
 For robustness analysis, the *nominal* consumption $c > 0$ of each edge is
 multiplied by $\xi_{trip}\,\xi_e$ and regeneration ($c \le 0$) is divided by

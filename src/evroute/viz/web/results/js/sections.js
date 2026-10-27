@@ -703,6 +703,213 @@
     });
   }
 
+  /* ============================================================== tariffs */
+  /** Tariff colour (--tariff-<i> in the theme's order; flat prices = muted ink). */
+  function tariffColor(key) {
+    const keys = Object.keys((I.payload && I.payload.theme && I.payload.theme.tariffs) || {});
+    const i = keys.indexOf(key);
+    return i >= 0 ? `var(--tariff-${i})` : 'var(--text-2)';
+  }
+
+  /** "×1,3 above 80 % · peak 16:00–20:00 ×1,15 · ×2,3 above 80 % in the peak" from a Tariff dict. */
+  function tariffSpec(spec) {
+    if (!spec) return '';
+    const f = (x) => `×${I.num(x, Math.abs(x * 100 - Math.round(x * 100)) > 1e-9 ? 3 : (Math.abs(x * 10 - Math.round(x * 10)) > 1e-9 ? 2 : 1))}`;
+    const hs = I.pct(100 * (spec.high_soc || 0.8), 0);
+    const parts = [];
+    if (finite(spec.high_soc_factor) && spec.high_soc_factor !== 1) parts.push(I.t('ta_spec_tier', { f: f(spec.high_soc_factor), s: hs }));
+    const peaks = (spec.peak_hours || []).map(([a, b]) => `${I.hour(a)}–${I.hour(b)}`);
+    if (finite(spec.busy_utilisation)) peaks.push(I.t('ta_spec_busy', { u: I.num(spec.busy_utilisation, 2) }));
+    if (peaks.length) {
+      parts.push(I.t('ta_spec_peak', { h: peaks.join(', '), f: f(spec.peak_factor || 1) }));
+      const hi = (spec.peak_factor || 1) * (finite(spec.peak_high_soc_factor) ? spec.peak_high_soc_factor : (spec.high_soc_factor || 1));
+      if (Math.abs(hi - (spec.peak_factor || 1)) > 1e-12) parts.push(I.t('ta_spec_both', { f: f(hi), s: hs }));
+    }
+    return parts.length ? parts.join(' · ') : I.t('ta_spec_flat');
+  }
+
+  function tariffs(sec, ctx) {
+    const d = sec.data;
+    if (!d || !d.cases.length || !d.tariffs.length) return empty(ctx.body);
+    const st = ctx.state;
+    if (!d.cases.some((c) => c.id === st.case)) st.case = d.cases[0].id;
+    const tkeys = d.tariffs.map((t) => t.key);
+    if (!tkeys.includes(st.tariff)) st.tariff = d.main && tkeys.includes(d.main) ? d.main : tkeys[tkeys.length - 1];
+    st.hidden = st.hidden || new Set();
+    const tt = (k) => I.tx((d.tariffs.find((t) => t.key === k) || { title: k }).title);
+    const pt = (c, k, h) => ((c.series[k] || []).find((p) => p.hour === h) || null);
+
+    const pickCase = d.cases.length > 1 ? seg(I.t('case'), d.cases.map((c) => ({ value: c.id, label: c.title, color: caseColor(c.case_index) })), st.case,
+      (v) => { st.case = v; draw(); }) : null;
+    const head = U.el('div', { class: 'case-head' });
+    ctx.body.appendChild(U.el('div', { class: 'case-bar ta-bar' }, pickCase, head));
+    // the tariff picker drives every chart below except the first (which shows all tariffs)
+    const tseg = seg(I.t('tariff'), d.tariffs.map((t) => ({ value: t.key, label: tt(t.key), color: tariffColor(t.key) })), st.tariff,
+      (v) => { st.tariff = v; draw(); });
+    ctx.body.appendChild(U.el('div', { class: 'ta-pick' }, U.el('span', { class: 'ta-pick-label', text: I.t('tariff') }), tseg));
+    const specs = U.el('ul', { class: 'ta-specs' }, d.tariffs.map((t) => U.el('li', {},
+      U.el('i', { class: `ta-key${t.key === 'flat' ? ' ta-key-flat' : ''}`, style: { '--c': tariffColor(t.key) } }),
+      U.el('b', { text: tt(t.key) }), U.el('span', { text: tariffSpec(t.spec) }))));
+    ctx.body.appendChild(specs);
+    const host = U.el('div', { class: 'case-detail' });
+    ctx.body.appendChild(host);
+
+    function draw() {
+      const c = d.cases.find((x) => x.id === st.case);
+      const cur = c.currency;
+      head.replaceChildren(...[
+        d.cases.length > 1 ? U.el('span', { class: 'case-dot', style: { background: caseColor(c.case_index) } }) : null,
+        U.el('b', { text: c.title }),
+        U.el('span', { class: 'muted', text: [finite(d.step_pct) ? I.t('ta_grid', { s: I.pct(d.step_pct, 0) }) : '', I.t('ta_deps', { n: d.hours.length })].filter(Boolean).join(' · ') }),
+        c.viewer ? U.el('a', { class: 'btn-sm btn-link', href: c.viewer, target: '_blank', rel: 'noopener', title: finite(c.viewer_hour) ? `${I.t('departure')} ${I.hour(c.viewer_hour)}` : null },
+          U.svg('M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5'), I.t('open_viewer')) : null].filter(Boolean));
+      const hours = d.hours.filter((h) => tkeys.some((k) => pt(c, k, h)));
+      if (!hours.includes(st.hour)) {
+        const held = (c.series[st.tariff] || []).find((p) => p.cost && p.cost.holds > 0);
+        st.hour = finite(c.viewer_hour) && hours.includes(c.viewer_hour) ? c.viewer_hour : (held ? held.hour : hours[0]);
+      }
+
+      // 1. what the fastest plan pays under every tariff, by departure time
+      const c1 = card(I.t('ta_money_by_dep'));
+      // 2. fastest versus cost-optimal plan under the selected tariff
+      const c2 = card(`${I.t('ta_fast_vs_cost')} · ${tt(st.tariff)}`);
+      const chips = U.el('div', { class: 'chips ta-chips' });
+      host.replaceChildren(grid('cols-2', c1, c2), chips);
+      const drawLines = () => RC.lines(c1.host, {
+        aria: `${I.t('ta_money_by_dep')} · ${c.title}`, hidden: st.hidden, endLabels: false,
+        head: (x) => `${I.t('departure')} ${I.hour(x)}`,
+        x: { label: I.t('ax_hour'), fmt: (v) => I.hour(v), ticks: hours, domain: hours.length > 1 ? [hours[0], hours[hours.length - 1]] : [hours[0] - 1, hours[0] + 1] },
+        y: { label: `${I.t('ax_money')} [${cur || ''}]`, tipFmt: (v) => I.money(v, cur) },
+        series: d.tariffs.map((t) => ({ key: t.key, label: tt(t.key), color: tariffColor(t.key), dash: t.key === 'flat',
+          points: hours.map((h) => { const p = pt(c, t.key, h); return { x: h, y: p && p.time && p.time.feasible ? p.time.money : null }; }) })),
+        extraRows: (x) => {
+          const p = pt(c, 'flat', x) || pt(c, tkeys[0], x);
+          return p && p.time && p.time.feasible ? [[null, I.t('trip_time'), I.minutes(p.time.time_min)]] : [];
+        },
+      });
+      RC.legend(c1.legend, d.tariffs.map((t) => ({ key: t.key, label: tt(t.key), color: tariffColor(t.key), kind: t.key === 'flat' ? 'dash' : 'line' })),
+        { hidden: st.hidden, onToggle: drawLines, hosts: () => [c1.host] });
+      drawLines();
+      c1.foot.hidden = false;
+      c1.foot.textContent = I.t('ta_money_foot');
+
+      const color = tariffColor(st.tariff);
+      const ser = (c.series[st.tariff] || []).filter((p) => hours.includes(p.hour));
+      RC.legend(c2.legend, [
+        { key: 'time', label: I.t('time_opt'), color, kind: 'ring' },
+        { key: 'cost', label: I.t('cost_opt'), color, kind: 'dot' },
+      ]);
+      RC.dumbbell(c2.host, {
+        aria: `${I.t('ta_fast_vs_cost')} · ${c.title} · ${tt(st.tariff)}`,
+        categories: hours.map((h) => ({ key: h, label: I.hour(h) })),
+        a: { label: I.t('time_opt'), color }, b: { label: I.t('cost_opt'), color },
+        pairs: ser.map((p) => {
+          const a = p.time && p.time.feasible ? p.time : null, b = p.cost && p.cost.feasible ? p.cost : null;
+          return { cat: p.hour, a: a ? a.money : null, b: b ? b.money : null, tip: {
+            head: `${I.t('departure')} ${I.hour(p.hour)} · ${tt(st.tariff)}`,
+            rows: [
+              [color, I.t('time_opt'), a ? `${I.money(a.money, cur)} · ${I.minutes(a.time_min)}` : '–', 'ring'],
+              [color, I.t('cost_opt'), b ? `${I.money(b.money, cur)} · ${I.minutes(b.time_min)}` : '–', 'dot'],
+              a && b ? [null, I.t('saving'), `${I.money(a.money - b.money, cur)} · +${I.minutes(b.time_min - a.time_min)}`] : null,
+              b && b.holds ? ['var(--c-hold)', I.t('hold'), I.minutes(b.hold_min), 'rect'] : null,
+              a && b ? [null, I.t('above80'), `${I.num(a.above80_kwh, 1)} → ${I.num(b.above80_kwh, 1)} kWh`] : null,
+            ] } };
+        }),
+        y: { label: `${I.t('ax_money')} [${cur || ''}]`, zero: false },
+        x: { label: I.t('ax_hour') },
+      });
+      c2.foot.hidden = false;
+      c2.foot.textContent = I.t('ta_cost_foot');
+
+      // key numbers of the selected case and tariff
+      const both = ser.filter((p) => p.time && p.time.feasible && p.cost && p.cost.feasible);
+      const held = both.filter((p) => p.cost.holds > 0);
+      const longest = held.length ? held.reduce((m, p) => (p.cost.hold_min > m.cost.hold_min ? p : m), held[0]) : null;
+      const fr = ser.filter((p) => p.front);
+      const meanOf = (xs) => (xs.length ? xs.reduce((s, x) => s + x, 0) / xs.length : null);
+      chips.replaceChildren(...statChips([
+        [I.t('ta_saving_mean'), both.length ? I.money(meanOf(both.map((p) => p.time.money - p.cost.money)), cur) : '–', null],
+        [I.t('ta_holding'), `${held.length}/${both.length}`, held.length ? 'hold' : null],
+        [I.t('ta_longest_hold'), longest ? `${I.minutes(longest.cost.hold_min)} · ${I.hour(longest.hour)}` : '–', null],
+        [I.t('ta_above80_mean'), both.length ? `${I.num(meanOf(both.map((p) => p.time.above80_kwh || 0)), 1)} → ${I.num(meanOf(both.map((p) => p.cost.above80_kwh || 0)), 1)} kWh` : '–', null],
+        [I.t('ta_fronts_complete'), `${fr.filter((p) => p.front.complete).length}/${fr.length}`, null],
+      ]).children);
+
+      // 3. the (time, money) front of one departure
+      const hseg = seg(I.t('departure'), hours.map((h) => ({ value: h, label: I.hour(h) })), st.hour, (v) => { st.hour = v; drawFront(); });
+      const frontBox = U.el('div');
+      host.appendChild(U.el('div', { class: 'ta-pick' }, U.el('span', { class: 'ta-pick-label', text: I.t('departure') }), hseg));
+      host.appendChild(frontBox);
+
+      function drawFront() {
+        const p = pt(c, st.tariff, st.hour);
+        const pts = d.fronts[`${c.id}|${st.hour}|${st.tariff}`] || [];
+        const c3 = card(`${I.t('ta_front')} · ${I.hour(st.hour)} · ${tt(st.tariff)}`, { span: 2 });
+        const side = U.el('div', { class: 'pa-side' });
+        frontBox.replaceChildren(grid('cols-3', c3, U.el('div', { class: 'cc pa-cards' }, side)));
+        const info = p && p.front;
+        if (!pts.length) {
+          c3.host.appendChild(U.el('p', { class: 'sec-empty', text: info ? I.t('ta_front_empty', { n: I.num(d.budget || 0, 0) }) : I.t('no_data') }));
+        } else {
+          const ab = pts.map((q) => q[4]).filter(finite);
+          const a0 = ab.length ? Math.min(...ab) : 0, a1 = ab.length ? Math.max(...ab) : 0;
+          const tip = (q, i) => ({ head: `${I.t('member')} ${i + 1} / ${pts.length}`, rows: [
+            [color, I.t('trip_time'), I.minutes(q[0]), 'dot'],
+            [color, I.t('money'), I.money(q[1], cur), 'dot'],
+            q[2] > 0 ? ['var(--c-hold)', I.t('hold'), I.minutes(q[2]), 'rect'] : null,
+            [null, I.t('above80'), `${I.num(q[4], 1)} kWh`],
+            [null, I.t('max_soc'), I.pct(100 * q[3], 0)],
+            [null, I.t('stops'), I.num(q[5], 0)]] });
+          let cheapest = 0;
+          pts.forEach((q, i) => { if (q[1] < pts[cheapest][1]) cheapest = i; });
+          const refs = [];
+          if (p && p.cost && p.cost.feasible) {
+            refs.push({ x: p.cost.time_min, y: p.cost.money, label: I.t('cost_opt'), color: 'var(--text)',
+              tip: { rows: [['var(--text)', I.t('trip_time'), I.minutes(p.cost.time_min), 'diamond'], ['var(--text)', I.t('money'), I.money(p.cost.money, cur), 'diamond'],
+                p.cost.holds ? ['var(--c-hold)', I.t('hold'), I.minutes(p.cost.hold_min), 'rect'] : null].filter(Boolean) } });
+          }
+          RC.legend(c3.legend, [
+            { key: 'front', label: `${I.algo('pareto')} · ${I.t('front_members', { n: pts.length })}`, color, kind: 'dot' },
+            { key: 'size', label: `${I.t('above80')}: ${I.num(a0, 1)}–${I.num(a1, 1)} kWh`, color, kind: 'size' },
+            ...(refs.length ? [{ key: 'cost', label: I.t('cost_opt'), color: 'var(--text)', kind: 'diamond' }] : []),
+          ]);
+          RC.scatter(c3.host, {
+            aria: `${I.t('ta_front')} · ${c.title} · ${I.hour(st.hour)} · ${tt(st.tariff)}`,
+            color, line: 'stair', sizeDomain: [a0, a1],
+            points: pts.map((q, i) => ({ x: q[0], y: q[1], s: q[4], tip: tip(q, i), mark: i === 0 || i === cheapest })),
+            refs,
+            notes: [{ i: 0, text: I.t('fastest') }, { i: cheapest, text: I.t('cheapest') }],
+            x: { label: `${I.t('trip_time')} [${I.t('unit_h')}:${I.t('unit_min')}]`, fmt: (v) => I.hm(v), time: true },
+            y: { label: `${I.t('ax_money')} [${cur || ''}]` },
+          });
+          const nHold = pts.filter((q) => q[2] > 0).length;
+          const foot = [];
+          if (nHold) foot.push(I.t('ta_members_hold', { k: nHold, n: pts.length }));
+          if (info && !info.complete) foot.push(I.t('ta_incomplete', { n: I.num(d.budget || 0, 0), m: pts.length }));
+          c3.foot.hidden = !foot.length;
+          c3.foot.textContent = foot.join(' · ');
+          if (info && !info.complete) c3.foot.classList.add('ta-warn');
+          // side cards: fastest and cheapest members, and the cost-optimal plan
+          const card3 = (tag, q, extra) => U.el('div', { class: 'pa-card' },
+            U.el('div', { class: 'pa-card-head' }, U.el('span', { class: 'pa-tag', text: tag }), extra ? U.el('span', { class: 'muted', text: extra }) : null),
+            U.el('div', { class: 'pa-grid' },
+              U.el('div', {}, U.el('small', { text: I.t('trip_time') }), U.el('b', { text: I.minutes(q.t) })),
+              U.el('div', {}, U.el('small', { text: I.t('money') }), U.el('b', { text: I.money(q.m, cur) })),
+              U.el('div', {}, U.el('small', { text: I.t('hold') }), U.el('b', { text: q.h > 0 ? I.minutes(q.h) : '–' })),
+              U.el('div', {}, U.el('small', { text: I.t('above80') }), U.el('b', { text: `${I.num(q.a, 1)} kWh` }))));
+          const mem = (q) => ({ t: q[0], m: q[1], h: q[2], a: q[4] });
+          side.appendChild(card3(I.t('fastest'), mem(pts[0]), '#1'));
+          if (cheapest !== 0) side.appendChild(card3(I.t('cheapest'), mem(pts[cheapest]), `#${cheapest + 1}`));
+          if (p && p.cost && p.cost.feasible) {
+            side.appendChild(card3(I.t('cost_opt'), { t: p.cost.time_min, m: p.cost.money, h: p.cost.hold_min, a: p.cost.above80_kwh }, 'BLS-A*'));
+          }
+        }
+      }
+      drawFront();
+    }
+    draw();
+  }
+
   EVR.RS = {
     'case-studies': caseStudies,
     scalability,
@@ -714,6 +921,7 @@
     robustness,
     'eco-speed': ecoSpeed,
     vehicles,
-    helpers: { card, grid, seg, empty, algoColor, caseColor },
+    tariffs,
+    helpers: { card, grid, seg, empty, algoColor, caseColor, tariffColor },
   };
 })(window.EVR = window.EVR || {});

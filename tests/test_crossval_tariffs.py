@@ -4,11 +4,13 @@ prices that depend on the state of charge and on the clock.
 Every instance of the cross-validation suite (generators, vehicles, temperatures, queue
 models, speed levels, stacked and origin stations, ...) gets a random
 :class:`~evroute.scenario.Tariff`: a high-SoC tier on or off (``high_soc`` 0.2..0.95,
-factors 0.8..3), zero to two peak intervals placed around the trip (wrapping midnight, all
-day, ``(24, x)``), peak factors 0.6..4 with or without a high-SoC factor of their own, and
-busy hours from the queue model (``busy_utilisation`` between two hourly utilisations of
-the stations).  Most instances use the cost objective, where prices matter, with a value of
-time of 2..40 per hour, so that holding for a cheaper period is often worth it.
+factors 0.8..3), zero to two peak intervals (wrapping midnight, all day, ``(24, x)``),
+peak factors 0.3..4 with or without a high-SoC factor of their own, and busy hours from the
+queue model (``busy_utilisation`` between two hourly utilisations of the stations).  The
+peak is usually aimed at a stop of the fastest route without a tariff: dear at the arrival
+and ending soon after it, or a cheap period that begins soon after it.  Most instances use
+the cost objective, where prices matter, with a value of time of 2..40 per hour, so that
+holding for a cheaper period is often worth it.
 
 The oracle never reads the price tables of :class:`~evroute.scenario.PreparedScenario`
 (``cf``, ``cf_peak``, ``money_cf``, ``is_peak``, ``hold_candidates``):
@@ -27,7 +29,9 @@ Invariants (ids in the failure messages)
   components add up.
 * **T2 model** -- the oracle's periods, hold candidates, money and targets equal the
   prepared scenario's; charging times and wear equal those of the neutral tariff; the
-  neutral tariff and tariffs that change no price give identical plans and statistics.
+  bounds' cheapest money per kWh covers both periods; the queues are FIFO (the premise of
+  the completeness argument); the neutral tariff and tariffs that change no price give
+  identical plans, Pareto fronts and search statistics (BLS-A* and two random planners).
 * **T3 A* = Dijkstra order** -- ``bls == bls-astar`` (tight and basic potential),
   ``cfp == cfp-astar``.
 * **T4 Pareto** -- fastest member = BLS(time), cheapest generalised cost = BLS(cost),
@@ -46,16 +50,17 @@ Invariants (ids in the failure messages)
   ``(t, t + 24 h]`` never beats BLS (cost and time), equals it whenever BLS's plan is
   enumerated, and its Pareto front is covered by the planner's front, none of whose members
   it dominates.  On the tiniest instances a branch-and-bound enumeration that may also hold
-  until every 5-minute step of the next 24 h never beats BLS either: holds until price
-  changes are complete (``docs/algorithms.md``, "Charging tariffs").
+  until every 5-minute step of the next 24 h never beats BLS either, at the instance's
+  value of time and at a second one (where the Pareto front's cheapest member equals BLS):
+  holds until price changes are complete (``docs/algorithms.md``, "Charging tariffs").
 * **T9 local search, robustness, serialisation** -- random feasible neighbours of the
   optimum (holds moved to arbitrary times, dropped or added, other targets, stops dropped /
   added / moved) are never better; zero-noise Monte Carlo reproduces the plan with its
   holds; the scenario JSON keeps the tariff losslessly and the plans replay identically on
   the reloaded scenario.
 
-Tiers: the fast tier checks about 40 instances in about a minute; ``@pytest.mark.slow``
-checks hundreds (``pytest -m slow tests/test_crossval_tariffs.py`` or ``EVROUTE_SLOW=1``).
+Tiers: the fast tier checks 48 instances in about 40 s; ``@pytest.mark.slow`` checks 460
+(``pytest -m slow tests/test_crossval_tariffs.py`` or ``EVROUTE_SLOW=1``).
 """
 
 from __future__ import annotations
@@ -65,6 +70,7 @@ import json
 import math
 import random
 from dataclasses import dataclass, field, replace
+from itertools import pairwise
 from typing import Any
 
 import pytest
@@ -73,11 +79,18 @@ import test_crossval as cv
 from evroute import Tariff
 from evroute.algorithms.labels import charging_targets
 from evroute.evaluate import TOL_KWH, check_objective, evaluate
+from evroute.network import NetworkBuilder
 from evroute.plan import ChargeDecision, PlanDecision, RoutePlan
 from evroute.queueing import HIGHWAY_PROFILE, URBAN_PROFILE
-from evroute.network import NetworkBuilder
 from evroute.robustness import monte_carlo, replay_run
-from evroute.scenario import Conditions, Preferences, PreparedScenario, Query, Scenario, Station
+from evroute.scenario import (
+    Conditions,
+    Preferences,
+    PreparedScenario,
+    Query,
+    Scenario,
+    Station,
+)
 from evroute.vehicle import get_vehicle
 
 H = 3600.0
@@ -297,15 +310,38 @@ def _time_lb(P: PreparedScenario) -> list[float]:
 # =============================================================================
 # instances
 # =============================================================================
-def sample_tariff(rng: random.Random, sc: Scenario) -> Tariff:
-    """A random tariff whose peak periods matter for the trip of ``sc``."""
+def stop_clocks(sc: Scenario) -> list[float]:
+    """Clock hours at which the fastest route of ``sc`` without a tariff reaches its stations."""
+    P = sc.with_(tariff=Tariff()).with_preferences(objective="time").prepare()
+    p = _run(P, "bls-astar", max_labels=50_000)
+    return [P.time_of_day(st.arrival_s) / H for st in p.stops] if p.feasible else []
+
+
+def sample_tariff(rng: random.Random, sc: Scenario, aim: list[float] | None = None) -> Tariff:
+    """A random tariff whose peak periods matter for the trip of ``sc``.
+
+    With ``aim`` (clock hours of likely stops, :func:`stop_clocks`) the peak is usually placed
+    around one of them: dear at the arrival and ending soon after it, or a cheap period that
+    begins soon after it -- the situations in which holding pays."""
     dep_h = (sc.query.departure_s % DAY) / H
     tier = rng.random() < 0.6
     high_soc = rng.choice((0.5, 0.7, 0.8, 0.8, 0.9, round(rng.uniform(0.2, 0.95), 3)))
     hsf = rng.choice((1.25, 1.5, 2.0, 3.0, 0.8, round(rng.uniform(1.05, 3.0), 3))) if tier else 1.0
     peaks: list[tuple[float, float]] = []
+    pf = rng.choice((0.6, 1.0, 1.3, 1.6, 2.5, 4.0, round(rng.uniform(1.05, 3.0), 3)))
     r = rng.random()
-    if r < 0.75:
+    if aim and r < 0.6:
+        a = rng.choice(aim)
+        if rng.random() < 0.65:  # dear at the arrival, cheaper soon after
+            start = a - rng.uniform(0.0, 1.5)
+            end = a + rng.choice((rng.uniform(0.05, 0.5), rng.uniform(0.5, 2.5)))
+            pf = rng.choice((2.0, 3.0, 4.0, round(rng.uniform(1.2, 4.0), 3)))
+        else:  # a cheap period begins soon after the arrival
+            start = a + rng.uniform(0.05, 2.0)
+            end = start + rng.uniform(0.5, 6.0)
+            pf = rng.choice((0.3, 0.5, 0.7))
+        peaks.append((round(start % 24.0, 2), round(end % 24.0, 2)))
+    elif r < 0.75:
         for _ in range(rng.choice((1, 1, 2))):
             start = (dep_h + rng.uniform(-2.0, 6.0)) % 24.0
             length = rng.choice((0.25, 0.5, 1.0, 2.0, 3.0, 6.0, 12.0, 20.0, round(rng.uniform(0.1, 23.0), 2)))
@@ -327,25 +363,25 @@ def sample_tariff(rng: random.Random, sc: Scenario) -> Tariff:
         high_soc=high_soc,
         high_soc_factor=hsf,
         peak_hours=tuple(peaks),
-        peak_factor=rng.choice((0.6, 1.0, 1.3, 1.6, 2.5, 4.0, round(rng.uniform(1.05, 3.0), 3))),
+        peak_factor=pf,
         peak_high_soc_factor=rng.choice((None, None, 1.0, 2.0, 4.0)),
         busy_utilisation=busy,
     )
 
 
 def tariff_instance(seed: int, profile: str = "fast") -> tuple[cv.Instance, Scenario]:
-    """Instance ``seed`` of the cross-validation sampler with a random tariff, mostly the cost
-    objective and a random value of time."""
+    """Instance ``seed`` of the cross-validation sampler with a random tariff (mostly aimed at
+    a stop, :func:`sample_tariff`), mostly the cost objective and a random value of time."""
     rng = random.Random(f"evroute-crossval-tariff-{profile}-{seed}")
     base = cv.sample_instance(70_000 + seed, profile)
     prefs = dict(base.prefs)
     prefs["objective"] = rng.choice(("time", "cost", "cost", "cost"))
-    prefs["value_of_time_per_h"] = rng.choice((2.0, 6.0, 15.0, 15.0, 40.0))
+    prefs["value_of_time_per_h"] = rng.choice((2.0, 4.0, 6.0, 15.0, 40.0))
     if profile == "fast":  # 3-D cost dominance with holds: keep the label sets of the fast tier small
         prefs["charge_step_soc"] = max(prefs["charge_step_soc"], 0.04)
     inst = replace(base, prefs=tuple(sorted(prefs.items())))
     sc = cv.build_scenario(inst)
-    return inst, sc.with_(tariff=sample_tariff(rng, sc))
+    return inst, sc.with_(tariff=sample_tariff(rng, sc, stop_clocks(sc)))
 
 
 def tiny_tariff_instance(seed: int) -> tuple[cv.Instance, Scenario]:
@@ -354,12 +390,12 @@ def tiny_tariff_instance(seed: int) -> tuple[cv.Instance, Scenario]:
     base = cv.sample_tiny(70_000 + seed)
     prefs = dict(base.prefs)
     prefs["objective"] = rng.choice(("time", "cost", "cost", "cost"))
-    prefs["value_of_time_per_h"] = rng.choice((2.0, 6.0, 15.0, 40.0))
+    prefs["value_of_time_per_h"] = rng.choice((2.0, 4.0, 6.0, 15.0, 40.0))
     prefs["speed_factors"] = prefs["speed_factors"][:2]  # holds multiply the walks: at most two levels
     n, span, n_st = base.size
     inst = replace(base, prefs=tuple(sorted(prefs.items())), size=(n, span, max(1, n_st)))
     sc = cv.build_scenario(inst)
-    return inst, sc.with_(tariff=sample_tariff(rng, sc))
+    return inst, sc.with_(tariff=sample_tariff(rng, sc, stop_clocks(sc)))
 
 
 def _describe(inst: cv.Instance, sc: Scenario) -> str:
@@ -477,7 +513,18 @@ def check_model(tally: Tally, P: PreparedScenario, orc: TariffOracle, rng: rando
                     and _close(f.soh(x, y), f0.soh(x, y), 1e-12, 1e-15)
                     and P.cf_peak[s].power_kw == f.power_kw and P.cf_peak[s].e_breaks == f.e_breaks):
                 bad.append(f"charging time / wear / breakpoints of the split function {x}->{y}")
-        tally.check("T2", not bad, lambda: f"station {s}: {bad[:2]} {tag}")
+        # FIFO queues (t + W(t) never decreases), the premise of "holds until price changes
+        # are complete" (the 5-minute grid of T8 does not rely on it)
+        ts = sorted(rng.uniform(0.0, 2 * DAY) for _ in range(40))
+        ends = [t + P.wait_s(s, t) for t in ts]
+        bad = [(a, b) for a, b in pairwise(ends) if b < a - 1e-9]
+        tally.check("T2", not bad, lambda: f"station {s}: the queue is not FIFO: t + W(t) drops {bad[:1]} {tag}")
+        # the bounds' cheapest money per kWh covers both periods
+        lo = min(min(f.money_per_kwh) for f in P.cf_variants)
+        clocks = {0.0, *(h * H for h in range(24)), *(x % DAY for iv in orc.hours for x in iv)}
+        least = min(orc.unit[s] * x for pk in {orc.peak_clock(s, c) for c in clocks} for x in orc.factors[pk])
+        tally.check("T2", lo <= least * (1 + 1e-12),
+                    lambda: f"station {s}: cf_variants' least money {lo!r} > the oracle's {least!r} {tag}")
 
 
 def check_tariff_instance(inst: cv.Instance, sc: Scenario, budget: Budget = FAST, tally: Tally | None = None) -> Tally:
@@ -492,7 +539,7 @@ def check_tariff_instance(inst: cv.Instance, sc: Scenario, budget: Budget = FAST
     time_obj = P.objective == "time"
     other = "cost" if time_obj else "time"
     Po = sc.with_preferences(objective=other).prepare()
-    Pt, Pc = (P, Po) if time_obj else (Po, P)
+    Pt = P if time_obj else Po
 
     plans: dict[str, RoutePlan] = {
         "bls": _run(P, "bls", max_labels=budget.bls_dijkstra_labels),
@@ -600,7 +647,8 @@ def check_tariff_instance(inst: cv.Instance, sc: Scenario, budget: Budget = FAST
 
     # ------------------------------------------------------------------ T6
     if "cost" in ref:
-        check_monotone(tally, sc, orc, ref["cost"], rng, tag, budget)
+        check_monotone(tally, sc, orc, ref["cost"], rng, tag, budget,
+                       par if par is not None and "pareto" not in limited and par.stats.extra.get("complete") else None)
 
     # ------------------------------------------------------------------ T7
     if "bls-astar" not in limited:
@@ -626,8 +674,10 @@ def check_tariff_instance(inst: cv.Instance, sc: Scenario, budget: Budget = FAST
 
 
 def check_monotone(tally: Tally, sc: Scenario, orc: TariffOracle, base: RoutePlan, rng: random.Random, tag: str,
-                   budget: Budget) -> None:
-    """T6: a dearer tariff (same charging targets) never has a cheaper optimum."""
+                   budget: Budget, par: RoutePlan | None = None) -> None:
+    """T6: a dearer tariff (same charging targets) never has a cheaper optimum, and every
+    member of its Pareto front is weakly dominated by a member of ``par`` (the front of the
+    cheaper tariff: every route costs no more there)."""
     tf = sc.tariff
     r = rng.uniform(1.05, 2.0)
     (lo0, hi0), (lo1, hi1) = orc.factors[False], orc.factors[True]
@@ -657,6 +707,16 @@ def check_monotone(tally: Tally, sc: Scenario, orc: TariffOracle, base: RoutePla
     v0, v1 = _value(base), _value(p)
     tally.check("T6", v1 == INF if v0 == INF else v1 >= v0 - 1e-9 * abs(v0) - 1e-9,
                 lambda: f"dearer tariff ({what}: {hi.tariff!r}) has a cheaper optimum {v1!r} < {v0!r} {tag}")
+    if par is not None:
+        ph = _run(Ph, "pareto", max_labels=budget.pareto_labels)
+        if not ph.stats.extra.get("complete"):
+            tally.skip("T6 pareto (max_labels)")
+            return
+        low = [cv._crit(m) for m in par.alternatives]
+        bad = [c for c in (cv._crit(m) for m in ph.alternatives)
+               if not any(all(x <= y + 1e-9 * abs(y) + 1e-9 for x, y in zip(g, c)) for g in low)]
+        tally.check("T6", not bad, lambda: f"dearer tariff ({what}: {hi.tariff!r}): pareto members {bad[:2]} not "
+                                           f"covered by the cheaper front {tag}")
 
 
 def _shift_hours(peaks: tuple, k: int) -> tuple:
@@ -715,15 +775,26 @@ def check_metamorphic(tally: Tally, sc: Scenario, inst: cv.Instance, best: Route
         v = _value(p)
         tally.check("T7", (v == INF and ref == INF) or (v < INF and ref < INF and _close(v, ref, 1e-9, TOL_S)),
                     lambda: f"{what}: bls-astar {v!r} != {ref!r} {tag}")
-    # a tariff that changes no price is the neutral tariff: identical search
+    # a tariff that changes no price is the neutral tariff: identical search for every planner
     noop = Tariff(high_soc=rng.choice((0.3, 0.8, tf.high_soc)), peak_hours=tf.peak_hours or ((7, 9),),
                   peak_high_soc_factor=rng.choice((None, 1.0)), busy_utilisation=tf.busy_utilisation)
-    a = _run(sc.with_(tariff=Tariff()).prepare(), "bls-astar", max_labels=budget.bls_labels)
-    c = _run(sc.with_(tariff=noop).prepare(), "bls-astar", max_labels=budget.bls_labels)
-    tally.check("T2", a.feasible == c.feasible and a.decision == c.decision and a.objective_value == c.objective_value
-                and (a.stats.settled, a.stats.generated, a.stats.pushes) == (c.stats.settled, c.stats.generated,
-                                                                             c.stats.pushes),
-                lambda: f"no-op tariff {noop!r} changes the plan: {c.objective_value!r} vs {a.objective_value!r} {tag}")
+    P0, Pn = sc.with_(tariff=Tariff()).prepare(), sc.with_(tariff=noop).prepare()
+    names = [("bls-astar", {"max_labels": budget.bls_labels})] + rng.sample(
+        [("bls", {"max_labels": budget.bls_dijkstra_labels}), ("cfp-astar", {"max_labels": budget.cfp_labels}),
+         ("greedy", {}), ("station-graph", {}), ("naive", {}), ("genetic", dict(budget.genetic, seed=1))]
+        + ([("pareto", {"max_labels": budget.pareto_labels})]
+           if P.net.num_nodes <= budget.pareto_max_nodes and len(P.speed_factors) <= 2 else []), 2)
+    for name, opts in names:
+        a, c = _run(P0, name, **opts), _run(Pn, name, **opts)
+
+        def key(p: RoutePlan) -> tuple:
+            st = p.stats
+            return (p.feasible, p.decision, p.objective_value, p.internal_objective, p.nodes,
+                    [x.decision for x in p.alternatives], [x.objective_value for x in p.alternatives],
+                    None if st is None else (st.settled, st.generated, st.pushes))
+
+        tally.check("T2", key(a) == key(c), lambda: f"{name}: no-op tariff {noop!r} changes the plan: "
+                                                    f"{c.objective_value!r} vs {a.objective_value!r} {tag}")
 
 
 def neighbours_with_holds(P: PreparedScenario, orc: TariffOracle, d: PlanDecision, rng: random.Random) -> PlanDecision | None:
@@ -945,6 +1016,30 @@ def _shape(d: PlanDecision, nodes: list[int]) -> tuple[int, int]:
     return max(visits.values(), default=0), max(stops.values(), default=0)
 
 
+def _grid_bound_check(tally: Tally, P: PreparedScenario, orc: TariffOracle, bls: RoutePlan, grid_s: float,
+                      max_steps: int, tag: str) -> None:
+    """Branch and bound: is there any route (holds on the ``grid_s`` grid included) below BLS?"""
+    v = bls.objective_value
+    res = brute_force(P, orc, max_visits=1, grid_s=grid_s, bound=v - 1e-9 * abs(v) - 1e-9, max_steps=max_steps)
+    if res is None:
+        tally.skip("T8 grid (too many walks)")
+        return
+    if res[1] is not None:
+        rp = evaluate(P, res[1])
+        tally.check("T8", False, lambda: f"grid oracle beats bls: {res[0]!r} < {v!r} (evaluate: "
+                                         f"{rp.objective_value!r} feasible={rp.feasible}): {res[1]} {tag}")
+        return
+    tally.checked["T8"] += 1
+    # the search is not vacuous: with a slightly larger bound it finds BLS's value
+    if max(_shape(bls.decision, bls.nodes)) <= 1 or _shape(bls.decision, bls.nodes) == (1, 2):
+        res = brute_force(P, orc, max_visits=1, grid_s=grid_s, bound=v + 1e-7 * abs(v) + 1e-7, max_steps=max_steps)
+        if res is None:
+            tally.skip("T8 grid (too many walks)")
+        else:
+            tally.check("T8", res[1] is not None and _close(res[0], v, 1e-9, 1e-9),
+                        lambda: f"grid oracle does not reach bls {v!r}: {res[0]!r} {tag}")
+
+
 def check_brute_force(inst: cv.Instance, sc: Scenario, tally: Tally | None = None, *, grid_s: float | None = None,
                       max_steps: int = 2_000_000) -> Tally:
     """T8 on one tiny instance (and T1 on its plans)."""
@@ -964,33 +1059,27 @@ def check_brute_force(inst: cv.Instance, sc: Scenario, tally: Tally | None = Non
         if _holds(bls):
             tally.skip("info: bls plans that hold")
     if grid_s is not None:
-        # branch and bound: is there any route (holds on the 5-minute grid included) below BLS?
-        if not bls.feasible:
-            res = brute_force(P, orc, max_visits=1, grid_s=grid_s, max_steps=max_steps)
+        if not bls.feasible:  # a hold never changes the energy: no grid needed for feasibility
+            res = brute_force(P, orc, max_visits=1, max_steps=max_steps)
             if res is None:
                 tally.skip("T8 grid (too many walks)")
             else:
                 tally.check("T8", res[1] is None, lambda: f"grid oracle finds {res[0]!r}, bls infeasible {tag}")
             return tally
-        v = bls.objective_value
-        res = brute_force(P, orc, max_visits=1, grid_s=grid_s, bound=v - 1e-9 * abs(v) - 1e-9, max_steps=max_steps)
-        if res is None:
-            tally.skip("T8 grid (too many walks)")
-            return tally
-        if res[1] is not None:
-            rp = evaluate(P, res[1])
-            tally.check("T8", False, lambda: f"grid oracle beats bls: {res[0]!r} < {v!r} (evaluate: "
-                                             f"{rp.objective_value!r} feasible={rp.feasible}): {res[1]} {tag}")
-            return tally
-        # the search is not vacuous: with a slightly larger bound it finds BLS's value
-        if max(_shape(bls.decision, bls.nodes)) <= 1 or _shape(bls.decision, bls.nodes) == (1, 2):
-            res = brute_force(P, orc, max_visits=1, grid_s=grid_s, bound=v + 1e-7 * abs(v) + 1e-7,
-                              max_steps=max_steps)
-            if res is None:
-                tally.skip("T8 grid (too many walks)")
-            else:
-                tally.check("T8", res[1] is not None and _close(res[0], v, 1e-9, 1e-9),
-                            lambda: f"grid oracle does not reach bls {v!r}: {res[0]!r} {tag}")
+        _grid_bound_check(tally, P, orc, bls, grid_s, max_steps, tag)
+        # another value of time: another supported point of the (time, money, wear) front
+        vot = random.Random(f"evroute-crossval-tariff-vot-{inst.seed}").choice((1.0, 30.0, 120.0))
+        sv = sc.with_preferences(value_of_time_per_h=vot)
+        Pv = sv.prepare()
+        ov = TariffOracle(sv, sv.with_(tariff=Tariff()).prepare())
+        bv = _run(Pv, "bls")
+        check_plan(tally, Pv, ov, bv, f"bls vot={vot} {tag}", True)
+        if bv.feasible:
+            _grid_bound_check(tally, Pv, ov, bv, grid_s, max_steps, f"vot={vot} {tag}")
+            par = _run(Pv, "pareto")
+            best = min((m.generalized_cost for m in par.alternatives), default=INF)
+            tally.check("T8", _close(best, bv.generalized_cost, 1e-7, 1e-7),
+                        lambda: f"pareto cheapest at vot={vot} {best!r} != bls {bv.generalized_cost!r} {tag}")
         return tally
     res = brute_force(P, orc, max_steps=max_steps)
     if res is None:
@@ -1063,27 +1152,43 @@ def tiniest_instance(seed: int) -> tuple[cv.Instance, Scenario]:
                                 daily_sessions=rng.choice((0.0, 10.0, 40.0)), setup_s=rng.choice((60.0, 180.0)),
                                 demand_profile=rng.choice(("highway", "urban"))))
     dep_h = round(rng.uniform(0.0, 24.0), 2)
-    start = (dep_h + rng.uniform(-1.0, 1.5)) % 24.0
-    peaks = [(round(start, 2), round((start + rng.choice((0.5, 1.0, 2.0, 4.0, 10.0))) % 24.0, 2))]
-    if rng.random() < 0.3:
-        peaks.append((round((start + 6.0) % 24.0, 2), round((start + 7.5) % 24.0, 2)))
-    tariff = Tariff(high_soc=rng.choice((0.6, 0.7, 0.8)), high_soc_factor=rng.choice((1.0, 1.0, 1.5, 3.0)),
-                    peak_hours=tuple(peaks), peak_factor=rng.choice((0.5, 1.8, 2.5, 4.0)),
-                    peak_high_soc_factor=rng.choice((None, None, 1.0, 2.0)),
-                    busy_utilisation=rng.choice((None, None, 0.3)))
-    veh = rng.choice(("city27", "compact50", "compact50", "sedan75"))
-    soc0 = 0.05 if origin else round(rng.uniform(0.15, 0.4), 3)
-    prefs = {"objective": "cost", "value_of_time_per_h": rng.choice((2.0, 6.0, 15.0)),
+    prefs = {"objective": "cost", "value_of_time_per_h": rng.choice((2.0, 4.0, 6.0, 15.0)),
              "charge_step_soc": rng.choice((0.1, 0.125, 0.2)), "queue_aware": rng.random() < 0.6,
              "time_dependent_waits": rng.random() < 0.6, "reserve_soc": rng.choice((0.0, 0.1)),
              "min_arrival_soc": rng.choice((0.0, 0.1))}
+    net = b.build()
+    fits = []  # vehicles that can drive the last leg on one charge
+    for veh in ("city27", "compact50", "compact50", "sedan75"):
+        sc = Scenario(f"tiniest-{seed}", net, stations, get_vehicle(veh), Query(o, d, departure_s=dep_h * H),
+                      Conditions(), Preferences(**prefs))
+        P = sc.prepare()
+        last = max(P.edge_energy[0][e] for e in range(net.num_edges) if net.head[e] == d)
+        if last + P.e_dest_min + P.e_min <= 0.9 * P.e_charge_cap:
+            fits.append((veh, sc))
+    veh, sc = rng.choice(fits or [(veh, sc)])
+    # enough energy to reach A (a stop at the origin: almost empty); the peak around the arrival at A
+    P = sc.prepare()
+    oa = next(e for e in P.net.out_edges[o] if P.net.head[e] == a)
+    need = (P.edge_energy[0][oa] + P.e_min) / P.capacity
+    soc0 = 0.05 if origin else round(min(need + rng.uniform(0.02, 0.15), 0.95), 3)
+    arr = dep_h + P.edge_time[0][oa] / H
+    if rng.random() < 0.65:  # dear at the arrival, cheaper soon after
+        start, end = arr - rng.uniform(0.0, 1.0), arr + rng.choice((0.1, 0.3, 0.6, 1.0, rng.uniform(0.05, 2.0)))
+        pf = rng.choice((2.0, 2.5, 4.0))
+    else:  # a cheap period begins soon after the arrival
+        start = arr + rng.choice((0.1, 0.3, 0.6, rng.uniform(0.05, 1.5)))
+        end = start + rng.choice((1.0, 4.0, 10.0))
+        pf = rng.choice((0.3, 0.5))
+    peaks = [(round(start % 24.0, 2), round(end % 24.0, 2))]
+    if rng.random() < 0.3:
+        peaks.append((round((start + 6.0) % 24.0, 2), round((start + 7.5) % 24.0, 2)))
+    tariff = Tariff(high_soc=rng.choice((0.6, 0.7, 0.8)), high_soc_factor=rng.choice((1.0, 1.0, 1.5, 3.0)),
+                    peak_hours=tuple(peaks), peak_factor=pf, peak_high_soc_factor=rng.choice((None, None, 1.0, 2.0)),
+                    busy_utilisation=rng.choice((None, None, 0.3)))
     inst = cv.Instance(seed=seed, generator="tiniest", size=(len(b.x), len(stations)), vehicle=veh,
                        temperature_c=20.0, initial_soc=soc0, departure_s=dep_h * H,
                        prefs=tuple(sorted(prefs.items())), origin_station=origin)
-    sc = Scenario(f"tiniest-{seed}", b.build(), stations, get_vehicle(veh),
-                  Query(o, d, initial_soc=soc0, departure_s=dep_h * H), Conditions(), Preferences(**prefs),
-                  tariff=tariff)
-    return inst, sc
+    return inst, sc.with_query(initial_soc=soc0).with_(tariff=tariff)
 
 
 # =============================================================================
@@ -1091,7 +1196,7 @@ def tiniest_instance(seed: int) -> tuple[cv.Instance, Scenario]:
 # =============================================================================
 FAST_INSTANCES = 24
 TINY_FAST = 16
-GRID_FAST = 4
+GRID_FAST = range(2, 10)  # about 0.1 s each; the slow tier runs seeds 0..59 (a few take ~20 s)
 
 
 def _assert_clean(tally: Tally) -> None:
@@ -1125,10 +1230,10 @@ def test_holds_on_a_five_minute_grid_never_beat_bls_fast():
     """T8 (completeness): holding until any 5-minute step of the next 24 h is never better than
     BLS, which holds until price changes only."""
     tally = Tally()
-    for seed in range(GRID_FAST):
+    for seed in GRID_FAST:
         check_brute_force(*tiniest_instance(seed), tally, grid_s=300.0)
     _assert_clean(tally)
-    assert tally.checked["T8"] >= GRID_FAST
+    assert tally.checked["T8"] >= len(GRID_FAST) and tally.skipped["info: bls plans that hold"] >= 3
 
 
 def test_tariff_sampler_is_diverse():
@@ -1147,9 +1252,9 @@ def test_tariff_sampler_is_diverse():
 # slow tier
 # =============================================================================
 SLOW_BLOCKS = 20
-SLOW_PER_BLOCK = 15  # 300 instances
+SLOW_PER_BLOCK = 8  # 160 instances (about 8 s each)
 TINY_SLOW = 240
-GRID_SLOW = 24
+GRID_SLOW = 60
 
 
 @pytest.mark.slow
@@ -1179,7 +1284,7 @@ def test_holds_on_a_five_minute_grid_never_beat_bls_slow(block, request):
     cv._require_slow(request)
     tally = Tally()
     n = GRID_SLOW // 4
-    for seed in range(100 + block * n, 100 + (block + 1) * n):
+    for seed in range(block * n, (block + 1) * n):
         check_brute_force(*tiniest_instance(seed), tally, grid_s=300.0)
     _assert_clean(tally)
 

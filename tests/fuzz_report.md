@@ -164,3 +164,59 @@ and the viewer payload size -- `viz/export.py::_network_block` builds the
 network block with `RoadNetwork.to_dict(compact=True)` again (rounded to
 1 cm / 1 mm; the viewer only draws the network and the live server plans on
 its own `Scenario`, never on the payload).
+
+## 7. Charging tariffs — `tests/test_crossval_tariffs.py`
+
+```
+python3 -m pytest tests/test_crossval_tariffs.py -q          # fast tier, 48 instances, ~40 s
+python3 -m pytest -m slow tests/test_crossval_tariffs.py -q  # slow tier, 460 instances
+```
+
+The instances of this suite (`sample_instance`, `sample_tiny`) get a random
+`Tariff`: a high-SoC tier on or off, zero to two peak intervals (wrapping
+midnight, all day, `(24, x)`), peak factors 0.3..4 with or without their own
+high-SoC factor, and busy hours from the queue model.  The peak is usually
+aimed at a stop of the fastest route without a tariff (dear at the arrival and
+ending soon after it, or a cheap period that begins soon after it), and most
+instances use the cost objective with a value of time of 2..40 per hour, so
+that holding pays.  `tiniest_instance` builds O -> A -> D lines (sometimes a
+second path, stacked stations, an origin station) with the peak aimed at the
+arrival at A.  The oracle (`TariffOracle`) never reads the price tables of
+`PreparedScenario`: it re-derives periods, price changes, money and targets
+from the `Tariff` and the station data, and takes charging times, wear and
+waits from the scenario prepared with the neutral tariff.
+
+| id | what is checked |
+|---|---|
+| T1 | every plan of every planner (Pareto members included) replays identically through `evaluate()`, through the oracle's first-principles replay (hold, wait at the join time, money of the period at the join time) and from its JSON (`RoutePlan.to_dict`, holds rebuilt from `hold_until_s`); `check_objective`; exact planners report the evaluated objective; `peak` flags and holds of the stops; time components add up |
+| T2 | periods, hold candidates, money and targets equal the oracle's; charging times and wear equal the neutral tariff's; the bounds' cheapest money covers both periods; FIFO queues; a tariff that changes no price gives identical plans, fronts and search statistics (BLS-A* and two random planners) |
+| T3 | `bls == bls-astar` (tight, basic), `cfp == cfp-astar` |
+| T4 | Pareto: fastest member = BLS(time), cheapest = BLS(cost), members non-dominated |
+| T5 | the time objective never holds (BLS-A*, CFP, CFP-A*, fastest Pareto member); its optimum does not depend on prices; CFP's does not change with the tier's breakpoint; nothing beats CFP |
+| T6 | raising a price factor, or adding peak / busy hours when the peak is dearer, never lowers the optimal cost, and the dearer tariff's Pareto front is covered by the cheaper one |
+| T7 | relabelling, a duplicated station, departure + 24 h, departure and peak hours shifted by whole hours (no queues; busy hours through rotated demand profiles) |
+| T8 | tiny digraphs: an exhaustive enumeration (each node at most twice, up to two stops per visit, the same station again included, every target, holds until every price change in `(t, t + 24 h]`) never beats BLS, equals it whenever BLS's plan is enumerated, and its front is covered by the Pareto front; tiniest instances: a branch and bound that may also hold until every 5-minute step of the next 24 h never beats BLS, at the instance's value of time and at a second one (where the Pareto front's cheapest member equals BLS) |
+| T9 | random neighbours of the optimum (holds moved to arbitrary times, dropped, added) are never better; zero-noise and noisy Monte Carlo with `verify=True` keep the holds; lossless scenario JSON |
+
+Runs at the revision of the tariff feature (with the BUG-T1 fix), 4 cores
+shared with other jobs, `nice -n 10`, all with **0 failures**:
+
+| instances | count | notes |
+|---|---:|---|
+| cross-validation instances, fast profile (`tariff_instance`, seeds 0..239) | 240 | 115 342 T1, 5 547 T2, 1 941 T3, 306 T4, 15 307 T5, 217 T6, 476 T7, 6 166 T9 checks; Pareto members that hold: 6 477, that restart at a station: 4 093; run again after T6 gained the Pareto check |
+| cross-validation instances, slow profile (seeds 1000..1044) | 45 | ~8 s per instance |
+| tiny digraphs, brute force (seeds 0..399) | 400 | 2 328 T8 checks; 24 skipped (enumeration budget) |
+| tiniest lines, 5-minute hold grid (seeds 0..139) | 140 | BLS holds on 108 of them; 7 of the 280 bound checks skipped (budget) |
+
+**Neutral tariff = previous release.**  Outside the test suite, every planner
+(BLS, BLS-A*, CFP, CFP-A*, Pareto, greedy, station-graph, naive, genetic) was
+run on the same 150 fast-profile and 120 tiny instances, both objectives,
+with the source of `cf328d1` (before the tariffs) and with the new source:
+all 4 726 plan dicts (decisions, objective values, per-node arrays, stops,
+settled / generated / pushed counts, Pareto alternatives) are identical,
+apart from the run times and the new keys `hold_time_s`, `hold_s`, `peak`,
+`hold_until_s`.
+
+| id | component | bug | status |
+|---|---|---|---|
+| BUG-T1 | `plan.py`, `evaluate.py`, `robustness.py` | A stop recorded only `arrival_s` and `hold_s = hold_until - arrival`, and a plan rebuilt from its stops (`robustness` for a plan without its decision; any reader of `RoutePlan.to_dict`) held until `arrival_s + hold_s`.  For 102 of 29 950 hold candidates in a probe that sum differs from the decided hold in the last bit, and 60 of them land on the other side of the price change: on a 3-node line (peak 16:00-20:00 at three times the price) the replay of the plan joined 1 ulp before 16:00 and was priced 10.74 instead of 32.22. | **fixed**: `ChargeStop.hold_until_s` keeps the exact join time (`None` without a hold; `join_s` and `departure_s` use it), `evaluate()` sets it and `robustness._decision` rebuilds holds from it; documented in `docs/DEV_SPEC.md` (stop dict).  Regression test `test_bug_t1_a_plan_rebuilt_from_its_stops_joins_at_the_exact_hold_time` |

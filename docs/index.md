@@ -8,8 +8,9 @@ page is the map of the documentation; the [README](../README.md)
 
 | document | what is in it |
 |---|---|
+| [`guide.md`](guide.md) ([Türkçe](guide.tr.md)) | **start here**: a gentle guide to the algorithms -- why plain A\* is not enough, labels and dominance, BLS, A\*, CFP, Pareto, the baselines, tariffs and "which planner should I use?" |
 | [`model.md`](model.md) | the optimisation problem, equation by equation, with the module that implements each part |
-| [`algorithms.md`](algorithms.md) | the algorithms and their correctness arguments: BLS, the consistent A\* potentials, CFP, the Pareto search, the baselines, verification |
+| [`algorithms.md`](algorithms.md) | the algorithms and their correctness arguments: BLS, the consistent A\* potentials, CFP, the Pareto search, charging tariffs and voluntary holds, the baselines, verification |
 | [`DEV_SPEC.md`](DEV_SPEC.md) | the developer contract: `PreparedScenario`, the semantics every planner must respect, the viewer data format |
 | [`PLAN.tr.md`](PLAN.tr.md) | the original project plan (Turkish) |
 | [`../tests/fuzz_report.md`](../tests/fuzz_report.md) | what the cross-validation suite checks, its coverage and the bugs it found |
@@ -20,8 +21,9 @@ page is the map of the documentation; the [README](../README.md)
 On this page: [install](#install) · [command line](#command-line) ·
 [Python API](#python-api) · [web viewer](#web-viewer) ·
 [live server](#live-planning-server) · [experiments and figures](#experiments-and-figures) ·
-[scenarios and data](#scenarios-and-data) · [robustness](#robustness) ·
-[file formats](#file-formats) · [FAQ](#faq-and-known-limitations)
+[scenarios and data](#scenarios-and-data) · [charging tariffs](#charging-tariffs) ·
+[robustness](#robustness) · [file formats](#file-formats) ·
+[FAQ](#faq-and-known-limitations)
 
 ## Install
 
@@ -72,6 +74,15 @@ for `serve`, the path of a scenario `.json` file.  `plan`, `compare`, `viz`,
 | `--no-queue` | ignore charging queues |
 | `--step 0.01` | charging-target grid of BLS / Pareto (SoC fraction) |
 | `--safety 1.1` | plan with a consumption safety factor |
+| `--tariff 80`, `--tariff flat` | the illustrative demonstration tariff `DEMO_TARIFF` (×1.3 above 80 % SoC, 16:00-20:00 peak at ×1.15, ×2.3 above 80 % in the peak), or no tariff; applied before the single-value options below |
+| `--high-soc 0.8`, `--high-soc-factor 1.3` | price factor for every kWh stored above that SoC |
+| `--peak 16-20[,7-9]`, `--peak-factor 1.15` | daily peak hours (`22-6` wraps midnight, `none` clears them) and their price factor |
+| `--peak-high-soc-factor 2` | high-SoC factor in the peak, on top of `--peak-factor` (default: `--high-soc-factor`) |
+| `--busy 0.7` | a station is also in its peak while its expected charger utilisation is at least this value |
+
+With a tariff, `evroute plan` adds a `tariff` column (price period, `>80%`
+when energy was bought in the high-SoC tier) and, when a stop waits for a
+cheaper price period, a `hold` column; without one its output is unchanged.
 
 Examples:
 
@@ -79,6 +90,8 @@ Examples:
 evroute plan turkey-karaman-istanbul --from Konya --to Ankara --soc 0.35 -a cfp
 evroute compare turkey-antalya-ankara --temp -5 --algorithms greedy,bls-astar,cfp-astar
 evroute plan turkey-istanbul-ankara-rush --objective cost --json plan.json
+evroute plan turkey-karaman-istanbul-tariff --objective cost     # waits 2 min for the 20:00 price change
+evroute plan turkey-karaman-istanbul --depart 14:00 --peak 16-20 --peak-factor 1.2 --high-soc-factor 1.5
 evroute robustness turkey-izmir-erzurum -n 2000 --safety 1.1
 ```
 
@@ -99,15 +112,19 @@ route = get_planner("bls-astar", potential="basic").plan(sc, trace=True)
   helpers are the intended way) and are serialisable: `with_query(origin=..., initial_soc=..., departure_s=...)`,
   `with_conditions(temperature_c=..., wind_speed_ms=..., preconditioning=...)`,
   `with_preferences(objective=..., reserve_soc=..., speed_factors=...,
-  charge_step_soc=..., safety_factor=...)`, `with_(vehicle=...)`;
+  charge_step_soc=..., safety_factor=...)`, `with_tariff(high_soc=...,
+  high_soc_factor=..., peak_hours=..., peak_factor=..., busy_utilisation=...)`,
+  `with_(vehicle=..., tariff=Tariff(...))`;
   `save(path)` / `Scenario.load(path)`; `prepare()` builds the
   `PreparedScenario` every planner works on (edge times and energies, exact
   charging functions, waits).
 - **Plans** (`evroute.plan.RoutePlan`): `feasible`, `total_time_s`,
-  `drive_time_s`, `charge_time_s`, `wait_time_s`, `setup_time_s`, `money`,
-  `soh_total_pct`, `generalized_cost`, `arrival_soc`, `stops`
-  (`ChargeStop`: station, arrival time, queue, charge time, SoC in/out,
-  money), per-node arrays (`node_arrive_s`, `node_energy_arrive`, ...),
+  `drive_time_s`, `charge_time_s`, `wait_time_s`, `setup_time_s`,
+  `hold_time_s` (voluntary holds), `money`, `soh_total_pct`,
+  `generalized_cost`, `arrival_soc`, `stops` (`ChargeStop`: station, arrival
+  time, `hold_s` and `hold_until_s` of a voluntary hold, queue, charge time,
+  SoC in/out, money, `peak` = priced in the peak period), per-node arrays
+  (`node_arrive_s`, `node_energy_arrive`, ...),
   `stats` (`SearchStats`: runtime, settled labels, ...), `alternatives`
   (Pareto members), `summary()`, `to_dict()`.
 - **Planner options** (keyword arguments of `plan()` / `get_planner()`):
@@ -121,7 +138,9 @@ route = get_planner("bls-astar", potential="basic").plan(sc, trace=True)
   `evroute/algorithms/*.py` document every option.
 - **Evaluation**: `evaluate(prepared, PlanDecision(edges, levels, charges))`
   replays any decision from first principles and returns a `RoutePlan`
-  with violations listed - also for plans you construct yourself.
+  with violations listed - also for plans you construct yourself
+  (`ChargeDecision(position, station, target_kwh, hold_until_s=None)`; a
+  hold until a trip time waits there before joining the queue).
 
 Runnable examples: [`examples/quickstart.py`](../examples/quickstart.py),
 [`examples/custom_network.py`](../examples/custom_network.py),
@@ -167,7 +186,8 @@ evroute serve turkey-karaman-istanbul --open      # http://127.0.0.1:8765/
 The same viewer in *live mode*: click the map or use the place pickers to set
 origin and destination, change vehicle, initial SoC, temperature, reserve,
 objective, value of time, eco speeds, queue awareness and departure, tick
-algorithms and press *Plan*.  The server uses only the standard library
+algorithms and press *Plan*; a switch turns the demonstration tariff on and
+off.  The server uses only the standard library
 (`http.server`) and exposes a small JSON API: `GET /api/health`,
 `GET /api/scenarios`, `GET /api/scenario?name=...`, `POST /api/plan`
 (documented in [`server.py`](../src/evroute/server.py)).  It binds to
@@ -175,7 +195,7 @@ algorithms and press *Plan*.  The server uses only the standard library
 
 ## Experiments and figures
 
-`evroute experiments` (or `python -m evroute.experiments.runner`) runs ten
+`evroute experiments` (or `python -m evroute.experiments.runner`) runs eleven
 seeded experiments; `--quick` shrinks every one of them to a smoke test of
 about a minute.  Each writes `<out>/<id>/results.csv` (pareto: one CSV per
 case), usually `summary.json`, PDF/PNG figures (with matplotlib) and, for
@@ -195,6 +215,22 @@ adds `<out>/report.json` and the interactive dashboard `<out>/results.html`
 | `robustness` | P(strand) and P(reserve breach) versus the planning safety factor | 6 factors × 2 000 Monte Carlo runs |
 | `eco-speed` | when does driving slower shorten the trip? | 80 trips |
 | `vehicles` | the flagship trip with every vehicle preset | 6 vehicles |
+| `tariffs` | what do the 80 % rule and peak hours cost, and when does waiting for a cheaper price pay? | 2 trips × 9 departures (06:00-22:00) × 4 tariffs |
+
+The `tariffs` experiment compares four tariffs built from the illustrative
+`DEMO_TARIFF` (flat prices, its 80 % tier alone, its 16:00-20:00 peak alone,
+both) on Karaman → İstanbul and Antalya → Ankara.  For every departure and
+tariff it plans the fastest route (BLS-A\*), the cost-optimal route (BLS-A\*,
+`objective="cost"`) and the (time, money) Pareto front (budget of the
+viewer, 1 million labels; all searches on a 5 % charging grid so that the
+fronts fit it).  It writes `tariffs/results.csv` (one row per plan, `kind` =
+`time`, `cost` or `pareto`, with the highest SoC, the energy charged above
+80 %, holds, peak sessions, front size and whether the front is complete),
+`tariffs/fronts.csv` (every front member), `summary.json`, `table.tex`,
+`fig_money_<trip>.png` (the money of the fastest plan by departure time) and
+`<trip>/viewer.html` (the departure where the cost-optimal plan saves most,
+with its front).  `--quick` keeps 14:00 and 18:00, flat and tier + peak,
+and a budget of 200 000 labels.
 
 ```bash
 evroute experiments --quick -o results/
@@ -209,8 +245,9 @@ tooltips, table views and CSV downloads, in Turkish and English.
 <p align="center"><img src="img/results-light.png" width="80%" alt="The results dashboard"></p>
 
 Static figures: `evroute gallery -o docs/img` renders the seaborn gallery of
-the README (maps, SoC profiles, search spaces, Pareto fronts, optimality-gap
-heat map, charging curves, consumption); `evroute figures SCENARIO` the
+the README (maps, SoC profiles, search spaces, Pareto fronts, the time-money
+trade-off under the demonstration tariff, optimality-gap heat map, charging
+curves, consumption; the tariff front alone takes about 1.5 minutes); `evroute figures SCENARIO` the
 publication figures of one scenario.  Colours, fonts and the light/dark
 palettes live in `evroute/viz/style.py` and are shared with the viewer.
 
@@ -218,7 +255,7 @@ palettes live in `evroute/viz/style.py` and are shared with the viewer.
 
 | family | presets | source |
 |---|---|---|
-| Turkey | `turkey-karaman-istanbul`, `turkey-antalya-ankara`, `turkey-izmir-erzurum`, `turkey-istanbul-antalya-winter`, `turkey-karaman-mersin`, `turkey-istanbul-ankara-rush`, `turkey-ankara-adana-evening` | `generators/turkey.py` + `data/*.csv` |
+| Turkey | `turkey-karaman-istanbul`, `turkey-karaman-istanbul-tariff`, `turkey-antalya-ankara`, `turkey-izmir-erzurum`, `turkey-istanbul-antalya-winter`, `turkey-karaman-mersin`, `turkey-istanbul-ankara-rush`, `turkey-ankara-adana-evening` | `generators/turkey.py` + `data/*.csv` |
 | corridor | `corridor`, `corridor-winter` | `generators/synthetic.py` |
 | synthetic countries | `country-small`, `country-medium`, `country-large` | `generators/synthetic.py` |
 | other | `random-geometric`, `grid-small` | `generators/synthetic.py`, `generators/basic.py` |
@@ -238,6 +275,42 @@ studies load OpenStreetMap roads (`generators.osm.load_osm`, needs `osmnx`)
 and your own charger list (`stations_from_csv`), then
 `scenario_from_osm(...)`.
 
+## Charging tariffs
+
+A `Tariff` makes the price of a kWh depend on the state of charge ("the
+80 % rule") and on the clock (peak hours, or busy hours derived from each
+station's queue model); the default `Tariff()` changes nothing.  The price
+period of a session is fixed when the vehicle joins the queue, so a plan may
+wait at a station for a cheaper period (a *voluntary hold*, `hold_s` in the
+stop).  Model: [`model.md` §5](model.md#5-charging-tariffs); why holding
+until a price change is enough and the time objective never holds:
+[`algorithms.md` §6](algorithms.md#6-charging-tariffs-price-periods-and-voluntary-holds);
+the worked example: [README, "There is no single best route"](../README.md#there-is-no-single-best-route).
+
+```python
+from evroute import plan
+from evroute.generators.presets import DEMO_TARIFF, get_scenario
+
+sc = get_scenario("turkey-karaman-istanbul", departure="14:00").with_(tariff=DEMO_TARIFF)
+sc = sc.with_tariff(busy_utilisation=0.5)   # also peak while a charger is at least 50 % busy
+route = plan(sc.with_preferences(objective="cost"), "bls-astar")
+print(route)
+for s in route.stops:
+    print(f"  {s.station_name:24} {'peak' if s.peak else 'off-peak':8}  hold {s.hold_s:3.0f} s")
+```
+
+```text
+[bls-astar] 8 h 18 min | 747.27 km | 2 stop(s) | arrive 10.5% | 1187.70 TRY
+  D-300 service area Çay   peak      hold   0 s
+  İnegöl DC                off-peak  hold  26 s
+```
+
+The time objective (BLS-A\* by default, CFP) ignores prices: its route stays
+the fastest one and only its money changes.  The cost objective of BLS /
+BLS-A\* and the Pareto search weigh the prices, and consider waiting.  The
+values of `DEMO_TARIFF` are illustrative and synthetic, like the station
+prices of the Turkey case study.
+
 ## Robustness
 
 `evroute.robustness.monte_carlo(prepared, plan, n=1000, seed=0, ...)`
@@ -248,14 +321,16 @@ charge more after a bad leg).  The `RobustnessReport` has P(strand),
 P(reserve breach), P(arrive short) with 95 % confidence intervals and the
 distributions of trip time, arrival SoC and charged energy.
 `safety_sweep(scenario, factors=...)` plans with several safety factors and
-measures each plan.  Model: [`model.md` §8](model.md#8-uncertainty-evaluation-only).
+measures each plan.  Model: [`model.md` §9](model.md#9-uncertainty-evaluation-only).
 
 ## File formats
 
 - **Scenario JSON** (`Scenario.save` / `evroute export-scenario`): lossless -
-  a reloaded scenario prepares bit-identical data.
+  a reloaded scenario prepares bit-identical data.  The `"tariff"` key
+  appears only for a tariff other than `Tariff()`.
 - **Plan JSON** (`evroute plan --json`, `RoutePlan.to_dict()`): route,
-  stops, per-node times and energies, totals, statistics.
+  stops (with `hold_s`, `hold_until_s` and `peak`), per-node times and
+  energies, totals (with `hold_time_s`), statistics.
 - **Viewer payload** `evroute-viewer/1`: specified in
   [`DEV_SPEC.md` §3](DEV_SPEC.md#3-viewer-data-contract-evroute-viewer1).
 - **Results payload** `evroute-results/1`: produced by
@@ -264,9 +339,23 @@ measures each plan.  Model: [`model.md` §8](model.md#8-uncertainty-evaluation-o
 ## FAQ and known limitations
 
 **Which planner should I use?**  `bls-astar` (default) for the time or the
-cost objective; `cfp-astar` for the exact fastest route with continuous
-charging amounts; `pareto` for the trade-off between time, money and wear.
-The baselines are there to be beaten.
+cost objective, with or without a tariff; `cfp-astar` for the exact fastest
+route with continuous charging amounts; `pareto` for the trade-off between
+time, money and wear.  The baselines are there to be beaten.  The
+[guide](guide.md#12-which-planner-should-i-use) has a table.
+
+**Why does the cost-optimal plan wait at a station?**  Under a tariff with
+peak hours the price of a session is fixed when the car joins the queue; a
+few minutes of waiting for the end of the peak can be worth more than they
+cost at the value of time.  The time objective never waits: with FIFO queues
+a hold cannot make a stop end earlier.
+
+**Why does the Pareto front take so long with a tariff?**  Every station
+expansion is also tried after a hold until each price change, which
+multiplies the labels: the complete (time, money) front of Karaman →
+İstanbul under the demonstration tariff needs a budget of 10 million labels
+(about 1.5 minutes) on the default 2 % grid; a 5 % grid
+(`charge_step_soc=0.05`) brings it under 10 s.
 
 **Why does `evroute compare` report `pareto` as infeasible on Karaman →
 İstanbul?**  The exact three-criteria front of a 750 km trip exceeds the

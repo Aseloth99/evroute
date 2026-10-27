@@ -184,6 +184,34 @@ def test_soc_series_matches_evaluator(case):
     assert any(abs(t - st.departure_s / 3600.0) < 1e-9 and abs(y - 100 * st.soc_out) < 1e-6 for t, y in zip(ts, ys_t))
 
 
+def test_soc_series_and_wait_markers_start_after_a_voluntary_hold(case):
+    sc, plans = case
+    P = sc.prepare()
+    p = plans["bls-astar"]
+    assert p.feasible and p.stops
+    # the same decision with a 10-minute voluntary hold at the first stop
+    d = p.decision
+    c0 = d.charges[0]
+    held = [type(c0)(c0.position, c0.station, c0.target_kwh, p.stops[0].arrival_s + 600.0), *d.charges[1:]]
+    hp = evaluate(P, type(d)(list(d.edges), list(d.levels), held))
+    st = hp.stops[0]
+    assert hp.feasible and st.hold_s == pytest.approx(600.0)
+    ts, ys = F.soc_series(hp, P, "time")
+    assert all(b >= a - 1e-12 for a, b in pairwise(ts))
+    # flat during hold, queue and set-up; the charging ramp ends exactly at the departure
+    t_plug = (st.join_s + st.wait_s + st.setup_s) / 3600.0
+    assert any(abs(t - t_plug) < 1e-9 and abs(y - 100 * st.soc_in) < 1e-6 for t, y in zip(ts, ys))
+    assert all(abs(y - 100 * st.soc_in) < 1e-6 for t, y in zip(ts, ys) if st.arrival_s / 3600.0 <= t <= t_plug - 1e-9)
+    t_end = t_plug + st.charge_s / 3600.0
+    assert t_end == pytest.approx(st.departure_s / 3600.0, abs=1e-9)
+    assert any(abs(t - t_end) < 1e-9 and abs(y - 100 * st.soc_out) < 1e-6 for t, y in zip(ts, ys))
+    # the wait chart marks the stop where its wait applies: when it joins the queue
+    fig = F.plot_wait_profiles(sc, plans=[hp])
+    marks = [tuple(o) for coll in fig.axes[0].collections for o in coll.get_offsets()]
+    tod = P.time_of_day(st.join_s) / 3600.0
+    assert any(abs(x - tod) < 1e-9 and abs(y - st.wait_s / 60.0) < 1e-9 for x, y in marks)
+
+
 def test_soc_series_clips_infeasible_plan_at_stranding_point(case):
     sc, plans = case
     naive = plans.get("naive")
@@ -291,6 +319,23 @@ def test_plot_pareto(case, tmp_path):
     assert any(abs(m.total_time_s - par.total_time_s) < 1e-6 and abs(m.money - par.money) < 1e-6 for m in par.alternatives)
     with pytest.raises(ValueError):
         F.plot_pareto([plans["naive"]] if "naive" in plans else [])
+
+
+def test_plot_tradeoff(case, tmp_path):
+    sc, plans = case
+    par = plans.get("pareto")
+    if par is None or not par.feasible:
+        pytest.skip("pareto planner unavailable")
+    cheapest = min(par.alternatives or [par], key=lambda p: (p.money, p.total_time_s))
+    F.plot_tradeoff(par, {"Fastest": plans["bls-astar"], "Cheapest": cheapest}, path=tmp_path / "tradeoff")
+    _assert_written(_written(tmp_path / "tradeoff"))
+    # a front under a time-dependent tariff (members may hold), one panel only
+    tsc = sc.with_tariff(peak_hours=((8.0, 9.0),), peak_factor=3.0)
+    front = plan(tsc, "pareto", criteria=("time", "money"))
+    fig = F.plot_tradeoff(front.alternatives, {"Fastest": plan(tsc, "bls-astar")}, zoom_min=None)
+    assert len(fig.axes) == 1
+    with pytest.raises(ValueError):
+        F.plot_tradeoff([])
 
 
 def test_vehicle_figures(tmp_path):

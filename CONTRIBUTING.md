@@ -12,9 +12,10 @@ pip install -e ".[dev]"            # pytest + matplotlib + seaborn
 python -m pytest -m "not slow"     # fast tier, a few minutes
 ```
 
-The slow cross-validation tier (`python -m pytest -m slow tests/test_crossval.py`)
-throws thousands of random instances at every planner; run it before you
-touch an algorithm.
+The slow cross-validation tier (`python -m pytest -m slow tests/test_crossval.py
+tests/test_crossval_tariffs.py`) throws thousands of random instances, with
+and without charging tariffs, at every planner; run it before you touch an
+algorithm.
 
 ## Ground rules
 
@@ -54,7 +55,9 @@ best possible report; the suite keeps such reproductions as
 ## Documentation and figures
 
 - `docs/model.md` and `docs/algorithms.md` state the model and the proofs;
-  keep them in sync with the code.
+  keep them in sync with the code.  `docs/guide.md` and `docs/guide.tr.md`
+  explain the algorithms for newcomers; every number in them comes from the
+  code or the READMEs, so update them when a quoted result changes.
 - Regenerate the static figures with `evroute gallery -o docs/img` and the
   viewer screenshots with `python examples/viewer_demo.py --screenshots docs/img`
   (Node.js + Playwright).

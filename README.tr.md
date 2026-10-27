@@ -9,7 +9,7 @@
 *Nerede ve ne kadar şarj edeceğiniz, hangi hızla gideceğiniz, ne zaman yola çıkacağınız — hepsi optimallikleri ispatlanmış algoritmalarla hesaplanır, bağımsız bir değerlendiriciyle denetlenir ve tarayıcınızda canlandırılır.*
 
 Saf Python ≥ 3.10 · çalışma zamanında sıfır bağımlılık · MIT lisansı<br>
-[English](README.md) · **Türkçe** · [Dokümantasyon](docs/index.md) · [Model](docs/model.md) · [Algoritmalar ve ispatlar](docs/algorithms.md)
+[English](README.md) · **Türkçe** · [Dokümantasyon](docs/index.md) · [Rehber](docs/guide.tr.md) · [Model](docs/model.md) · [Algoritmalar ve ispatlar](docs/algorithms.md)
 
 </div>
 
@@ -30,6 +30,7 @@ gerisini basitleştirip geçer:
 | Arazi ve rejeneratif frenleme | inişler bataryayı yeniden doldurur | düz yollar | eğim, rüzgâr, dur-kalk, geri kazanım sınırı ve batarya doluyken geri kazanımın kesilmesini içeren fizik modeli |
 | Sıcaklık | −5 °C'de kullanılabilir kapasite küçülür, ısıtma gerekir, şarj yavaşlar | 20 °C | kullanılabilir kapasite, HVAC yükü, soğukta şarj gücü düşümü, batarya ön ısıtması |
 | Batarya yıpranması | yüksek SoC'de hızlı şarj batarya paketini yaşlandırır | yok sayılır | C-oranı, SoC ve sıcaklığa bağlı SoH kaybı; amaç fonksiyonunda fiyatlandırılır |
+| Fiyatlar | %80 SoC'nin üzerinde ve puant saatlerde daha pahalı | kWh başına tek fiyat | SoC'ye ve günün saatine (sabit ya da kuyruk yüküne göre) bağlı tarifeler; ucuz fiyatı ne zaman beklemenin kârlı olduğunun kesin planlanması |
 | Belirsizlik | tüketim ±%10 sapar | deterministik | Monte Carlo güvenilirlik analizi, güvenlik katsayısı, uyarlanabilir sürücü politikası |
 | Eko-sürüş | daha yavaş sürmek bir şarj molasını kaldırabilir | tek hız | her yol için birden çok hız seviyesi |
 
@@ -46,6 +47,10 @@ ticari planlayıcılar) kendisiyle kıyaslanabileceği bir temel çizgi.
   ve "araç içi navigasyon" sezgiselinden; kesin etiket ayarlamaya (label
   setting; BLS, BLS-A\*), kesin sürekli şarja (CFP, CFP-A\*) ve süre, para ve
   batarya yıpranması üzerinde çok ölçütlü bir Pareto aramasına kadar.
+- **Tek bir en iyi rota yok** — şarj tarifeleri ("%80 kuralı", puant ve
+  yoğun saatler) ve daha ucuz fiyatı beklemenin ne zaman kârlı olduğunun
+  kesin planlanması; Pareto araması süre, para ve batarya yıpranması
+  arasındaki ödünleşimi gösterir ([aşağıda](#tek-bir-en-iyi-rota-yok)).
 - **Kesin, gerçekten kesin** — sürekli enerjiler (tüketim hiçbir zaman
   yuvarlanmaz), kesin şarj eğrileri, aynı istasyondaki farklı şarj
   ünitelerinde art arda molalar; optimallik ispatları
@@ -63,8 +68,11 @@ ticari planlayıcılar) kendisiyle kıyaslanabileceği bir temel çizgi.
   sentetik şarj istasyonundan oluşan yaklaşık bir şehirlerarası ağ; buna ek
   olarak sentetik ağ üreteçleri (40 000 düğüme kadar) ve bir OpenStreetMap
   yükleyicisi.
-- **Tekrarlanabilir deneyler** — her tablonun ve grafiğin arkasında on deney;
-  tek komut, sabit tohum, CSV + JSON + LaTeX + grafikler.
+- **Tekrarlanabilir deneyler** — her tablonun ve grafiğin arkasında on bir
+  deney; tek komut, sabit tohum, CSV + JSON + LaTeX + grafikler.
+- **Anlaşılır bir rehber** — [`docs/guide.tr.md`](docs/guide.tr.md) algoritmaları
+  hem konuya yeni başlayanlar hem uzmanlar için adım adım anlatır ve "hangi
+  planlayıcıyı kullanmalıyım?" sorusuyla biter.
 - **Sıfır bağımlılık** — çekirdek yalnızca standart kütüphaneyle yazılmış
   Python'dur; `matplotlib`/`seaborn` isteğe bağlıdır ve yalnızca statik
   grafikler için kullanılır.
@@ -127,10 +135,11 @@ evroute algorithms                                   # planlayıcıları ve gara
 evroute plan turkey-karaman-istanbul                 # BLS-A* ile planlar (varsayılan)
 evroute plan turkey-karaman-istanbul --from Konya --to Ankara --soc 0.35 -a cfp
 evroute compare turkey-karaman-istanbul --algorithms naive,greedy,station-graph,genetic,bls,bls-astar,cfp,cfp-astar
+evroute plan turkey-karaman-istanbul-tariff --objective cost      # %80 kuralı + puant saatler: 20:00'yi bekler
 evroute viz turkey-karaman-istanbul -o karaman-istanbul.html --lang en   # animasyonlu görüntüleyici, çevrimdışı çalışır
 evroute serve turkey-karaman-istanbul --open          # tarayıcıda canlı planlama
 evroute robustness turkey-izmir-erzurum -n 2000 --safety 1.1             # Monte Carlo güvenilirliği
-evroute experiments --quick -o results/               # on deneyin tamamı, hızlı boyut (~1 dk)
+evroute experiments --quick -o results/               # on bir deneyin tamamı, hızlı boyut (~1,5 dk)
 ```
 
 ```text
@@ -147,6 +156,8 @@ Senaryo komutları (`plan`, `compare`, `viz`, `robustness`, `figures`,
 `export-scenario`) bir hazır senaryo adı ya da bir senaryo `.json` dosyası
 (`evroute export-scenario ... -o my.json`) alır; senaryonun değerleri
 `--from --to --soc --depart --temp --vehicle --objective --reserve --arrive --eco --no-queue --step --safety`
+seçenekleriyle, şarj tarifesi ise `--tariff 80|flat --high-soc
+--high-soc-factor --peak --peak-factor --peak-high-soc-factor --busy`
 seçenekleriyle geçersiz kılınabilir. `serve` yalnızca hazır senaryo adı alır.
 Seçeneklerin tamamını `evroute <command> -h` listeler.
 
@@ -281,6 +292,116 @@ Tablonun gösterdikleri:
   baskın olmayan (non-dominated) rota döndürür ve sonucu "eksik olabilir"
   diye işaretler.
 
+## Tek bir en iyi rota yok
+
+Bir yolculuğun üç bedeli vardır: **zaman**, **para** ve **batarya
+yıpranması**; üçü de farklı yönlere çeker. Hızlı DC şarj üniteleri zaman
+kazandırır ama kWh başına yavaş AC ünitelerinden pahalıdır; bataryayı yüksek
+doldurmak bir molayı kaldırabilir ama prizde yavaş ilerler; yüksek SoC'de hızlı
+şarj bataryayı en çok yıpratır. Şarj fiyatları bu ödünleşimi daha da
+keskinleştirir. EVRoute, yaygın iki uygulamayı bir `Tariff` ile modeller:
+
+- **%80 kuralı.** SoC yaklaşık %80'i geçince şarj gücü keskin biçimde düşer
+  ([şarj eğrileri](docs/img/fig_charging_curves.png)); orada şarja devam eden
+  bir araç, hızlı bir şarj ünitesini az bir enerji için meşgul eder.
+  İşletmeciler bunu daha yüksek bir fiyatla caydırır, kuyrukta bekleyen
+  sürücüler de pek hoş karşılamaz: `high_soc` üzerinde depolanan her kWh,
+  fiyatın `high_soc_factor` katına mal olur.
+- **Puant saatler.** Günün yoğun saatlerinde bir puant çarpanı uygulanır;
+  ya sabit saat aralıklarında ya da istasyonun kuyruk modelinin yoğunluk
+  beklediği saatlerde.
+- **Fiyat, kuyruğa girdiğiniz anda belirlenir.** Puantın bitmesine üç dakika
+  kala bir şarj noktasına varan araç, ucuz fiyatı bekleyebilir. EVRoute bu
+  *gönüllü beklemeleri* kesin olarak planlar ve yalnızca kârlı olduklarında
+  yapar.
+
+`turkey-karaman-istanbul-tariff` hazır senaryosu, yukarıdaki yolculuğun saat
+14:00'te `DEMO_TARIFF` gösterim tarifesiyle yapılanıdır (istasyon fiyatları
+gibi örnekleme amaçlı, sentetik değerler: %80 SoC'nin üzerinde ×1,3;
+16:00-20:00 puantında ×1,15; puantta %80'in üzerinde ×2,3). En hızlı rota
+08:00'dekiyle aynı iki molayı verir, ama artık ikisi de puanta denk gelir.
+Maliyet amacı (bu senaryoda bir saatin değeri 250 TRY'dir, batarya
+yıpranması da fiyatlandırılır) Ilgın'da puant başlamadan şarj eder ve
+İnegöl'de 20:00'deki fiyat değişimini bekler:
+
+```text
+$ evroute plan turkey-karaman-istanbul-tariff
+[bls-astar] 8 h 09 min | 747.27 km | 2 stop(s) | arrive 10.4% | 1309.59 TRY
+#  station     charger    arrive  queue  charge  SoC         tariff  cost
+-  ----------  ---------  ------  -----  ------  ----------  ------  ----------
+1  Akşehir DC  DC 120 kW   16:20  5 min  11 min  28% -> 54%    peak  387.24 TRY
+2  Kütahya DC  DC 150 kW   18:30  3 min  25 min  10% -> 72%    peak  922.35 TRY
+arrival 22:09 | drive 7 h 19 min | charge 36 min | queue+setup 14 min | battery wear 0.0188 %SoH
+$ evroute plan turkey-karaman-istanbul-tariff --objective cost
+[bls-astar] 8 h 20 min | 747.27 km | 2 stop(s) | arrive 10.5% | 1111.61 TRY
+#  station    charger    arrive  hold   queue  charge  SoC         tariff         cost
+-  ---------  ---------  ------  -----  -----  ------  ----------  -------------  ----------
+1  Ilgın DC   DC 120 kW   15:52      -  7 min  26 min  39% -> 85%  off-peak >80%  593.50 TRY
+2  İnegöl DC  DC 120 kW   19:57  2 min  2 min  18 min  10% -> 52%       off-peak  518.11 TRY
+arrival 22:20 | drive 7 h 19 min | charge 43 min | queue+setup 15 min | hold 2 min | battery wear 0.0182 %SoH
+```
+
+Bu ikisinin arasında başka pek çok yanıt var. Pareto araması, hem süre hem
+para bakımından başka hiçbir planın geçemediği planların tamamını bulur:
+
+```python
+from evroute import plan
+from evroute.generators.presets import get_scenario
+
+sc = get_scenario("turkey-karaman-istanbul-tariff")
+fastest = plan(sc, "bls-astar")                                      # en kısa yolculuk süresi
+balanced = plan(sc.with_preferences(objective="cost"), "bls-astar")  # 250 TRY/sa + para + yıpranma
+front = plan(sc, "pareto", criteria=("time", "money"), max_labels=10_000_000)  # ~1,5 dk
+cheapest = min(front.alternatives, key=lambda p: p.money)
+for p in (fastest, balanced, cheapest):
+    print(p)
+print(len(front.alternatives), "Pareto-optimal routes; complete:", front.stats.extra["complete"])
+```
+
+```text
+[bls-astar] 8 h 09 min | 747.27 km | 2 stop(s) | arrive 10.4% | 1309.59 TRY
+[bls-astar] 8 h 20 min | 747.27 km | 2 stop(s) | arrive 10.5% | 1111.61 TRY
+[pareto] 14 h 44 min | 768.22 km | 3 stop(s) | arrive 10.1% | 796.58 TRY
+268 Pareto-optimal routes; complete: True
+```
+
+<p align="center"><img src="docs/img/fig_tradeoff_tariff.png" width="98%" alt="Gösterim tarifesiyle saat 14:00'te yola çıkan Karaman → İstanbul yolculuğunun süre–para Pareto cephesi: 8 sa 09 dk ve 1 309,59 TRY'den 14 sa 44 dk ve 796,58 TRY'ye uzanan 268 plan; 8 sa 20 dk ve 1 111,61 TRY'lik dengeli plan, cephenin yatıklaştığı yerde"></p>
+
+| plan | yolculuk süresi | şarj maliyeti | batarya yıpranması | ne yapıyor |
+|---|---:|---:|---:|---|
+| en hızlı (`bls-astar`) | 8 sa 09 dk | 1 309,59 TRY | %0,0188 SoH | Akşehir %28 → %54 ve Kütahya %10 → %72, ikisi de puantta; aynı molalar sabit fiyatla 1 138,78 TRY tutar (+%15) |
+| dengeli (`--objective cost`) | 8 sa 20 dk | 1 111,61 TRY | %0,0182 SoH | Ilgın %39 → %85, kuyruğa puanttan önce, 15:52'de giriyor; İnegöl %10 → %52, 20:00'yi 2,4 dk bekledikten sonra |
+| en ucuz (cephenin ucu) | 14 sa 44 dk | 796,58 TRY | %0,0162 SoH | üç yavaş 22 kW AC molası, hiçbiri %80'in üzerine çıkmıyor; ilki 15:52'de kuyruğa giriyor ve puant dışı fiyatla 3 sa 09 dk şarj ediyor |
+
+Rakamların söyledikleri:
+
+- **Her bakımdan kazanan bir plan yok.** En hızlı plan en pahalısıdır; en
+  ucuzu 6 sa 35 dk daha uzun sürer ve bataryayı da en az o yıpratır (yavaş AC
+  şarjı bataryaya naziktir). Cephedeki 268 planın hiçbiri, hem süre hem para
+  bakımından bir başkası tarafından geçilmez.
+- **İlk dakikalar en çok kazandırır.** Cephe önce dik, sonra yataydır: 11
+  dakika fazlası 197,98 TRY (−%15,1) kazandırır, sonraki 6 sa 24 dk ise
+  yalnızca 315,04 TRY daha. Hangi noktanın doğru olduğu, bir saatin sizin
+  için ne ettiğine bağlıdır: maliyet amacındaki zamanın değeri
+  (`value_of_time_per_h`) ya da görüntüleyicide cepheden sizin seçiminiz.
+- **Beklemek de bir karardır.** 268 planın 28'i bir istasyonda daha ucuz
+  fiyatı bekler. Beklemek yolculuğu hiçbir zaman kısaltmaz (kuyruklarda ilk
+  gelen ilk hizmet alır); bu yüzden süre amacı (BLS-A\*, CFP) asla beklemez.
+  Maliyet amacı ve Pareto araması ise bir istasyonun her fiyat değişimine
+  kadar beklemeyi de dener ve bunun yeterli olduğu ispatlanmıştır
+  ([`docs/algorithms.md` §6](docs/algorithms.md#6-charging-tariffs-price-periods-and-voluntary-holds)).
+- **İki yolculukta bütün bir güne bakınca** (`tariffs` deneyi), tarife en
+  hızlı planı sabit fiyata göre ortalama %2,6, en çok %10,5 pahalılaştırır;
+  maliyet-optimal plan en hızlı plandan 6,3 dakika uzun sürer ama 76,73 TRY
+  (%7,6) daha az öder.
+
+Fikri adım adım [rehber](docs/guide.tr.md#11-tarifeler-tek-bir-en-iyi-rota-yok)
+anlatıyor; model [`docs/model.md` §5](docs/model.md#5-charging-tariffs)
+bölümünde. Cepheyi görüntüleyicide incelemek için
+`evroute viz turkey-karaman-istanbul-tariff --step 0.05 -o tarife.html`
+%5'lik bir şarj ızgarasında planlar; orada cephenin tamamı (180 plan)
+görüntüleyicinin etiket bütçesine sığar.
+
 ## Algoritmalar
 
 | ad | fikir | garanti |
@@ -300,6 +421,11 @@ genelleştirilmiş maliyetini (VoT: zamanın parasal değeri) en küçükler (BL
 BLS-A\*, Pareto; CFP yalnızca süreyi amaçlayan bir algoritmadır). Hepsi
 zamana bağlı kuyrukları, birden çok hız seviyesini, rejeneratif frenlemeyi ve
 aynı istasyondaki farklı şarj ünitelerinde art arda molaları destekler.
+Fiyatları saate bağlı bir şarj tarifesinde BLS ve BLS-A\* (maliyet amacıyla)
+ile Pareto, bir istasyonda bir fiyat değişimine kadar beklemeyi de dener;
+bunun yeterli olduğu ispatlıdır. Süre amacı ise hiç beklemez. Hangi
+planlayıcıyı seçeceğinizden emin değil misiniz? Bkz.
+[rehber](docs/guide.tr.md#12-hangi-planlayıcıyı-kullanmalıyım).
 
 <details>
 <summary><b>BLS-A* nasıl çalışır?</b></summary>
@@ -368,6 +494,10 @@ olmayan eğriler, zamana bağlı kuyruklar, art arda duraklar):
   (düşük SoC'deki güç artışının ötesinde içbükey/konkav; CFP iki biçimi de
   kesin olarak işler); şarj kayıplarını da içeren kWh başına
   fiyatlar; her mola için hazırlık süresi.
+- **Şarj tarifeleri** — bir SoC eşiğinin üzerinde ("%80 kuralı") ve puant
+  saatlerde (sabit ya da istasyonun kuyruk modelinin yoğunluk beklediği
+  saatlerde) fiyat çarpanları; fiyat araç kuyruğa girdiği anda belirlenir,
+  bu yüzden ucuz dönemi beklemek kârlı olabilir.
 - **Kuyruklar** — her istasyon, saatlik talep profiline sahip bir M/M/c
   kuyruğudur; Erlang-C beklenen bekleme süresi, zamana bağlı planlamanın
   kesin kalması için FIFO-güvenli hâle getirilir.
@@ -396,6 +526,7 @@ edilmiş, 290 istasyonluk (14'ü 300 kW HPC olmak üzere 199 DC ve 91 AC;
 | hazır senaryo | yolculuk |
 |---|---|
 | `turkey-karaman-istanbul` | 750 km: Konya Ovası, Afyon/Eskişehir koridorları, Marmara otoyolları (ana senaryo) |
+| `turkey-karaman-istanbul-tariff` | ana yolculuk, 14:00'te gösterim tarifesiyle (%80 kuralı, 16:00-20:00 puantı) |
 | `turkey-antalya-ankara` | Akdeniz'den Toroslar üzerinden 530 km |
 | `turkey-izmir-erzurum` | 1 470 km'lik batı-doğu geçişi, doğudaki dağlar |
 | `turkey-istanbul-antalya-winter` | −5 °C'de 680 km |
@@ -412,9 +543,9 @@ içeren, kısmi şarjı sınayan 600 km'lik bir örnek), `country-small/-medium/
 > Koordinatlar ve rakımlar yer adları sözlüğü (gazetteer) düzeyinde yaklaşık
 > değerlerdir (yaklaşık 1-5 km ve 50-150 m); yol uzunlukları modellenmiştir ve
 > resmî mesafelerden genellikle en fazla ±%10 sapar; hızlar serbest akış
-> sınırlarıdır. **Şarj istasyonları, güçleri, fiyatları ve kuyrukları
-> sentetiktir** ve genel operatör adları kullanır — herhangi bir şirketin ağı
-> *değildir*. Hazır araç profilleri kamuya açık yaklaşık değerlere dayanır
+> sınırlarıdır. **Şarj istasyonları, güçleri, fiyatları, kuyrukları ve
+> gösterim tarifesi sentetiktir** ve genel operatör adları kullanır —
+> herhangi bir şirketin ağı ya da fiyatları *değildir*. Hazır araç profilleri kamuya açık yaklaşık değerlere dayanır
 > ("T10X-like" üretici verisi değildir). Vaka çalışmasını gerçek bir
 > yolculuğu planlamak için değil, algoritmaları karşılaştırmak ve etkileri
 > incelemek için kullanın; operasyonel bir sonuca varmak için ölçülmüş
@@ -424,8 +555,8 @@ içeren, kısmi şarjı sınayan 600 km'lik bir örnek), `country-small/-medium/
 
 ## Deneyler
 
-Sabit tohumlu on deney, eşlik eden makaledeki tüm tablo ve şekilleri yeniden
-üretir. Her deney `<out>/<experiment>/` klasörüne `results.csv` (pareto:
+Sabit tohumlu on bir deney, eşlik eden makaledeki tüm tablo ve şekilleri
+yeniden üretir. Her deney `<out>/<experiment>/` klasörüne `results.csv` (pareto:
 her vaka için bir CSV) ve PDF/PNG grafikleri, çoğu bir `summary.json`,
 case-studies, optimality-gap ve vehicles ayrıca booktabs biçiminde bir
 `table.tex` yazar; koşu, ölçülen her şeyi bir araya getiren etkileşimli, çevrimdışı bir
@@ -433,7 +564,7 @@ panel olan `<out>/results.html` ile tamamlanır (hesaplanmış bulgular,
 kesinlik denetimleri, grafikler, tablolar, CSV indirmeleri).
 
 ```bash
-evroute experiments --quick -o results/            # hızlı boyut: ~1 dakika
+evroute experiments --quick -o results/            # hızlı boyut: ~1,5 dakika
 evroute experiments -o results/ --lang en          # tam boyut, İngilizce panel
 evroute experiments optimality-gap robustness -o results/
 evroute results results/ --lang en                 # bir sonuç klasörünün panelini yeniden oluşturur
@@ -441,9 +572,9 @@ evroute gallery -o docs/img                        # bu README'deki seaborn graf
 ```
 
 Tam bir koşudan öne çıkanlar (ölçeklenebilirlik dışındaki tüm deneyler
-yukarıdaki makinede 3 dakika sürer; ölçeklenebilirlik tek başına 2 saatlik
-planlama süresi gerektirir ve bunun %99'u istasyon grafına ve Dijkstra
-sıralı temel yöntemlere gider):
+yukarıdaki makinede 8 dakika sürer, bunun 5 dakikası `tariffs` deneyinindir;
+ölçeklenebilirlik tek başına 2 saatlik planlama süresi gerektirir ve bunun
+%99'u istasyon grafına ve Dijkstra sıralı temel yöntemlere gider):
 
 | deney | bulgu |
 |---|---|
@@ -456,6 +587,7 @@ sıralı temel yöntemlere gider):
 | `robustness` | İzmir → Erzurum, 2 000 Monte Carlo koşusu: güvenlik katsayısı 1,0'da P(yolda kalma) %1,25 ve P(rezerv aşımı) %56; 1,1'de %0 ve %9,7 (+21 dk), 1,2'de %0 ve %0,4 (+36 dk) |
 | `eco-speed` | %90 / %80 hızlara izin vermek 80 yolculuğun 24'ünü en çok 2,8 dk kısaltır: bir etabı daha yavaş sürmek, kaybettirdiğinden daha fazla şarj süresi kazandırabilir |
 | `vehicles` | Karaman → İstanbul: 7 sa 50 dk (75 kWh sedan, 2 mola) ile 10 sa 57 dk (27 kWh şehir otomobili, 5 mola) arası |
+| `tariffs` | Karaman → İstanbul ve Antalya → Ankara, 06:00-22:00 arası her 2 saatte bir kalkış: gösterim tarifesinde (%80 kademesi + 16:00-20:00 puantı) en hızlı plan sabit fiyata göre ortalama %2,6 (en çok %10,5; Karaman'dan 12:00'de çıkışta) fazla öder; maliyet-optimal plan en hızlıdan 6,3 dk uzun sürer ama 76,73 TRY (%7,6) daha az öder ve 18 yolculuğun 2'sinde ucuz dönemi bekler (en çok 2,4 dk); %80 kademesi tek başına maliyet-optimal planları %80'in altına çeker (%80'in üzerinde şarj edilen enerji ortalama Karaman'da 2,34 → 0,47 kWh, Antalya'da 0,94 → 0 kWh); %5'lik ızgarada (süre, para) cephelerinde 55-202 plan, 72 cepheden 14'ü 1 milyon etiketlik bütçede kesiliyor |
 | `scalability` | 1 000-40 000 düğümlü sentetik ülkeler, her birinde 8 yolculuk: BLS-A\* ortalama 0,03 sn → 1,7 sn'de, CFP-A\* 0,03 sn → 2,5 sn'de yanıt veriyor; Dijkstra sırasındaki BLS ve CFP 10 000 düğümde zaten 20 ve 35 kat yavaş, 20 000 düğümde 8 yolculuğun 3'ünde / 4'ünde etiket bütçesini aşıyor (CFP 40 000 düğümde 8'in 6'sında); istasyon grafı 40 000 düğümde meta-grafını kurmak için yolculuk başına 8 dakika harcıyor |
 
 ## Doğruluğun denetlenmesi
@@ -477,24 +609,31 @@ Bir optimallik iddiası, ancak arkasındaki denetimler kadar güçlüdür:
    BLS (süre/maliyet), hiçbir şey CFP'yi geçemez, daha ince ızgaralar asla
    daha kötü sonuç vermez, kayıpsız JSON gidiş-dönüşleri, metamorfik
    bağıntılar (yeniden etiketleme, ek istasyonlar, daha fazla enerji ...),
-   her optimumun çevresinde yerel arama.
+   her optimumun çevresinde yerel arama. İkinci bir paket
+   (`tests/test_crossval_tariffs.py`) bunları rastgele şarj tarifeleri
+   altında, yalnızca belirtimden yazılmış bağımsız bir fiyat referansına
+   karşı yineler; süre amacının hiç beklemediğini ve fiyatlar arttıkça
+   optimal maliyetin hiç düşmediğini de sınar.
 3. **Kaba kuvvet.** Küçük yönlü graflarda yürüyüşlerin, durakların ve şarj
    hedeflerinin eksiksiz sayımı, BLS optimumunu ve Pareto cephesini birebir
-   yeniden üretir.
+   yeniden üretir; tarifelerle her fiyat değişimine kadar beklemeler de
+   (en küçük örneklerde sonraki 24 saatin her 5 dakikasına kadar) sayılır.
 4. **Analitik referans çözümler (oracle).** Çok üniteli bir istasyondaki art
    arda duraklar için kırılma noktası enerjileri üzerinde kesin bir dinamik
    programlama; CFP bununla birebir örtüşür.
 
-Bu paket gerçek hataları ortaya çıkardı ve hepsi düzeltildi: 1 ulp daha hızlı
-ama 6 EUR daha pahalı bir üyeyi tutan bir Pareto cephesi, kayıplı bir JSON
-gidiş-dönüşü, gözden kaçan bir önce DC sonra AC çift molası, zamana bağlı
-kuyruklarda geçersiz (unsound) bir 3 boyutlu baskınlık kuralı. Toplam 471
-test vardır; bunların 416'sı hızlı katmandadır (`pytest -m "not slow"`) ve
-CI'da Python 3.10-3.13 üzerinde çalıştırılır.
+Bu paketler gerçek hataları ortaya çıkardı ve hepsi düzeltildi: 1 ulp daha
+hızlı ama 6 EUR daha pahalı bir üyeyi tutan bir Pareto cephesi, kayıplı bir
+JSON gidiş-dönüşü, gözden kaçan bir önce DC sonra AC çift molası, zamana bağlı
+kuyruklarda geçersiz (unsound) bir 3 boyutlu baskınlık kuralı, duraklarından
+yeniden kurulduğunda kuyruğa bir fiyat değişiminden 1 ulp önce giren bir
+plan. Toplam 626 test vardır; bunların 533'ü hızlı katmandadır
+(`pytest -m "not slow"`) ve CI'da Python 3.10-3.13 üzerinde çalıştırılır.
 
 ```bash
 python -m pytest -m "not slow"                    # hızlı katman, birkaç dakika
 python -m pytest -m slow tests/test_crossval.py   # 3 200 rastgele örnek, ~40 dk
+python -m pytest -m slow tests/test_crossval_tariffs.py   # 460 rastgele tarife örneği
 ```
 
 ## Proje yapısı
@@ -515,7 +654,7 @@ evroute/
 │   └── cli.py           # `evroute` komutu
 ├── tests/               # pytest paketi + fuzz_report.md
 ├── examples/            # quickstart.py, custom_network.py, viewer_demo.py
-└── docs/                # index, model, algorithms, DEV_SPEC, PLAN.tr, demo/ (görüntüleyici + panel), img/
+└── docs/                # index, guide (EN/TR), model, algorithms, DEV_SPEC, PLAN.tr, demo/ (görüntüleyici + panel), img/
 ```
 
 ## Yol haritası ve fikirler

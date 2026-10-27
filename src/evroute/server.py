@@ -320,9 +320,8 @@ class ViewerServer(ThreadingHTTPServer):
 
     def scenario_payload(self, name: str | None) -> dict[str, Any]:
         """Live-mode viewer payload without results."""
-        from .viz.export import viewer_payload
-
         from .generators.presets import DEMO_TARIFF
+        from .viz.export import viewer_payload
 
         sc = self.base_scenario(name)
         return viewer_payload(

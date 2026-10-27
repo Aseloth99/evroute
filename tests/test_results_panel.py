@@ -128,9 +128,49 @@ def make_results(root: Path, *, break_bls: bool = False, dominated_pareto: bool 
         {"vehicle": "city27", **row("bls-astar", 657.3, stops=5)},
         {"vehicle": "sedan75", **row("bls-astar", 470.2, stops=2)},
     ])
+    make_tariffs(root / "tariffs")
     report = {name: {"status": "ok", "seconds": 1.5, "result": {}} for name in R.SECTION_IDS}
     (root / "report.json").write_text(json.dumps(report), encoding="utf-8")
     return root
+
+
+#: (hour, tariff) -> time-optimal (time, money), cost-optimal (time, money, hold), front [(time, money)]
+#: for Karaman -> Istanbul; under flat prices the cost-optimal plan never holds.
+TARIFF_DATA = {
+    (14, "flat"): ((490.0, 1200.0), (500.0, 1100.0, 0.0), [(490.0, 1200.0), (495.0, 1150.0), (500.0, 1100.0), (520.0, 900.0)]),
+    (14, "tier+peak"): ((490.0, 1320.0), (503.0, 1120.0, 2.4), [(490.0, 1320.0), (497.0, 1180.0), (503.0, 1120.0), (525.0, 950.0)]),
+    (18, "flat"): ((482.0, 1200.0), (486.0, 1100.0, 0.0), [(482.0, 1200.0), (486.0, 1100.0)]),
+    (18, "tier+peak"): ((482.0, 1260.0), (488.0, 1105.0, 0.0), [(482.0, 1260.0), (488.0, 1105.0)]),
+}
+VOT_PER_MIN = 4.0  # generalised cost = VOT_PER_MIN * time + money (+ no wear in this data)
+
+
+def make_tariffs(d: Path, data=TARIFF_DATA, complete: bool = True) -> None:
+    """The ``tariffs`` experiment's files (runner layout): results.csv, fronts.csv, summary.json."""
+    case = "turkey-karaman-istanbul"
+    rows, members = [], []
+    for (h, tariff), ((tt, tm), (ct, cm, hold), front) in data.items():
+        key = {"case": case, "departure_h": h, "tariff": tariff}
+        for kind, t, m, hm in (("time", tt, tm, 0.0), ("cost", ct, cm, hold)):
+            rows.append({**key, "kind": kind, **row("bls-astar", t, money=m, gcost=VOT_PER_MIN * t + m),
+                         "max_soc": 0.85 if kind == "cost" else 0.55, "above80_kwh": 4.0 if kind == "cost" else 0.0,
+                         "holds": int(hm > 0), "hold_min": hm, "peak_stops": 0, "money_wear": m})
+        rows.append({**key, "kind": "pareto", "algorithm": "pareto", "feasible": 1, "front_size": len(front),
+                     "complete": int(complete), "runtime_ms": 900.0, "settled": 50000, "generated": 90000,
+                     "status": "exhausted" if complete else "limit"})
+        for i, (t, m) in enumerate(front):
+            members.append({**key, "member": i, "time_min": t, "money": m, "soh_pct": 0.019, "stops": 2,
+                            "holds": int(m == cm and hold > 0), "hold_min": hold if m == cm else 0.0,
+                            "max_soc": 0.8, "above80_kwh": 0.0})
+    write_csv(d / "results.csv", rows)
+    write_csv(d / "fronts.csv", members)
+    tier_peak = {"high_soc": 0.8, "high_soc_factor": 1.3, "peak_hours": [[16.0, 20.0]], "peak_factor": 1.15,
+                 "peak_high_soc_factor": 2.0, "busy_utilisation": None}
+    (d / "summary.json").write_text(json.dumps({
+        "tariffs": {"flat": {"high_soc": 0.8, "high_soc_factor": 1.0, "peak_hours": [], "peak_factor": 1.0,
+                             "peak_high_soc_factor": None, "busy_utilisation": None}, "tier+peak": tier_peak},
+        "high_soc": 0.8, "charge_step_soc": 0.05, "pareto_max_labels": 1000000, "criteria": ["time", "money"],
+        "cases": {case: {"viewer_departure_h": 14}}}), encoding="utf-8")
 
 
 @pytest.fixture()
@@ -375,6 +415,132 @@ def test_pareto_references_beating_a_member_are_flagged(results_dir):
     assert "grid" in s["meaning"]["en"] and "guarantees" not in s["meaning"]["en"] and "ızgara" in s["meaning"]["tr"]
 
 
+def test_tariffs_section_is_computed_from_the_data(results_dir):
+    p = R.results_payload(results_dir, out_dir=results_dir)
+    s = section(p, "tariffs")
+    f = s["facts"]
+    assert f["main_tariff"] == "tier+peak" and f["n"] == 2
+    assert f["premium_mean_pct"] == pytest.approx(7.5) and f["premium_max_pct"] == pytest.approx(10.0)
+    assert f["saving_mean"] == pytest.approx(177.5) and f["extra_time_mean_min"] == pytest.approx(9.5)
+    assert f["holds"] == 1 and f["max_hold_min"] == pytest.approx(2.4)
+    assert (f["front_min"], f["front_max"], f["incomplete_fronts"]) == (2, 4, 0)
+    en, tr = s["finding"]["en"], s["finding"]["tr"]
+    assert "80 % tier + peak" in en and "8% more" in en and "up to 10%" in en and "leaving at 14:00" in en
+    assert "₺178" in en and "9.5 min more" in en and "in 1 of 2 trips it waits" in en and "2.4 min" in en
+    assert "no single best route" in en and "2–4 plans" in en and "label budget" not in en
+    assert "%80 kademesi + puant" in tr and "178 ₺" in tr and "2 yolculuğun 1 tanesinde" in tr and "Tek bir en iyi rota yok" in tr
+    d = s["data"]
+    assert [t["key"] for t in d["tariffs"]] == ["flat", "tier+peak"] and d["tariffs"][1]["spec"]["peak_factor"] == 1.15
+    assert d["hours"] == [14, 18] and d["step_pct"] == pytest.approx(5.0) and d["budget"] == 1000000
+    case = d["cases"][0]
+    assert case["title"] == "Karaman → İstanbul" and case["currency"] == "TRY" and case["viewer_hour"] == 14
+    p14 = case["series"]["tier+peak"][0]
+    assert p14["hour"] == 14 and p14["cost"]["hold_min"] == pytest.approx(2.4) and p14["front"] == {
+        "size": 4, "complete": True, "status": "exhausted", "runtime_ms": 900.0, "settled": 50000}
+    assert d["fronts"]["turkey-karaman-istanbul|14|tier+peak"][0][:2] == [490.0, 1320.0]
+    groups = {g["id"]: g for g in p["checks"]["groups"]}
+    for cid in ("tariff-time-optimal", "tariff-cost-gcost", "tariff-cost-money", "tariff-front-extremes"):
+        assert groups[cid]["total"] == 4 and groups[cid]["passed"] == 4, cid
+    assert "tariffs" in groups["pareto-nondominated"]["sections"]
+    kpi = next(k for k in p["kpis"] if k["id"] == "tariffs")
+    assert kpi["value"]["en"] == "−₺178" and "1/2 with a hold" in kpi["sub"]["en"]
+    # the tariff colours are emitted for both themes; flat prices are the neutral reference
+    assert p["theme"]["tariffs"]["flat"]["color"] is None and p["theme"]["tariffs"]["tier+peak"]["color"] == ["#C2185B", "#D43D84"]
+    html = R.render_results_html(p)
+    assert "--tariff-0: var(--text-3);" in html and "--tariff-3: #C2185B;" in html and "--tariff-3: #D43D84;" in html
+
+
+def test_tariff_checks_catch_violations(tmp_path):
+    root = make_results(tmp_path / "r")
+    bad = dict(TARIFF_DATA)
+    # 14:00: no member of the complete front covers the cost optimum, and a member is beaten in
+    # both criteria; 18:00: the cost-optimal plan is dearer in generalised cost and money than
+    # the fastest one (tier+peak) and the front's fastest member misses the time optimum (flat)
+    tp14, tp18 = bad[(14, "tier+peak")], bad[(18, "tier+peak")]
+    bad[(14, "tier+peak")] = (tp14[0], (495.0, 1150.0, 2.4), tp14[2] + [(510.0, 1200.0)])
+    bad[(18, "tier+peak")] = (tp18[0], (488.0, 1300.0, 0.0), tp18[2])
+    bad[(18, "flat")] = ((482.0, 1200.0), (486.0, 1100.0, 0.0), [(483.0, 1200.0), (486.0, 1100.0)])
+    make_tariffs(root / "tariffs", bad)
+    p = R.results_payload(root)
+    groups = {g["id"]: g for g in p["checks"]["groups"]}
+    assert groups["tariff-cost-gcost"]["passed"] == 3 and groups["tariff-cost-money"]["passed"] == 3
+    assert groups["tariff-front-extremes"]["passed"] == 2
+    assert any("no member covers" in x for x in groups["tariff-front-extremes"]["failures"])
+    assert any("fastest member 483.0" in x for x in groups["tariff-front-extremes"]["failures"])
+    pd = groups["pareto-nondominated"]
+    assert pd["passed"] == pd["total"] - 1 and any("tier+peak" in x for x in pd["failures"])
+    assert next(k for k in p["kpis"] if k["id"] == "checks")["tone"] == "bad"
+    # a time-optimal plan that holds, or a plan faster than it, is a failure too
+    bad2 = dict(TARIFF_DATA)
+    bad2[(18, "flat")] = ((482.0, 1200.0), (481.0, 1100.0, 0.0), [(482.0, 1200.0), (486.0, 1100.0)])
+    make_tariffs(root / "tariffs", bad2)
+    rows = read_rows(root / "tariffs" / "results.csv")
+    for r in rows:
+        if r["departure_h"] == "14" and r["tariff"] == "flat" and r["kind"] == "time":
+            r["hold_min"], r["holds"] = 1.5, 1
+    write_csv(root / "tariffs" / "results.csv", rows)
+    g = next(g for g in R.results_payload(root)["checks"]["groups"] if g["id"] == "tariff-time-optimal")
+    assert g["passed"] == 2 and g["total"] == 4
+
+
+def test_tariff_fronts_stopped_by_the_budget_are_marked(tmp_path):
+    root = make_results(tmp_path / "r")
+    make_tariffs(root / "tariffs", complete=False)
+    p = R.results_payload(root)
+    s = section(p, "tariffs")
+    assert s["facts"]["incomplete_fronts"] == 4 and all(
+        not pt["front"]["complete"] for pts in s["data"]["cases"][0]["series"].values() for pt in pts)
+    assert "(4 of 4 fronts stopped at the label budget)" in s["finding"]["en"]
+    assert "(4 cepheden 4 tanesi etiket bütçesinde kesildi)" in s["finding"]["tr"]
+    # an incomplete front proves nothing about the cost optimum, so only completeness-free checks run
+    assert all(g["passed"] == g["total"] for g in p["checks"]["groups"])
+
+
+def test_real_quick_tariffs_experiment(tmp_path, monkeypatch):
+    from evroute.experiments import runner
+
+    monkeypatch.setattr(runner, "CASES", ["turkey-antalya-ankara"])  # the faster trip only
+    runner.run_experiments(["tariffs"], tmp_path / "res", quick=True)
+    out = tmp_path / "res" / "tariffs"
+    rows = read_rows(out / "results.csv")
+    assert {(r["departure_h"], r["tariff"], r["kind"]) for r in rows} == {
+        (h, t, k) for h in ("14", "18") for t in ("flat", "tier+peak") for k in ("time", "cost", "pareto")}
+    for r in rows:
+        if r["kind"] == "time":
+            assert float(r["hold_min"]) == 0.0 and r["status"] == "goal"
+        if r["kind"] == "pareto":
+            assert int(r["front_size"]) > 0 and r["complete"] in ("0", "1")
+    assert read_rows(out / "fronts.csv") and json.loads((out / "summary.json").read_text())["charge_step_soc"] == 0.05
+    assert (out / "turkey-antalya-ankara" / "viewer.html").exists()
+    p = embedded_payload((tmp_path / "res" / "results.html").read_text(encoding="utf-8"))
+    s = section(p, "tariffs")
+    assert s["status"] == "ok" and s["finding"]["en"] and s["data"]["cases"][0]["viewer"]
+    assert p["checks"]["total"] >= 16 and p["checks"]["passed"] == p["checks"]["total"]
+
+
+def test_tariff_metrics_of_a_plan():
+    from evroute.experiments.runner import TARIFF_NAMES, tariff_metrics, tariff_set
+    from evroute.generators.presets import DEMO_TARIFF, get_scenario
+    from evroute.scenario import Tariff
+
+    ts = tariff_set()
+    assert tuple(ts) == TARIFF_NAMES and ts["flat"] == Tariff() and ts["tier+peak"] == DEMO_TARIFF
+    assert ts["tier"].peak_hours == () and ts["tier"].high_soc_factor == DEMO_TARIFF.high_soc_factor
+    assert ts["peak"].high_soc_factor == 1.0 and ts["peak"].peak_hours == DEMO_TARIFF.peak_hours
+    sc = get_scenario("turkey-karaman-istanbul-tariff").with_preferences(objective="cost", charge_step_soc=0.05)
+    P = sc.prepare()
+    from evroute.algorithms import plan
+
+    p = plan(sc, "bls-astar")
+    m = tariff_metrics(p, P.capacity, P.vot_per_s)
+    assert m["holds"] == sum(1 for s in p.stops if s.hold_s > 0) >= 1 and m["hold_min"] == pytest.approx(p.hold_time_s / 60)
+    assert m["max_soc"] == max(s.soc_out for s in p.stops)
+    hi = 0.8 * P.capacity
+    assert m["above80_kwh"] == pytest.approx(sum(max(0.0, s.energy_out_kwh - max(s.energy_in_kwh, hi)) for s in p.stops))
+    assert m["money_wear"] == pytest.approx(p.generalized_cost - P.vot_per_s * p.total_time_s)
+    assert m["money_wear"] >= p.money
+
+
 def test_optimality_gap_finding_gives_mean_and_max_of_bls_astar(tmp_path):
     root = make_results(tmp_path / "r")
     rows = []
@@ -429,7 +595,8 @@ def test_rerun_keeps_the_report_of_earlier_runs(tmp_path, monkeypatch):
     assert merged["vehicles"]["status"] == "ok" and merged["vehicles"]["quick"] is True and merged["vehicles"]["finished"]
     p = embedded_payload((root / "results.html").read_text(encoding="utf-8"))
     assert section(p, "scalability")["status"] == "failed" and section(p, "temperature")["status"] == "failed"
-    assert p["run"]["total_seconds"] == pytest.approx(7 * 1.5 + 60.0 + 2.0 + merged["vehicles"]["seconds"], abs=0.02)
+    others = len(R.SECTION_IDS) - 3  # every experiment but scalability, temperature and vehicles: 1.5 s each
+    assert p["run"]["total_seconds"] == pytest.approx(others * 1.5 + 60.0 + 2.0 + merged["vehicles"]["seconds"], abs=0.02)
     # a malformed report is replaced, not merged
     (root / "report.json").write_text("[]")
     runner.run_experiments(["vehicles"], root, quick=True, panel=False)
