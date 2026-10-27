@@ -16,7 +16,8 @@ page is the map of the documentation; the [README](../README.md)
 | [`../tests/fuzz_report.md`](../tests/fuzz_report.md) | what the cross-validation suite checks, its coverage and the bugs it found |
 | [`../CONTRIBUTING.md`](../CONTRIBUTING.md) | how to set up, test and extend the project |
 | [`demo/index.html`](demo/index.html) | the animated viewer for Karaman → İstanbul with every planner (one offline file; `#tr` opens it in Turkish) |
-| [`demo/results.html`](demo/results.html) | the results dashboard of a full experiments run |
+| [`demo/tariff.html`](demo/tariff.html) | the same trip leaving at 14:00 under the demonstration tariff (80 % rule + peak 16:00-20:00), cost objective: the cost-optimal plan waits 2.4 min at İnegöl for the off-peak price (built with `--step 0.05` so the Pareto front fits the viewer's label budget) |
+| [`demo/results.html`](demo/results.html) | the results dashboard of a full experiments run, including the `tariffs` experiment |
 
 On this page: [install](#install) · [command line](#command-line) ·
 [Python API](#python-api) · [web viewer](#web-viewer) ·

@@ -332,7 +332,8 @@
       const first = Math.ceil(dep / 3600 / step) * step * 3600;
       for (let tod = first; tod <= dep + tMax + 1; tod += step * 3600) {
         const f = (tod - dep) / tMax;
-        if (f < 0.04 || f > 0.96) continue;
+        // keep clear of the departure / arrival labels pinned to the two ends (about 34 px wide)
+        if (f * width < 52 || (1 - f) * width < 52) continue;
         el.ticks.appendChild(U.el('span', { style: { left: `${f * 100}%` }, text: I.clock(tod, false) }));
       }
       el.ticks.appendChild(U.el('span', { style: { left: '0%', transform: 'none' }, text: I.clock(dep, false) }));
