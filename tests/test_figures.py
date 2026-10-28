@@ -373,7 +373,8 @@ def test_plot_pareto_stop_keys(case, levels):
     assert counts == sorted(counts) and set(counts) <= set(range(1, levels + 1))
     assert counts[-1] == levels and (levels > 7 or counts[0] == 1)
     assert len(counts) == (min(levels, 4) if levels <= 4 else 3)
-    sizes = [h.get_markersize() for h in leg.legend_handles]
+    handles = getattr(leg, "legend_handles", None) or leg.legendHandles  # matplotlib < 3.7
+    sizes = [h.get_markersize() for h in handles]
     assert sizes == sorted(sizes)
 
 
