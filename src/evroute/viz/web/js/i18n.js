@@ -270,6 +270,7 @@
       kv_tariff: 'Tarife',
       kv_tariff_high: '{p} üstü fiyat',
       kv_tariff_peak: 'Puant saatleri',
+      data_credit: 'Veri: {c}',
       tip_tariff: 'Tarife ({c})',
     },
     en: {
@@ -530,6 +531,7 @@
       kv_tariff: 'Tariff',
       kv_tariff_high: 'Price above {p}',
       kv_tariff_peak: 'Peak hours',
+      data_credit: 'Data: {c}',
       tip_tariff: 'Tariff at {c}',
     },
   };

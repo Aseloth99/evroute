@@ -493,6 +493,110 @@ def exp_tariffs(out: Path, quick: bool) -> dict[str, Any]:
     return {"rows": len(rows), "members": len(members)}
 
 
+# ========================================================= E12 real data
+#: Trips of the ``real-data`` experiment: id, the preset on the approximate
+#: network of the case study and its counterpart on the OpenStreetMap network
+#: (same origin, destination, vehicle, charge, departure and temperature).
+REAL_TRIPS: tuple[tuple[str, str, str], ...] = (
+    ("karaman-istanbul", "turkey-karaman-istanbul", "turkey-osm-karaman-istanbul"),
+    ("antalya-ankara", "turkey-antalya-ankara", "turkey-osm-antalya-ankara"),
+    ("istanbul-ankara", "turkey-istanbul-ankara-rush", "turkey-osm-istanbul-ankara"),
+    ("ankara-adana", "turkey-ankara-adana-evening", "turkey-osm-ankara-adana"),
+    ("karaman-mersin", "turkey-karaman-mersin", "turkey-osm-karaman-mersin"),
+    ("izmir-erzurum", "turkey-izmir-erzurum", "turkey-osm-izmir-erzurum"),
+)
+#: The three data sets: (a) the approximate network with its synthetic
+#: stations, (b) the OpenStreetMap network with the OSM charging stations,
+#: (c) the OSM network with the hybrid set (OSM stations plus flagged
+#: synthetic DC gap-fillers).
+REAL_NETWORKS: tuple[str, ...] = ("approx", "osm", "hybrid")
+REAL_EXACT: tuple[str, ...] = ("bls-astar", "cfp-astar")
+REAL_HEURISTICS: tuple[str, ...] = ("greedy", "station-graph", "genetic")
+
+
+def real_data_scenario(trip: str, network: str):
+    """The scenario of ``trip`` (an id of :data:`REAL_TRIPS`) on ``network``
+    (``"approx"``, ``"osm"`` or ``"hybrid"``)."""
+    approx, osm = next((a, o) for t, a, o in REAL_TRIPS if t == trip)
+    return _scenario(approx) if network == "approx" else _scenario(osm, stations=network)
+
+
+def exp_real_data(out: Path, quick: bool) -> dict[str, Any]:
+    """The same trips on the approximate network and on real OpenStreetMap data.
+
+    Every trip of :data:`REAL_TRIPS` is planned on the three data sets of
+    :data:`REAL_NETWORKS` with BLS-A* and CFP-A* (exact) and the heuristics
+    greedy, station graph and genetic; ``gap_pct`` is the extra trip time of a
+    plan over the continuous optimum (CFP-A*) on the same data set.  The
+    heuristics run only where an exact planner found a route (otherwise there
+    is no gap to measure).  Quick:
+    Karaman -> Mersin only, without greedy and station graph (their label
+    trees cover the whole 44 673-node network).  ``results.csv`` has one row
+    per plan; the viewer of the flagship trip on OSM data is written to
+    ``karaman-istanbul/viewer.html`` (full run).
+    """
+    trips = [t for t in REAL_TRIPS if t[0] == "karaman-mersin"] if quick else list(REAL_TRIPS)
+    algos = REAL_EXACT + (("genetic",) if quick else REAL_HEURISTICS)
+    rows: list[dict[str, Any]] = []
+    summary: dict[str, Any] = {"trips": {}, "networks": list(REAL_NETWORKS), "algorithms": list(algos),
+                               "reference": "cfp-astar"}
+    for trip, approx_preset, osm_preset in trips:
+        per: dict[str, Any] = {"presets": {"approx": approx_preset, "osm": osm_preset}}
+        for net in REAL_NETWORKS:
+            sc = real_data_scenario(trip, net)
+            P = sc.prepare()
+            info = {"trip": trip, "network": net, "nodes": sc.network.num_nodes, "edges": sc.network.num_edges,
+                    "stations": len(sc.stations), "dc_stations": sum(1 for s in sc.stations if s.kind != "AC")}
+            plans: dict[str, Any] = {}
+            for a in algos:
+                if a not in REAL_EXACT and not any(p.feasible for p in plans.values()):
+                    # no exact optimum, no gap: and on the OSM network a heuristic would
+                    # spend its time on label trees that hit their 5 million label cap
+                    continue
+                p = safe_plan(P, a, trace=a in REAL_EXACT and trip == "karaman-istanbul")
+                if p is not None:
+                    plans[a] = p
+            ref = plans.get("cfp-astar")
+            ref_t = ref.total_time_s if ref is not None and ref.feasible else math.nan
+            for a, p in plans.items():
+                gap = 100.0 * (p.total_time_s / ref_t - 1.0) if p.feasible and math.isfinite(ref_t) else math.nan
+                trees = (p.stats.extra or {}).get("trees") if p.stats else None
+                rows.append({**plan_row(p, **info), "gap_pct": gap, "trees": trees if trees is not None else ""})
+            per[net] = {**{k: v for k, v in info.items() if k not in ("trip", "network")},
+                        "feasible": {a: bool(p.feasible) for a, p in plans.items()}}
+            if trip == "karaman-istanbul" and net == "osm" and not quick:
+                try:
+                    from ..viz.export import build_viewer_html
+
+                    build_viewer_html(sc, list(plans.values()), out / trip / "viewer.html", lang="tr")
+                except Exception as exc:
+                    print(f"  ! viewer for {trip}: {exc}")
+                if _can_plot():
+                    try:
+                        from .figures import case_study_figures
+
+                        case_study_figures(sc, out / trip, plans=list(plans.values()))
+                    except Exception as exc:  # figures are optional
+                        print(f"  ! figures for {trip}: {exc}")
+            write_csv(out / "results.csv", rows)  # after every data set: a long run keeps what it measured
+            print(f"  real-data: {trip} on {net} done")
+        summary["trips"][trip] = per
+    write_json(out / "summary.json", summary)
+    tex = []
+    for r in rows:
+        if r["algorithm"] in REAL_EXACT:
+            tex.append([r["trip"], r["network"], r["algorithm"], r["time_min"] if r["feasible"] else "--",
+                        r["distance_km"], r["stops"], r["charge_min"], r["money"], r["runtime_ms"] / 1000.0, r["settled"]])
+    (out / "table.tex").write_text(
+        latex_table(tex, ["trip", "data", "algorithm", "time [min]", "distance [km]", "stops", "charge [min]", "money",
+                          "runtime [s]", "labels"],
+                    "The same trips on the approximate network with synthetic stations (approx), on OpenStreetMap "
+                    "roads with the OSM charging stations (osm) and with OSM plus synthetic DC gap-fillers (hybrid). "
+                    "Road network and stations: © OpenStreetMap contributors (ODbL).", "tab:real-data", "lllrrrrrrr")
+    )
+    return {"rows": len(rows), "trips": len(trips)}
+
+
 def case_title(case: str) -> str:
     """``turkey-karaman-istanbul`` -> ``Karaman → İstanbul`` (from the preset's defaults)."""
     from ..generators.presets import PRESETS
@@ -513,6 +617,7 @@ EXPERIMENTS: dict[str, Callable[[Path, bool], dict[str, Any]]] = {
     "eco-speed": exp_eco_speed,
     "vehicles": exp_vehicles,
     "tariffs": exp_tariffs,
+    "real-data": exp_real_data,
 }
 
 

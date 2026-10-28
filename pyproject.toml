@@ -46,7 +46,8 @@ evroute = "evroute.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-evroute = ["viz/web/*", "viz/web/**/*", "data/*"]
+# data/osm_turkey: the real-data network (ODbL 1.0, © OpenStreetMap contributors; see its README.md)
+evroute = ["viz/web/*", "viz/web/**/*", "data/*", "data/osm_turkey/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

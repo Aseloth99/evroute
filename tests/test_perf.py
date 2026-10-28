@@ -315,3 +315,26 @@ def test_cfp_with_three_speed_levels_on_karaman_istanbul():
         assert p.total_time_s <= one.total_time_s + 1e-6  # more speed levels never hurt
         assert p.stats.settled <= 500_000, (name, p.stats.settled)
         assert dt < 120.0, (name, dt)
+
+
+# ----------------------------------------------------------------------------
+# 5. feasible-path trees keep only the labels of their routes
+# ----------------------------------------------------------------------------
+
+
+def test_feasible_tree_keeps_only_route_labels():
+    """The heuristics cache one tree per stop; on the 44 673-node OSM network a tree
+    settles millions of labels, so a tree must not hold on to all of them.  The
+    routes it returns are those of the complete label store."""
+    from evroute.algorithms.labels import fastest_feasible_tree
+
+    sc = grid_scenario(12, 12, seed=4, initial_soc=0.9)
+    P = sc.prepare()
+    tree = fastest_feasible_tree(P, P.origin, P.e_init)
+    store = tree._res
+    kept = len(store.parent)
+    assert kept < store.settled / 2 and kept <= sum(len(tree[v][2]) + 1 for v in tree)
+    assert len(store.how) == len(store.energy) == len(store.primary) == kept and not store.stair_p
+    for v in tree:
+        t, e, edges, levels = tree[v]
+        assert tree.arrival(v) == (t, e) and len(edges) == len(levels)

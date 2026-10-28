@@ -200,8 +200,13 @@ def trace_label_tree(trace: SearchTrace | None, tree: Mapping[int, tuple], offse
     """
     if trace is None:
         return
-    for v, rec in sorted(tree.items(), key=lambda kv: (kv[1][0], kv[0])):
-        trace.visit(v, offset + rec[0])
+    arrival = getattr(tree, "arrival", None)  # a FeasibleTree: times without building the routes
+    if arrival is not None:
+        times = [(v, arrival(v)[0]) for v in tree]
+    else:
+        times = [(v, rec[0]) for v, rec in tree.items()]
+    for v, t in sorted(times, key=lambda kv: (kv[1], kv[0])):
+        trace.visit(v, offset + t)
 
 
 # ======================================================================

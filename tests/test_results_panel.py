@@ -129,6 +129,7 @@ def make_results(root: Path, *, break_bls: bool = False, dominated_pareto: bool 
         {"vehicle": "sedan75", **row("bls-astar", 470.2, stops=2)},
     ])
     make_tariffs(root / "tariffs")
+    make_real_data(root / "real-data")
     report = {name: {"status": "ok", "seconds": 1.5, "result": {}} for name in R.SECTION_IDS}
     (root / "report.json").write_text(json.dumps(report), encoding="utf-8")
     return root
@@ -143,6 +144,39 @@ TARIFF_DATA = {
     (18, "tier+peak"): ((482.0, 1260.0), (488.0, 1105.0, 0.0), [(482.0, 1260.0), (488.0, 1105.0)]),
 }
 VOT_PER_MIN = 4.0  # generalised cost = VOT_PER_MIN * time + money (+ no wear in this data)
+
+
+#: (trip, data set) -> (CFP-A* minutes or None, distance km, stops, money, runtime ms, heuristic gaps [%]);
+#: OSM alone has no route for İzmir -> Erzurum, the hybrid set (a superset of the OSM stations) never is slower.
+REAL_DATA = {
+    ("karaman-istanbul", "approx"): (487.0, 747.0, 2, 1134.0, 30.0, {"greedy": 5.0, "station-graph": 15.0, "genetic": 0.4}),
+    ("karaman-istanbul", "osm"): (554.0, 755.0, 2, 1021.0, 23000.0, {"greedy": 163.0, "station-graph": 5.6, "genetic": 17.7}),
+    ("karaman-istanbul", "hybrid"): (540.0, 760.0, 2, 1050.0, 21000.0, {"greedy": 80.0, "station-graph": 4.0, "genetic": 9.0}),
+    ("izmir-erzurum", "approx"): (1049.0, 1467.0, 4, 3240.0, 70.0, {"greedy": 6.3, "station-graph": 13.4, "genetic": 0.8}),
+    ("izmir-erzurum", "osm"): (None, 0.0, 0, 0.0, 190000.0, {}),
+    ("izmir-erzurum", "hybrid"): (1070.0, 1466.0, 6, 3329.0, 20000.0, {"greedy": 12.0, "station-graph": 9.0, "genetic": 2.0}),
+}
+
+
+def make_real_data(d: Path, data=REAL_DATA) -> None:
+    """The ``real-data`` experiment's files (runner layout): results.csv and summary.json."""
+    rows = []
+    presets = {"karaman-istanbul": ("turkey-karaman-istanbul", "turkey-osm-karaman-istanbul"),
+               "izmir-erzurum": ("turkey-izmir-erzurum", "turkey-osm-izmir-erzurum")}
+    for (trip, net), (t, km, stops, money, rt, gaps) in data.items():
+        info = {"trip": trip, "network": net, "nodes": 1279 if net == "approx" else 44673, "stations": 290 if net == "approx" else 711,
+                "dc_stations": 199 if net == "approx" else 93}
+        for a, f in (("bls-astar", 1.0003), ("cfp-astar", 1.0)):
+            tm = None if t is None else t * f
+            rows.append({**info, **row(a, tm, distance_km=km, stops=stops, money=money, runtime_ms=rt * (0.3 if a == "bls-astar" else 1.0),
+                                       status="limit" if t is None else "goal"), "gap_pct": "" if t is None else 100 * (f - 1)})
+        for a, g in gaps.items():
+            rows.append({**info, **row(a, t * (1 + g / 100), runtime_ms=40000.0), "gap_pct": g})
+    write_csv(d / "results.csv", rows)
+    summary = {"trips": {k: {"presets": {"approx": a, "osm": o}} for k, (a, o) in presets.items()},
+               "networks": ["approx", "osm", "hybrid"], "algorithms": ["bls-astar", "cfp-astar", "greedy", "station-graph", "genetic"],
+               "reference": "cfp-astar"}
+    (d / "summary.json").write_text(json.dumps(summary), encoding="utf-8")
 
 
 def make_tariffs(d: Path, data=TARIFF_DATA, complete: bool = True) -> None:
@@ -516,6 +550,61 @@ def test_real_quick_tariffs_experiment(tmp_path, monkeypatch):
     s = section(p, "tariffs")
     assert s["status"] == "ok" and s["finding"]["en"] and s["data"]["cases"][0]["viewer"]
     assert p["checks"]["total"] >= 16 and p["checks"]["passed"] == p["checks"]["total"]
+
+
+def test_real_data_section_is_computed_from_the_data(results_dir):
+    p = R.results_payload(results_dir)
+    s = section(p, "real-data")
+    assert s["status"] == "ok"
+    d, f = s["data"], s["facts"]
+    assert [n["key"] for n in d["networks"]] == ["approx", "osm", "hybrid"]
+    assert [t["id"] for t in d["trips"]] == ["karaman-istanbul", "izmir-erzurum"]
+    assert d["trips"][0]["title"] == "Karaman → İstanbul" and d["credit"] == "© OpenStreetMap contributors"
+    assert f["feasible"] == {"approx": 2, "osm": 1, "hybrid": 2}
+    assert f["infeasible_trips"]["osm"] == ["İzmir → Erzurum"]
+    assert math.isclose(f["time_change_pct"]["osm"], 100 * (554.0 / 487.0 - 1))
+    assert math.isclose(f["time_change_pct"]["hybrid"], 100 * ((540.0 / 487.0 - 1) + (1070.0 / 1049.0 - 1)) / 2)
+    assert math.isclose(f["runtime_s"]["osm"]["cfp-astar"], (23000.0 + 190000.0) / 2 / 1000)
+    assert math.isclose(f["mean_gap_pct"]["osm"]["greedy"], 163.0)
+    plan = d["trips"][1]["nets"]["osm"]["plans"]["cfp-astar"]
+    assert plan["feasible"] is False and plan["limit"] is True and plan["time_min"] is None
+    assert "1 of 2 trips with the OSM stations (not İzmir → Erzurum)" in s["finding"]["en"]
+    assert "Greedy" in s["finding"]["en"] and "→ 163.0%" in s["finding"]["en"] and "%163,0" in s["finding"]["tr"]
+    groups = {g["id"]: g for g in p["checks"]["groups"]}
+    assert groups["more-stations-not-slower"]["total"] == 1 and groups["more-stations-not-slower"]["passed"] == 1
+    assert "real-data" in groups["cfp-lower-bound"]["sections"]
+
+
+def test_real_data_checks_catch_violations(tmp_path):
+    root = make_results(tmp_path / "res")
+    bad = dict(REAL_DATA)
+    t, *rest = bad[("karaman-istanbul", "hybrid")]
+    bad[("karaman-istanbul", "hybrid")] = (560.0, *rest)  # slower than with the OSM stations alone
+    shutil.rmtree(root / "real-data")
+    make_real_data(root / "real-data", bad)
+    p = R.results_payload(root)
+    groups = {g["id"]: g for g in p["checks"]["groups"]}
+    assert groups["more-stations-not-slower"]["passed"] == 0 and "karaman-istanbul" in groups["more-stations-not-slower"]["failures"][0]
+
+
+@pytest.mark.slow
+def test_real_quick_real_data_experiment(tmp_path):
+    from evroute.experiments import runner
+
+    runner.run_experiments(["real-data"], tmp_path / "res", quick=True)
+    rows = read_rows(tmp_path / "res" / "real-data" / "results.csv")
+    assert {(r["trip"], r["network"]) for r in rows} == {("karaman-mersin", n) for n in runner.REAL_NETWORKS}
+    assert {r["algorithm"] for r in rows} == {"bls-astar", "cfp-astar", "genetic"}
+    for r in rows:
+        assert r["feasible"] == "1"
+        if r["algorithm"] == "cfp-astar":
+            assert float(r["gap_pct"]) == 0.0
+        assert float(r["gap_pct"]) >= -1e-6
+    assert {r["nodes"] for r in rows if r["network"] != "approx"} == {"44673"}
+    p = embedded_payload((tmp_path / "res" / "results.html").read_text(encoding="utf-8"))
+    s = section(p, "real-data")
+    assert s["status"] == "ok" and s["finding"]["en"] and s["finding"]["tr"]
+    assert p["checks"]["passed"] == p["checks"]["total"] > 0
 
 
 def test_tariff_metrics_of_a_plan():

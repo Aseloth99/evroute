@@ -1,8 +1,11 @@
-# The source distribution: what the wheel is built from (src/, pyproject.toml)
-# plus the test suite with its conftest.py, the examples, the text
-# documentation and the citation. Figures and the built demo pages of docs/
-# stay in the repository.
+# The source distribution: what the wheel is built from (src/, pyproject.toml,
+# with the bundled data -- data/osm_turkey is ODbL 1.0, © OpenStreetMap
+# contributors) plus the test suite with its conftest.py, the examples, the
+# build script of the real-data network, the text documentation and the
+# citation. Figures and the built demo pages of docs/ stay in the repository.
 include README.md README.tr.md LICENSE CITATION.cff CONTRIBUTING.md
+recursive-include src/evroute/data *.csv *.csv.gz *.json *.md
+include tools/build_osm_turkey.py
 recursive-include tests *.py *.md
 recursive-include examples *.py
 recursive-include docs *.md
