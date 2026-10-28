@@ -1713,16 +1713,26 @@ def stage_validate(work: Path, g: dict, places: list[dict]) -> tuple[list[dict],
     mat = np.array(mat)
     centre = {r["plate"]: r for r in places if r["province_centre"]}
     n = len(g["lat"])
-    W = coo_matrix((g["len"], (g["u"], g["v"])), shape=(n, n)).tocsr()
-    T = coo_matrix((g["len"] / (g["speed"] / 3.6), (g["u"], g["v"])), shape=(n, n)).tocsr()
+
+    def csr(mask, weight):
+        """The directed graph of the edges in ``mask``; of parallel (u, v) edges (junction
+        consolidation leaves a few hundred) the cheapest, since scipy would sum them."""
+        u, v, w = g["u"][mask], g["v"][mask], weight[mask]
+        key = u.astype(np.int64) * n + v
+        order = np.lexsort((w, key))
+        first = order[np.r_[True, key[order][1:] != key[order][:-1]]]
+        return coo_matrix((w[first], (u[first], v[first])), shape=(n, n)).tocsr()
+
+    every = np.ones(len(g["u"]), bool)
+    W = csr(every, g["len"])
+    T = csr(every, g["len"] / (g["speed"] / 3.6))
     have = [p for p in plates if p in centre]
     src = [centre[p]["node"] for p in have]
     D = dijkstra(W, directed=True, indices=src)
     TT = dijkstra(T, directed=True, indices=src)
     pos = {p: i for i, p in enumerate(have)}
     free_all = ~np.asarray(g["toll"], bool)
-    DF = dijkstra(coo_matrix((g["len"][free_all], (g["u"][free_all], g["v"][free_all])), shape=(n, n)).tocsr(),
-                  directed=True, indices=src)
+    DF = dijkstra(csr(free_all, g["len"]), directed=True, indices=src)
     errs, errs_nt, worst = [], [], []
     for i, p in enumerate(plates):
         for j, q in enumerate(plates):
@@ -1743,7 +1753,7 @@ def stage_validate(work: Path, g: dict, places: list[dict]) -> tuple[list[dict],
     idx = {nm: i for i, nm in enumerate(names)}
     # second metric: the same distance avoiding toll roads (KGM's table follows the state-road network)
     free = ~np.asarray(g["toll"], bool)
-    Wf = coo_matrix((g["len"][free], (g["u"][free], g["v"][free])), shape=(n, n)).tocsr()
+    Wf = csr(free, g["len"])
     pair_plates = sorted({plates[idx[x]] for pq in pairs for x in pq if x in idx and plates[idx[x]] in pos})
     Df = dijkstra(Wf, directed=True, indices=[centre[p]["node"] for p in pair_plates])
     fpos = {p: i for i, p in enumerate(pair_plates)}

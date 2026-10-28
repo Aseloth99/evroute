@@ -422,9 +422,10 @@ def _register_osm_turkey() -> None:
         defaults={"origin": "İzmir", "destination": "Erzurum", "initial_soc": 0.9, "temperature_c": 12.0,
                   "departure": "06:00", "stations": "hybrid"},
         family="turkey-osm", tags=("case-study", "long", "mountain", "hybrid", *osm), approx_nodes=_OSM_NODES,
-        notes="OSM has no DC charger east of 38 E, so the trip is infeasible with OSM stations alone; the hybrid set "
-              "adds synthetic DC gap-fillers (operator 'synthetic') wherever a main road is more than 75 km from a "
-              "DC station. Data © OpenStreetMap contributors (ODbL).",
+        notes="OSM has no DC charger east of 38 E: with OSM stations alone the trip is feasible only over slow AC "
+              "stops (a greedy plan takes 46 h 34 min) and the exact planners run out of their label budgets; the "
+              "hybrid set adds synthetic DC gap-fillers (operator 'synthetic') wherever a main road is more than "
+              "75 km from a DC station. Data © OpenStreetMap contributors (ODbL).",
     )
     reg(
         "turkey-osm-karaman-konya",

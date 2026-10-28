@@ -10,6 +10,7 @@ page is the map of the documentation; the [README](../README.md)
 |---|---|
 | [`guide.md`](guide.md) ([Türkçe](guide.tr.md)) | **start here**: a gentle guide to the algorithms -- why plain A\* is not enough, labels and dominance, BLS, A\*, CFP, Pareto, the baselines, tariffs and "which planner should I use?" |
 | [`model.md`](model.md) | the optimisation problem, equation by equation, with the module that implements each part |
+| [`real-data.md`](real-data.md) ([Türkçe](real-data.tr.md)) | the real-data case study: Turkey on OpenStreetMap roads with SRTM elevations, OSM charging stations and operator list prices -- sources, build, validation against the official KGM distances, charging coverage, prices and the March 2026 regulation, queue assumptions, results, limitations, licences |
 | [`algorithms.md`](algorithms.md) | the algorithms and their correctness arguments: BLS, the consistent A\* potentials, CFP, the Pareto search, charging tariffs and voluntary holds, the baselines, verification |
 | [`DEV_SPEC.md`](DEV_SPEC.md) | the developer contract: `PreparedScenario`, the semantics every planner must respect, the viewer data format |
 | [`PLAN.tr.md`](PLAN.tr.md) | the original project plan (Turkish) |
@@ -24,6 +25,7 @@ On this page: [install](#install) · [command line](#command-line) ·
 [live server](#live-planning-server) · [experiments and figures](#experiments-and-figures) ·
 [scenarios and data](#scenarios-and-data) ·
 [Turkey case study](#turkey-case-study) ·
+[real data](#real-data-case-study-openstreetmap) ·
 [your own network](#your-own-network-vehicle-and-chargers) ·
 [charging tariffs](#charging-tariffs) ·
 [robustness](#robustness) · [file formats](#file-formats) ·
@@ -39,8 +41,11 @@ pip install -e ".[plot]"    # + seaborn (static figures)
 pip install -e ".[dev]"     # + pytest
 ```
 
-The optional OpenStreetMap loader needs `osmnx`; the screenshot script of
-the viewer needs Node.js with Playwright.
+The bundled real-data network of Turkey needs nothing more; rebuilding it
+from OpenStreetMap needs `osmium`, `numpy`, `scipy`, `shapely` and
+`openpyxl` ([`real-data.md`](real-data.md#rebuilding-the-data)).  The
+optional OpenStreetMap loader needs `osmnx`; the screenshot script of the
+viewer needs Node.js with Playwright.
 
 ## Command line
 
@@ -78,6 +83,7 @@ for `serve`, the path of a scenario `.json` file.  `plan`, `compare`, `viz`,
 | `--no-queue` | ignore charging queues |
 | `--step 0.01` | charging-target grid of BLS / Pareto (SoC fraction) |
 | `--safety 1.1` | plan with a consumption safety factor |
+| `--stations hybrid` | charging stations of a `turkey-osm-*` preset: `osm` (the OSM stations), `synthetic` (the case-study stations moved onto the OSM roads) or `hybrid` (OSM plus synthetic DC gap-fillers); [real data](#real-data-case-study-openstreetmap) |
 | `--tariff 80`, `--tariff flat` | the illustrative demonstration tariff `DEMO_TARIFF` (×1.3 above 80 % SoC, 16:00-20:00 peak at ×1.15, ×2.3 above 80 % in the peak), or no tariff; applied before the single-value options below |
 | `--high-soc 0.8`, `--high-soc-factor 1.3` | price factor for every kWh stored above that SoC |
 | `--peak 16-20[,7-9]`, `--peak-factor 1.15` | daily peak hours (`22-6` wraps midnight, `none` clears them) and their price factor |
@@ -87,6 +93,10 @@ for `serve`, the path of a scenario `.json` file.  `plan`, `compare`, `viz`,
 With a tariff, `evroute plan` adds a `tariff` column (price period, `>80%`
 when energy was bought in the high-SoC tier) and, when a stop waits for a
 cheaper price period, a `hold` column; without one its output is unchanged.
+On a network of more than 20 000 nodes (the OpenStreetMap presets),
+`--algorithms all` of `compare`, `viz` and `figures` leaves out `bls`,
+`cfp` and `pareto`, which settle millions of labels there without the A\*
+potential, and says so on stderr; name them to run them anyway.
 
 Examples:
 
@@ -98,6 +108,8 @@ evroute plan turkey-istanbul-ankara-rush --objective cost --json plan.json
 evroute plan turkey-karaman-istanbul-tariff --objective cost     # waits 2 min for the 20:00 price change
 evroute plan turkey-karaman-istanbul --depart 14:00 --peak 16-20 --peak-factor 1.2 --high-soc-factor 1.5
 evroute robustness turkey-izmir-erzurum -n 2000 --safety 1.1
+evroute plan turkey-osm-karaman-istanbul --stations hybrid --from Konya   # real data: OSM roads and stations
+evroute compare turkey-osm-karaman-konya                                 # all planners on a short real-data trip
 ```
 
 ## Python API
@@ -146,6 +158,10 @@ route = get_planner("bls-astar", potential="basic").plan(sc, trace=True)
   with violations listed - also for plans you construct yourself
   (`ChargeDecision(position, station, target_kwh, hold_until_s=None)`; a
   hold until a trip time waits there before joining the queue).
+
+Real data: `osm_turkey_scenario("Karaman", "İstanbul", stations="hybrid")`
+(`evroute.generators.osm_turkey`) builds a trip on the OpenStreetMap
+network of Turkey ([`real-data.md`](real-data.md#try-it)).
 
 Runnable examples: [`examples/quickstart.py`](../examples/quickstart.py),
 [`examples/custom_network.py`](../examples/custom_network.py),
@@ -201,7 +217,7 @@ off.  The server uses only the standard library
 
 ## Experiments and figures
 
-`evroute experiments` (or `python -m evroute.experiments.runner`) runs eleven
+`evroute experiments` (or `python -m evroute.experiments.runner`) runs twelve
 seeded experiments that reproduce every table and figure of the accompanying
 paper; `--quick` shrinks every one of them to a smoke test (about 1.5
 minutes for all of them).  Each writes `<out>/<id>/results.csv` (pareto: one CSV per
@@ -223,6 +239,7 @@ adds `<out>/report.json` and the interactive dashboard `<out>/results.html`
 | `eco-speed` | when does driving slower shorten the trip? | 80 trips |
 | `vehicles` | the flagship trip with every vehicle preset | 6 vehicles |
 | `tariffs` | what do the 80 % rule and peak hours cost, and when does waiting for a cheaper price pay? | 2 trips × 9 departures (06:00-22:00) × 4 tariffs |
+| `real-data` | what changes on real OpenStreetMap roads with the chargers mapped in OSM? ([real-data.md](real-data.md#results-the-real-data-experiment)) | 6 trips × 3 data sets (approximate, OSM, hybrid) × 5 planners |
 
 The `tariffs` experiment compares four tariffs built from the illustrative
 `DEMO_TARIFF` (flat prices, its 80 % tier alone, its 16:00-20:00 peak alone,
@@ -239,10 +256,12 @@ fronts fit it).  It writes `tariffs/results.csv` (one row per plan, `kind` =
 with its front).  `--quick` keeps 14:00 and 18:00, flat and tier + peak,
 and a budget of 200 000 labels.
 
-Highlights of a full run (all experiments except scalability: 8 minutes on
-a 2.1 GHz Xeon core with Python 3.13, 5 of them for `tariffs`; scalability
-alone needs 2 hours of planner time, 99 % of it in the station graph and the
-Dijkstra-order baselines):
+Highlights of a full run (all experiments except scalability and real-data:
+8 minutes on a 2.1 GHz Xeon core with Python 3.13, 5 of them for `tariffs`;
+scalability alone needs 2 hours of planner time, 99 % of it in the station
+graph and the Dijkstra-order baselines; real-data took 6.8 hours of planning
+before it had a 10-minute budget per heuristic run, 6.4 of them in the
+station graph, and should take about 1.5 hours with it):
 
 | experiment | finding |
 |---|---|
@@ -257,6 +276,7 @@ Dijkstra-order baselines):
 | `vehicles` | Karaman → İstanbul: 7 h 50 min (75 kWh sedan, 2 stops) to 10 h 57 min (27 kWh city car, 5 stops) |
 | `tariffs` | Karaman → İstanbul and Antalya → Ankara, departures 06:00-22:00 every 2 h: under the demonstration tariff (80 % tier + 16:00-20:00 peak) the fastest plan pays 2.6 % more than at flat prices on average (up to 10.5 %, Karaman leaving at 12:00); the cost-optimal plan pays 76.73 TRY (7.6 %) less than the fastest for 6.3 min more and waits for the cheaper period in 2 of 18 trips (up to 2.4 min); the 80 % tier alone moves the cost-optimal plans below 80 % (energy charged above it: Karaman 2.34 → 0.47 kWh, Antalya 0.94 → 0 kWh on average); (time, money) fronts of 55-202 plans on a 5 % grid, 14 of 72 stopped by the 1-million-label budget |
 | `scalability` | synthetic countries of 1 000-40 000 nodes, 8 trips each: BLS-A\* answers in 0.03 s → 1.7 s and CFP-A\* in 0.03 s → 2.5 s on average; Dijkstra-order BLS and CFP are already 20× and 35× slower at 10 000 nodes and run out of their label budgets on 3 / 4 of 8 trips at 20 000 nodes (CFP: 6 of 8 at 40 000); the station graph needs 8 minutes per trip at 40 000 nodes to build its meta-graph |
+| `real-data` | six trips on the approximate network and on OpenStreetMap roads (44 673 nodes) with the OSM stations or the hybrid set: the exact planners solve 5 of 6 trips with OSM stations (İzmir → Erzurum runs into the label limit: no DC charger in the east) and 6 of 6 with the hybrid set, in a median of 4.0 s (BLS-A\*) and 9.9 s (CFP-A\*); with OSM stations the optimum takes 7.0 % longer on average, almost all of it slower driving; the heuristics lose their footing: mean gap greedy 6.4 % → 153.0 % (OSM) → 103.5 % (hybrid), genetic 0.2 % → 9.3 % → 0.9 %, and the station graph needs up to 3 h 46 min per trip ([details](real-data.md#results-the-real-data-experiment)) |
 
 ```bash
 evroute experiments --quick -o results/            # smoke size: ~1.5 minutes
@@ -285,6 +305,7 @@ palettes live in `evroute/viz/style.py` and are shared with the viewer.
 | family | presets | source |
 |---|---|---|
 | Turkey | `turkey-karaman-istanbul`, `turkey-karaman-istanbul-tariff`, `turkey-antalya-ankara`, `turkey-izmir-erzurum`, `turkey-istanbul-antalya-winter`, `turkey-karaman-mersin`, `turkey-istanbul-ankara-rush`, `turkey-ankara-adana-evening` | `generators/turkey.py` + `data/*.csv` |
+| Turkey, real data | `turkey-osm-karaman-istanbul`, `turkey-osm-karaman-istanbul-dc85`, `turkey-osm-antalya-ankara`, `turkey-osm-istanbul-ankara`, `turkey-osm-ankara-adana`, `turkey-osm-karaman-mersin`, `turkey-osm-izmir-erzurum`, `turkey-osm-karaman-konya` | `generators/osm_turkey.py` + `data/osm_turkey/` (ODbL, © OpenStreetMap contributors) |
 | corridor | `corridor`, `corridor-winter` | `generators/synthetic.py` |
 | synthetic countries | `country-small`, `country-medium`, `country-large` | `generators/synthetic.py` |
 | other | `random-geometric`, `grid-small` | `generators/synthetic.py`, `generators/basic.py` |
@@ -332,9 +353,39 @@ countries with 2 000-40 000 nodes), `random-geometric`, `grid-small`.
 > company. The vehicle presets use
 > approximate public figures ("T10X-like" is not manufacturer data). Use the
 > case study to compare algorithms and to study effects, not to plan a real
-> trip; plug in measured data (`stations_from_csv`, the OSM loader) for any
+> trip; plug in measured data (`stations_from_csv`, the OSM loader, the
+> [real-data presets](#real-data-case-study-openstreetmap)) for any
 > operational conclusion. Details: the module docstring of
 > [`generators/turkey.py`](../src/evroute/generators/turkey.py).
+
+### Real-data case study (OpenStreetMap)
+
+`evroute.generators.osm_turkey` loads the bundled **real-data** network of
+Turkey: OpenStreetMap motorway, trunk and primary roads with their ramps
+(44 673 nodes, 70 886 edges, 75 393 km; OSM speed limits or the legal
+defaults), SRTM elevations at every node, the 711 public charging stations
+mapped in OSM (618 AC, 93 DC) priced with the operators' list prices, and
+1 005 places.  Queues are assumptions from national EPDK averages.  The
+`turkey-osm-*` presets (family "Turkey, real data" above) run trips of the
+approximate case study on this network; `stations=` (`--stations`) chooses
+the chargers:
+
+| `stations` | chargers |
+|---|---|
+| `osm` (default) | the 711 OSM stations; missing powers and plug counts are defaults (64 % and 44 % of them) |
+| `synthetic` | the 290 synthetic stations of the approximate case study, moved onto the OSM roads: same stations, real network |
+| `hybrid` | the OSM stations plus synthetic DC gap-fillers (operator `"synthetic"`) wherever a main road is more than 75 km from a DC station: 373 fillers with seed 0 |
+
+OSM holds about 3.3 % of the AC and 1.9 % of the DC sockets that EPDK
+counted in September 2026 and has no DC station east of 38° E, so long
+eastern trips need the `hybrid` set (`turkey-osm-izmir-erzurum` uses it).
+`turkey-osm-karaman-istanbul-dc85` caps charging at 85 %, where operators
+may end a DC session under the 2026 regulation.  The data is ODbL 1.0, ©
+OpenStreetMap contributors; every map and figure of these scenarios shows
+the credit.  Sources, build, validation against the official KGM
+distances (2.52 % mean absolute error over 3 240 pairs of province
+centres), prices, queues, results and limitations:
+[`real-data.md`](real-data.md) ([Türkçe](real-data.tr.md)).
 
 ### Your own network, vehicle and chargers
 
@@ -371,7 +422,9 @@ for name in ["naive", "bls-astar", "cfp"]:
 [cfp] 2 h 41 min | 260.43 km | 1 stop(s) | arrive 15.0% | 12.34 EUR
 ```
 
-Real data: `evroute.generators.osm.load_osm("Karaman, Turkey")` downloads an
+Real data: the OpenStreetMap network of Turkey is bundled
+([above](#real-data-case-study-openstreetmap));
+`evroute.generators.osm.load_osm("Karaman, Turkey")` downloads any
 OpenStreetMap network (needs the optional `osmnx`),
 `stations_from_csv(path, network)` snaps your charger list onto it and
 `scenario_from_osm(...)` assembles a scenario. `Scenario.save()` /
@@ -415,6 +468,18 @@ the fastest one and only its money changes.  The cost objective of BLS /
 BLS-A\* and the Pareto search weigh the prices, and consider waiting.  The
 values of `DEMO_TARIFF` are illustrative and synthetic, like the station
 prices of the Turkey case study.
+
+> [!NOTE]
+> **Charging prices in Turkey since March 2026.**  The amendment of the
+> Şarj Hizmeti Yönetmeliği (Resmî Gazete 23.03.2026, No. 33202) allows one
+> AC and one DC price per operator at public stations, with no tiers by
+> charger power or state of charge, so the 80 % tier of `DEMO_TARIFF` is an
+> illustration, not the practice at Turkish public stations.  Discounts by
+> location and time of day are allowed, at the price of the hour in which
+> the session starts: that is the join-time rule above when there is no
+> queue to wait in (EVRoute fixes the price when the car joins the queue).
+> The real-data presets keep the neutral `Tariff()`
+> ([`real-data.md`](real-data.md#prices-and-the-march-2026-regulation)).
 
 ### Worked example
 
@@ -562,12 +627,17 @@ reports its cost).  Use BLS-A\* or the Pareto planner for costs.
 and CFP-A\* answer intercity queries in tens of milliseconds (about 0.1 s
 for the 1 470 km İzmir → Erzurum trip); three speed
 levels or the cost objective with time-dependent queues make the label sets
-much larger (seconds).  `max_labels` is the safeguard of every exact
-planner; when it is hit the planner says so instead of returning a
-non-optimal route as optimal.
+much larger (seconds).  On the 44 673-node OpenStreetMap network of Turkey
+the median over six trips is 4.0 s for BLS-A\* and 9.9 s for CFP-A\*
+([`real-data.md`](real-data.md#results-the-real-data-experiment)).
+`max_labels` is the safeguard of every exact planner; when it is hit the
+planner says so instead of returning a non-optimal route as optimal.
 
-**Is the Turkey data real?**  Approximate geography, synthetic chargers -
-see [Scenarios and data](#scenarios-and-data).
+**Is the Turkey data real?**  The Turkey family of presets: approximate
+geography, synthetic chargers - see [Scenarios and data](#scenarios-and-data).
+The `turkey-osm-*` presets: real OpenStreetMap roads, SRTM elevations, the
+chargers mapped in OSM and the operators' list prices, with assumed queues
+and incomplete charger coverage - see [`real-data.md`](real-data.md).
 
 ## Roadmap and ideas
 

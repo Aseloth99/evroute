@@ -13,13 +13,15 @@ import csv
 import gzip
 import io
 import math
+import re
 import time
+from pathlib import Path
 
 import pytest
 
 from evroute.algorithms import get_planner
 from evroute.cli import main
-from evroute.data import read_bytes
+from evroute.data import read_bytes, read_text
 from evroute.generators import osm_turkey as OT
 from evroute.generators.osm_turkey import (
     ATTRIBUTION,
@@ -35,11 +37,13 @@ from evroute.generators.osm_turkey import (
     osm_turkey_scenario,
     osm_turkey_stations,
     osm_turkey_summary,
+    osm_turkey_validation,
     station_price,
 )
 from evroute.generators.presets import PRESETS, get_scenario
 from evroute.generators.turkey import turkey_stations
 from evroute.network import ROAD_CLASSES
+from evroute.search import dijkstra
 from evroute.units import haversine_m
 
 OSM_PRESETS = sorted(n for n, p in PRESETS.items() if p.family == "turkey-osm")
@@ -127,6 +131,37 @@ def test_stations_lie_within_3_km_of_their_node(net):
         node = int(r["node"])
         d = haversine_m(float(r["lat"]), float(r["lon"]), net.lat[node], net.lon[node])
         assert d <= 3000.0 and d == pytest.approx(float(r["snap_m"]), abs=1.0)
+
+
+def test_validation_distances_are_shortest_paths_of_the_network(net, meta):
+    """``validation.csv`` measures the network as shipped: the shortest road distance between the
+    province centres plus their snapping distances (parallel edges count once, at the shorter one)."""
+    centre = {p.name: p for p in osm_turkey_places() if p.province_centre}
+    rows = osm_turkey_validation()
+    assert len(rows) == 20
+    for r in rows:
+        a, b = centre[r["from"]], centre[r["to"]]
+        off = (a.snap_m + b.snap_m) / 1000.0
+        ab = dijkstra(net, a.node, net.length, target=b.node)[0][b.node] / 1000.0 + off
+        ba = dijkstra(net, b.node, net.length, target=a.node)[0][a.node] / 1000.0 + off
+        assert (ab, ba) == (pytest.approx(r["graph_km_ab"], abs=0.051), pytest.approx(r["graph_km_ba"], abs=0.051))
+        assert 100.0 * ((ab + ba) / 2.0 - r["kgm_km"]) / r["kgm_km"] == pytest.approx(r["rel_error_pct"], abs=0.051)
+    v = meta["validation"]
+    assert v["pairs"] == 3240 and v["mean_abs_rel_error_pct"] < 3.0 and v["share_within_5pct"] > 0.85
+
+
+def test_the_bundled_data_keeps_its_licence(meta):
+    """The OSM tables are ODbL 1.0, not MIT: their licence ships with them, and the package
+    metadata declares both licences (SPDX ``MIT AND ODbL-1.0``)."""
+    text = read_text("osm_turkey/DATA_LICENSE.md")
+    assert "ODbL 1.0" in text and "© OpenStreetMap contributors" in text and "SRTM" in text
+    assert "ODbL 1.0" in meta["licences"]["database"] and "public domain" in meta["licences"]["elevation"]
+    pyproject = Path(__file__).resolve().parents[1] / "pyproject.toml"
+    if not pyproject.exists():
+        pytest.skip("not run from a source tree")
+    project = pyproject.read_text(encoding="utf-8")
+    assert re.search(r'^license = "MIT AND ODbL-1\.0"$', project, re.M)
+    assert '"src/evroute/data/osm_turkey/DATA_LICENSE.md"' in project
 
 
 def test_loader_is_fast():

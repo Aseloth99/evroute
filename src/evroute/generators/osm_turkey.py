@@ -47,8 +47,8 @@ the legal defaults of Karayolları Trafik Yönetmeliği Art. 100 (50 km/h in
 built-up areas, detected from the density of junctions with minor streets;
 90 rural; 110 dual carriageway; 120 motorway; ramps the median of the
 tagged ramps).  Over the 3 240 pairs of province centres the shortest road
-distance deviates from the official KGM table by 2.43 % on average (89.8 %
-of the pairs within 5 %); İstanbul-İzmir is 18.7 % shorter because the graph
+distance deviates from the official KGM table by 2.52 % on average (89.5 %
+of the pairs within 5 %); İstanbul-İzmir is 18.9 % shorter because the graph
 may use the toll Osmangazi bridge and the KGM table does not, and Tunceli,
 Yalova and Hakkâri are reached over detours where the national road is
 missing or mapped as a minor road in OSM (``validation.csv``,
@@ -63,11 +63,13 @@ Charging stations (``stations=``)
     tags; where a tag is missing the build uses **defaults**: 22 kW AC,
     120 kW DC, 250 kW at a Tesla Supercharger, and 1 plug (64 % of the
     powers and 44 % of the plug counts are defaults, so plug counts are
-    lower bounds).  OSM is far from complete: EPDK counted 48 971 public
-    sockets in September 2026 (27 664 AC, 21 307 DC), so the OSM stations
+    lower bounds).  OSM is far from complete: EPDK counted 48 971 sockets
+    with a commercial charging service (public or with restricted access) in
+    September 2026 (27 664 AC, 21 307 DC), so the OSM stations
     hold about 3.3 % of the AC and 1.9 % of the DC sockets, and there is no
-    DC station east of 38 E.  Long eastern trips are often infeasible with
-    OSM stations alone.
+    DC station east of 38 E.  Long eastern trips then depend on slow AC
+    stops (İzmir → Erzurum with OSM stations alone: a greedy plan of
+    46 h 34 min), and the exact planners may run out of their label budgets.
 ``"synthetic"``
     The 290 synthetic stations of :mod:`evroute.generators.turkey` (same
     seed, same powers, plugs, prices and calibrated queues), each moved to

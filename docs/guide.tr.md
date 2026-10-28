@@ -227,7 +227,9 @@ dosyasındaki Lemma 3, genişletilmiş aday kümesi ve Teorem 3.
 yerine 347; 383 ms yerine 27 ms). Ölçeklenir de: 40 000 düğümlü sentetik
 ülkelerde CFP-A\* ortalama 2,5 sn'de yanıt verir (BLS-A\*: 1,7 sn); Dijkstra
 sırasındaki CFP ise 8 yolculuğun 6'sında etiket bütçesini aşar
-(`scalability` deneyi).
+(`scalability` deneyi). Türkiye'nin gerçek OpenStreetMap ağında (44 673
+düğüm) altı yolculuğun medyanı CFP-A\* için 9,9 sn, BLS-A\* için 4,0 sn'dir
+([gerçek veriyle vaka çalışması](real-data.tr.md)).
 
 ## 7. Pareto: süre, para ve yıpranma bir arada
 
@@ -339,6 +341,11 @@ modeller (`Tariff`):
 - **Puant saatler.** Günün yoğun saatlerinde bir puant çarpanı uygulanır;
   ya sabit saat aralıklarında ya da şarj noktasının kuyruk modelinin
   yoğunluk beklediği saatlerde.
+
+(Türkiye'de halka açık istasyonlarda Mart 2026'dan beri her operatörün bir
+AC ve bir DC fiyatı vardır, doluluk oranına göre kademe yoktur; bu yüzden
+%80 kuralı orada bir örnektir. Günün saatine göre fiyat ise serbesttir:
+[gerçek veriyle vaka çalışması](real-data.tr.md#fiyatlar-ve-mart-2026-yönetmeliği).)
 
 İşi ilginç kılan kural şu: **bir şarj oturumunun fiyatı, araç kuyruğa
 girdiği anda belirlenir.** Puantın bitmesine üç dakika kala bir şarj

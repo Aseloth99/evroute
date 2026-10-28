@@ -34,8 +34,8 @@ Research data, **not for navigation**.
 |---|---|
 | OpenStreetMap extract of Turkey, `https://download.openstreetmap.fr/extracts/europe/turkey.osm.pbf`, replication timestamp 2026-10-27T02:09:23Z (sequence 7346288, md5 `b03e7851f3312d6f5b552985c10e31db`) | roads (motorway, trunk, primary and their ramps; 263 km of secondary roads that close gaps), charging stations, places |
 | SRTM 1" (skadi tiles of the AWS Terrain Tiles, `https://s3.amazonaws.com/elevation-tiles-prod/skadi/`) | node elevations (bridges and tunnels interpolated, grades above 15 % clipped) |
-| KGM "İller arası mesafeler" (`ilmesafe.xlsx`, table of 2026-03-03) | validation only: over 3 240 pairs of province centres the network distance deviates by 2.43 % on average, 89.8 % of the pairs within 5 % |
-| EPDK, Şarj Hizmeti Piyasası Aylık İstatistikleri, September 2026 | coverage statement (48 971 public sockets, 27 664 AC and 21 307 DC: OSM holds about 3.3 % of the AC and 1.9 % of the DC sockets) and the queue assumptions of the loader (sessions per plug, session length, hourly profile) |
+| KGM "İller arası mesafeler" (`ilmesafe.xlsx`, table of 2026-03-03) | validation only: over 3 240 pairs of province centres the network distance deviates by 2.52 % on average, 89.5 % of the pairs within 5 % |
+| EPDK, Şarj Hizmeti Piyasası Aylık İstatistikleri, September 2026 | coverage statement (48 971 sockets with a commercial charging service, public or with restricted access, 27 664 AC and 21 307 DC: OSM holds about 3.3 % of the AC and 1.9 % of the DC sockets) and the queue assumptions of the loader (sessions per plug, session length, hourly profile) |
 | operator price pages (accessed 2026-10-27) and Resmî Gazete 23.03.2026, No. 33202 | `prices.json` |
 
 Speeds are the OSM `maxspeed` where tagged, otherwise the legal defaults of

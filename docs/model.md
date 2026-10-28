@@ -63,6 +63,13 @@ $\kappa_e \in \{\text{motorway},\ldots,\text{residential}\}$ that determines the
 mean number of full stops per kilometre $\sigma_\kappa$
 (`network.ROAD_CLASSES`).  Two-way roads are two edges.
 
+The bundled networks are the approximate network of Turkey
+(`generators/turkey.py`), the real-data network of Turkey
+(`generators/osm_turkey.py`: OpenStreetMap roads with $\bar s_e$ from the
+`maxspeed` tag or the legal default and SRTM elevations $h_v$;
+[`real-data.md`](real-data.md)) and synthetic countries
+(`generators/synthetic.py`).
+
 ## 2. Driving: time and energy
 
 The planner may drive an edge at a *speed level* $k$ with multiplier
@@ -227,6 +234,20 @@ The scenario JSON has a `"tariff"` key only for a tariff other than
 2.3 times the price above 80 % in the peak) uses illustrative, synthetic
 values, like the station prices of the Turkey case study.
 
+**Turkish public stations since March 2026.**  The amendment of the Şarj
+Hizmeti Yönetmeliği (Resmî Gazete 23.03.2026, No. 33202) allows one AC and
+one DC price per operator at public stations and forbids tiers by charger
+power or state of charge, so the high-SoC factor $f_h$ is an illustrative
+option there, not the practice.  Discounts by location and time of day are
+allowed, priced at the hour in which the session starts; that is the
+join-time rule above with `peak_hours` (and $f_p < 1$ for a discount),
+except that EVRoute fixes the period when the car joins the queue, which
+is the start of the session only when there is no queue to wait in.  The
+same regulation lets an operator end a DC session at 85 % SoC, which
+$\mu = 0.85$ (`max_charge_soc`, §3) respects.  The real-data presets
+(`turkey-osm-*`) keep the neutral `Tariff()`
+([`real-data.md`](real-data.md#prices-and-the-march-2026-regulation)).
+
 ## 6. Queues
 
 Station $j$ has $c_j$ plugs, mean session length $1/\mu_j$ and an hourly
@@ -240,6 +261,14 @@ linearly; segments falling faster than $0.95$ s/s are raised so that
 $t + W_j(t)$ is non-decreasing (FIFO), which keeps time-dependent
 label-setting exact (`queueing.WaitProfile`).  Each stop also pays a set-up
 time $\sigma_j$ (parking, plugging, payment).
+
+The parameters come with the stations: the synthetic stations of the Turkey
+case study have calibrated daily sessions and profiles; the OpenStreetMap
+stations of the real-data case study use national averages derived from
+the EPDK statistics of September 2026 (DC: 3.7 sessions per plug and day,
+$1/\mu_j$ = 36 min; AC: 1.0 and 159 min; the hourly profile of the charged
+energy) - assumptions, not measurements
+([`real-data.md`](real-data.md#queues-assumptions)).
 
 ## 7. Battery wear
 

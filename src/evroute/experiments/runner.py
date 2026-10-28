@@ -2,7 +2,7 @@
 
 Run everything::
 
-    python -m evroute.experiments.runner            # full (tens of minutes)
+    python -m evroute.experiments.runner            # full (tens of minutes, real-data about 1.5 h more)
     python -m evroute.experiments.runner --quick    # smoke run (about a minute)
     evroute experiments scalability optimality-gap -o results/
 
@@ -512,6 +512,69 @@ REAL_TRIPS: tuple[tuple[str, str, str], ...] = (
 REAL_NETWORKS: tuple[str, ...] = ("approx", "osm", "hybrid")
 REAL_EXACT: tuple[str, ...] = ("bls-astar", "cfp-astar")
 REAL_HEURISTICS: tuple[str, ...] = ("greedy", "station-graph", "genetic")
+#: Wall-clock budget of one heuristic run on the OpenStreetMap data sets [s]
+#: (``None``: no budget).  A run still going when it is spent is stopped and
+#: recorded with the status :data:`OVER_BUDGET` and the time it had run (a
+#: lower bound of its runtime); the exact planners have no budget.
+REAL_HEURISTIC_BUDGET_S: float | None = 600.0
+OVER_BUDGET = "not run: over the time budget"
+
+
+def plan_within_budget(scenario, algorithm: str, budget_s: float | None, **options: Any) -> tuple[Any, float, bool]:
+    """Run :func:`safe_plan` in a forked child process, stopped after ``budget_s`` seconds of wall-clock time.
+
+    Returns ``(plan, seconds, over)``: the plan (``None`` if the planner failed
+    or ran over the budget), the wall-clock time the child ran and whether the
+    budget stopped it.  The child runs the same code on a copy-on-write copy of
+    ``scenario`` and sends the plan back pickled, so the plan (and the runtime
+    in its statistics) is the one :func:`safe_plan` returns in this process.
+    Without a budget, or where processes cannot be forked (Windows), the plan
+    runs here and is never stopped.
+    """
+    import multiprocessing
+    import pickle
+
+    t0 = time.perf_counter()
+    if budget_s is None or "fork" not in multiprocessing.get_all_start_methods():
+        return safe_plan(scenario, algorithm, **options), time.perf_counter() - t0, False
+    ctx = multiprocessing.get_context("fork")
+    recv, send = ctx.Pipe(duplex=False)
+    proc = ctx.Process(target=_plan_child, args=(send, scenario, algorithm, options), daemon=True)
+    proc.start()
+    send.close()  # the child holds the sending end: EOF here if it dies without a plan
+    try:
+        if not recv.poll(max(0.0, budget_s)):
+            return None, time.perf_counter() - t0, True
+        try:
+            return pickle.loads(recv.recv_bytes()), time.perf_counter() - t0, False
+        except EOFError:  # the child died (it printed why)
+            return None, time.perf_counter() - t0, False
+    finally:
+        if proc.is_alive():
+            proc.terminate()
+        proc.join()
+        recv.close()
+
+
+def _plan_child(conn, scenario, algorithm: str, options: dict[str, Any]) -> None:
+    """Body of the child process of :func:`plan_within_budget`."""
+    import pickle
+
+    try:
+        conn.send_bytes(pickle.dumps(safe_plan(scenario, algorithm, **options), protocol=pickle.HIGHEST_PROTOCOL))
+    finally:
+        conn.close()
+
+
+def over_budget_row(algorithm: str, seconds: float, **extra: Any) -> dict[str, Any]:
+    """CSV record of a run stopped by the time budget: the columns of
+    :func:`~evroute.experiments.common.plan_row`, no plan, ``runtime_ms`` the
+    time it had run (a lower bound) and ``status`` :data:`OVER_BUDGET`."""
+    nan = math.nan
+    return {**extra, "algorithm": algorithm, "feasible": 0, "time_min": nan, "drive_min": nan, "charge_min": nan,
+            "queue_min": nan, "distance_km": nan, "stops": "", "energy_kwh": nan, "charged_kwh": nan, "money": nan,
+            "soh_pct": nan, "gcost": nan, "arrival_soc": nan, "runtime_ms": seconds * 1000.0, "settled": "",
+            "generated": "", "status": OVER_BUDGET}
 
 
 def real_data_scenario(trip: str, network: str):
@@ -534,12 +597,26 @@ def exp_real_data(out: Path, quick: bool) -> dict[str, Any]:
     trees cover the whole 44 673-node network).  ``results.csv`` has one row
     per plan; the viewer of the flagship trip on OSM data is written to
     ``karaman-istanbul/viewer.html`` (full run).
+
+    Nearly all of a full run is the heuristics on the OSM network: the
+    station graph grows one feasible-path label tree (30-50 s each, up to the
+    5 million label cap) per station it expands, which took up to almost four
+    hours per trip and data set (about seven hours of planning in all),
+    greedy and genetic up to a few minutes each; the exact planners take
+    seconds (minutes where the OSM stations leave a trip without fast
+    chargers and the search runs into its label budget).  Every heuristic run on the OSM data
+    sets therefore has a wall-clock budget of :data:`REAL_HEURISTIC_BUDGET_S`
+    (see :func:`plan_within_budget`); a run over it gets a row with the
+    status :data:`OVER_BUDGET`, ``runtime_ms`` the time it had run and no
+    plan, so a full run takes about an hour and a half on one core.  The
+    trips are independent, so they can be run in parallel processes (one per
+    trip, by narrowing :data:`REAL_TRIPS`).
     """
     trips = [t for t in REAL_TRIPS if t[0] == "karaman-mersin"] if quick else list(REAL_TRIPS)
     algos = REAL_EXACT + (("genetic",) if quick else REAL_HEURISTICS)
     rows: list[dict[str, Any]] = []
     summary: dict[str, Any] = {"trips": {}, "networks": list(REAL_NETWORKS), "algorithms": list(algos),
-                               "reference": "cfp-astar"}
+                               "reference": "cfp-astar", "heuristic_budget_s": REAL_HEURISTIC_BUDGET_S}
     for trip, approx_preset, osm_preset in trips:
         per: dict[str, Any] = {"presets": {"approx": approx_preset, "osm": osm_preset}}
         for net in REAL_NETWORKS:
@@ -548,22 +625,36 @@ def exp_real_data(out: Path, quick: bool) -> dict[str, Any]:
             info = {"trip": trip, "network": net, "nodes": sc.network.num_nodes, "edges": sc.network.num_edges,
                     "stations": len(sc.stations), "dc_stations": sum(1 for s in sc.stations if s.kind != "AC")}
             plans: dict[str, Any] = {}
+            over: dict[str, float] = {}  # heuristic -> seconds it had run when the budget stopped it
             for a in algos:
                 if a not in REAL_EXACT and not any(p.feasible for p in plans.values()):
                     # no exact optimum, no gap: and on the OSM network a heuristic would
                     # spend its time on label trees that hit their 5 million label cap
                     continue
-                p = safe_plan(P, a, trace=a in REAL_EXACT and trip == "karaman-istanbul")
+                if a in REAL_EXACT or net == "approx":
+                    p = safe_plan(P, a, trace=a in REAL_EXACT and trip == "karaman-istanbul")
+                else:
+                    p, secs, stopped = plan_within_budget(P, a, REAL_HEURISTIC_BUDGET_S)
+                    if stopped:
+                        over[a] = secs
+                        print(f"  real-data: {trip} on {net}: {a} {OVER_BUDGET} ({secs:.0f} s)")
                 if p is not None:
                     plans[a] = p
             ref = plans.get("cfp-astar")
             ref_t = ref.total_time_s if ref is not None and ref.feasible else math.nan
-            for a, p in plans.items():
+            for a in algos:
+                if a in over:
+                    rows.append({**over_budget_row(a, over[a], **info), "gap_pct": math.nan, "trees": ""})
+                    continue
+                p = plans.get(a)
+                if p is None:
+                    continue
                 gap = 100.0 * (p.total_time_s / ref_t - 1.0) if p.feasible and math.isfinite(ref_t) else math.nan
                 trees = (p.stats.extra or {}).get("trees") if p.stats else None
                 rows.append({**plan_row(p, **info), "gap_pct": gap, "trees": trees if trees is not None else ""})
             per[net] = {**{k: v for k, v in info.items() if k not in ("trip", "network")},
-                        "feasible": {a: bool(p.feasible) for a, p in plans.items()}}
+                        "feasible": {a: bool(p.feasible) for a, p in plans.items()},
+                        **({"over_budget": {a: round(s, 1) for a, s in over.items()}} if over else {})}
             if trip == "karaman-istanbul" and net == "osm" and not quick:
                 try:
                     from ..viz.export import build_viewer_html

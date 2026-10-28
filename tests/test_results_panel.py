@@ -158,8 +158,13 @@ REAL_DATA = {
 }
 
 
-def make_real_data(d: Path, data=REAL_DATA) -> None:
-    """The ``real-data`` experiment's files (runner layout): results.csv and summary.json."""
+def make_real_data(d: Path, data=REAL_DATA, runs=None) -> None:
+    """The ``real-data`` experiment's files (runner layout): results.csv and summary.json.
+
+    ``runs`` maps (trip, network, heuristic) to (runtime_ms, stopped): the
+    runtime of that run, and ``stopped`` for a run the time budget stopped
+    (no plan, status "not run: over the time budget")."""
+    runs = runs or {}
     rows = []
     presets = {"karaman-istanbul": ("turkey-karaman-istanbul", "turkey-osm-karaman-istanbul"),
                "izmir-erzurum": ("turkey-izmir-erzurum", "turkey-osm-izmir-erzurum")}
@@ -171,11 +176,16 @@ def make_real_data(d: Path, data=REAL_DATA) -> None:
             rows.append({**info, **row(a, tm, distance_km=km, stops=stops, money=money, runtime_ms=rt * (0.3 if a == "bls-astar" else 1.0),
                                        status="limit" if t is None else "goal"), "gap_pct": "" if t is None else 100 * (f - 1)})
         for a, g in gaps.items():
-            rows.append({**info, **row(a, t * (1 + g / 100), runtime_ms=40000.0), "gap_pct": g})
+            ms, stopped = runs.get((trip, net, a), (40000.0, False))
+            if stopped:
+                rows.append({**info, **row(a, None, runtime_ms=ms, stops="", settled="", generated="",
+                                           status="not run: over the time budget"), "gap_pct": ""})
+            else:
+                rows.append({**info, **row(a, t * (1 + g / 100), runtime_ms=ms), "gap_pct": g})
     write_csv(d / "results.csv", rows)
     summary = {"trips": {k: {"presets": {"approx": a, "osm": o}} for k, (a, o) in presets.items()},
                "networks": ["approx", "osm", "hybrid"], "algorithms": ["bls-astar", "cfp-astar", "greedy", "station-graph", "genetic"],
-               "reference": "cfp-astar"}
+               "reference": "cfp-astar", "heuristic_budget_s": 600.0}
     (d / "summary.json").write_text(json.dumps(summary), encoding="utf-8")
 
 
@@ -566,6 +576,14 @@ def test_real_data_section_is_computed_from_the_data(results_dir):
     assert math.isclose(f["time_change_pct"]["hybrid"], 100 * ((540.0 / 487.0 - 1) + (1070.0 / 1049.0 - 1)) / 2)
     assert math.isclose(f["runtime_s"]["osm"]["cfp-astar"], (23000.0 + 190000.0) / 2 / 1000)
     assert math.isclose(f["mean_gap_pct"]["osm"]["greedy"], 163.0)
+    # all rows drive 400 min (make_real_data): the whole change is time at the stops
+    assert f["drive_change_min"]["osm"] == 0.0 and math.isclose(f["stop_time_change_min"]["osm"], 554.0 - 487.0)
+    assert math.isclose(f["heuristic_runtime_s"]["osm"]["greedy"], 40.0)
+    assert "driving +0 s, stops +1 h 07 min on average" in s["finding"]["en"]
+    assert "the heuristics take a median of Greedy 40 s, " in s["finding"]["en"]
+    assert "Genetic 40 s, against 1.8 min for CFP-A*." in s["finding"]["en"]
+    assert math.isclose(f["heuristic_runtime_max_s"]["osm"]["greedy"], 40.0) and "up to" not in s["finding"]["en"]
+    assert "sezgisellerin medyan çalışma süresi Açgözlü 40 sn" in s["finding"]["tr"]
     plan = d["trips"][1]["nets"]["osm"]["plans"]["cfp-astar"]
     assert plan["feasible"] is False and plan["limit"] is True and plan["time_min"] is None
     assert "1 of 2 trips with the OSM stations (not İzmir → Erzurum)" in s["finding"]["en"]
@@ -573,6 +591,38 @@ def test_real_data_section_is_computed_from_the_data(results_dir):
     groups = {g["id"]: g for g in p["checks"]["groups"]}
     assert groups["more-stations-not-slower"]["total"] == 1 and groups["more-stations-not-slower"]["passed"] == 1
     assert "real-data" in groups["cfp-lower-bound"]["sections"]
+    # every heuristic run took 40 s: within the 10 min budget
+    assert f["heuristic_budget_s"] == 600.0 and d["budget_s"] == 600.0 and f["over_budget"]["osm"]["station-graph"] == 0
+    assert "time budget" not in s["finding"]["en"] and "süre sınırı" not in s["finding"]["tr"]
+
+
+def test_real_data_runs_over_the_time_budget(tmp_path):
+    root = make_results(tmp_path / "res")
+    shutil.rmtree(root / "real-data")
+    make_real_data(root / "real-data", runs={("karaman-istanbul", "osm", "station-graph"): (601000.0, True),
+                                             ("karaman-istanbul", "hybrid", "station-graph"): (3600000.0, False),
+                                             ("karaman-istanbul", "approx", "station-graph"): (900000.0, False)})
+    p = R.results_payload(root)
+    s = section(p, "real-data")
+    f, nets = s["facts"], s["data"]["trips"][0]["nets"]
+    sg = nets["osm"]["plans"]["station-graph"]
+    assert sg["stopped"] and sg["over"] and sg["feasible"] is False and sg["gap_pct"] is None and sg["runtime_ms"] == 601000.0
+    h = nets["hybrid"]["plans"]["station-graph"]
+    assert h["over"] and not h["stopped"] and h["feasible"]
+    assert nets["approx"]["plans"]["station-graph"]["over"] is False  # the budget is for the OSM data sets only
+    assert nets["osm"]["plans"]["greedy"]["over"] is False
+    assert f["heuristic_runs"]["osm"]["station-graph"] == 1 and f["heuristic_runs"]["hybrid"]["station-graph"] == 2
+    assert f["over_budget"]["osm"]["station-graph"] == 1 and f["stopped"]["osm"]["station-graph"] == 1
+    assert f["over_budget"]["hybrid"]["station-graph"] == 1 and f["stopped"]["hybrid"]["station-graph"] == 0
+    assert f["over_budget"]["osm"]["greedy"] == 0
+    assert f["mean_gap_pct"]["osm"]["station-graph"] is None  # the stopped run has no plan, so no gap
+    assert math.isclose(f["heuristic_runtime_s"]["osm"]["station-graph"], 601.0)  # counted with its lower bound
+    en, tr = s["finding"]["en"], s["finding"]["tr"]
+    assert ("The time budget of 10 min per heuristic run on the OSM data sets is exceeded by Station graph in 2 of 3 runs "
+            "(the slowest 1 h 00 min, Karaman → İstanbul with the hybrid set; 1 stopped at the budget): ") in en
+    assert "impractical at this scale" in en and "Greedy in" not in en
+    assert "süre sınırını aşan sezgisel: İstasyon grafı 2/3 çalıştırmada (en yavaşı 1 sa 00 dk" in tr
+    assert p["checks"]["passed"] == p["checks"]["total"]
 
 
 def test_real_data_checks_catch_violations(tmp_path):
@@ -585,6 +635,42 @@ def test_real_data_checks_catch_violations(tmp_path):
     p = R.results_payload(root)
     groups = {g["id"]: g for g in p["checks"]["groups"]}
     assert groups["more-stations-not-slower"]["passed"] == 0 and "karaman-istanbul" in groups["more-stations-not-slower"]["failures"][0]
+
+
+def test_plan_within_budget_returns_the_in_process_plan_or_stops():
+    from evroute.experiments import runner
+    from evroute.experiments.common import safe_plan
+    from evroute.generators.presets import get_scenario
+
+    P = get_scenario("turkey-karaman-mersin").prepare()
+    ref = safe_plan(P, "greedy")
+    p, secs, over = runner.plan_within_budget(P, "greedy", 300.0)
+    assert not over and secs > 0 and p is not None
+    assert (p.feasible, p.total_time_s, p.money, p.num_stops, [s.node for s in p.stops]) == \
+        (ref.feasible, ref.total_time_s, ref.money, ref.num_stops, [s.node for s in ref.stops])
+    p, secs, over = runner.plan_within_budget(P, "greedy", 0.0)
+    assert over and p is None
+    p, secs, over = runner.plan_within_budget(P, "greedy", None)  # no budget: in this process
+    assert not over and p.total_time_s == ref.total_time_s
+
+
+def test_real_data_experiment_records_runs_over_the_budget(tmp_path, monkeypatch):
+    from evroute.experiments import runner
+
+    monkeypatch.setattr(runner, "REAL_HEURISTIC_BUDGET_S", 0.0)
+    monkeypatch.setattr(runner, "REAL_NETWORKS", ("approx", "hybrid"))
+    out = tmp_path / "real-data"
+    out.mkdir()
+    runner.exp_real_data(out, quick=True)  # Karaman -> Mersin, exact planners and genetic
+    rows = {(r["network"], r["algorithm"]): r for r in read_rows(out / "results.csv")}
+    assert set(rows) == {(n, a) for n in ("approx", "hybrid") for a in ("bls-astar", "cfp-astar", "genetic")}
+    stopped = rows[("hybrid", "genetic")]
+    assert stopped["status"] == runner.OVER_BUDGET and stopped["feasible"] == "0" and stopped["time_min"] == ""
+    assert float(stopped["runtime_ms"]) >= 0.0 and stopped["gap_pct"] == ""
+    assert rows[("approx", "genetic")]["feasible"] == "1"  # the budget is for the OSM data sets only
+    assert rows[("hybrid", "cfp-astar")]["feasible"] == "1"  # ... and for the heuristics only
+    summary = json.loads((out / "summary.json").read_text(encoding="utf-8"))
+    assert summary["heuristic_budget_s"] == 0.0 and "genetic" in summary["trips"]["karaman-mersin"]["hybrid"]["over_budget"]
 
 
 @pytest.mark.slow

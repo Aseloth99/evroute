@@ -1369,15 +1369,27 @@ REAL_NETWORKS: tuple[tuple[str, LangText], ...] = (
 )
 #: Credit of the OpenStreetMap data (ODbL 1.0).
 OSM_CREDIT = "© OpenStreetMap contributors"
+#: Status of a heuristic run that the experiment's time budget stopped
+#: (``evroute.experiments.runner.OVER_BUDGET``): no plan, ``runtime_ms`` is a lower bound.
+OVER_BUDGET = "not run: over the time budget"
 
 
 def _sec_real_data(exp: Mapping[str, Any], checks: _Checks, ctx: Mapping[str, Any]) -> dict[str, Any] | None:
-    """The same trips on the approximate network and on OpenStreetMap data (``real-data``)."""
+    """The same trips on the approximate network and on OpenStreetMap data (``real-data``).
+
+    A heuristic run on the OSM data sets that took longer than the
+    experiment's wall-clock budget (``heuristic_budget_s`` of
+    ``summary.json``) is flagged ``over``; one the budget stopped is also
+    ``stopped`` and has no plan, its runtime the time it had run (a lower
+    bound, counted as such in the runtime medians).
+    """
     rows = _rows(exp)
     if not rows:
         return None
     summary = exp.get("summary") if isinstance(exp.get("summary"), dict) else {}
     ref_algo = str(summary.get("reference") or "cfp-astar")
+    budget_s = summary.get("heuristic_budget_s")
+    budget_s = float(budget_s) if _finite(budget_s) else None
     trip_ids = list(dict.fromkeys(str(r.get("trip")) for r in rows if r.get("trip") is not None))
     net_keys = [k for k, _ in REAL_NETWORKS if any(str(r.get("network")) == k for r in rows)]
     net_keys += [k for k in dict.fromkeys(str(r.get("network")) for r in rows) if k not in net_keys]
@@ -1395,11 +1407,15 @@ def _sec_real_data(exp: Mapping[str, Any], checks: _Checks, ctx: Mapping[str, An
                 continue
             plans = {}
             for r in sel:
+                a = str(r.get("algorithm"))
                 d = {f: _num(r, f) for f in fields}
-                d.update(feasible=_feasible(r), limit=_limit(r))
+                stopped = str(r.get("status") or "").strip() == OVER_BUDGET
+                d.update(feasible=_feasible(r) and not stopped, limit=_limit(r), stopped=stopped,
+                         over=stopped or (budget_s is not None and net != "approx" and a in HEURISTIC_ALGOS
+                                          and _finite(d["runtime_ms"]) and d["runtime_ms"] > 1000.0 * budget_s))
                 if not d["feasible"]:
                     d["time_min"] = None
-                plans[str(r.get("algorithm"))] = d
+                plans[a] = d
             any_row = sel[0]
             nets[net] = {"plans": plans, "stations": _num(any_row, "stations"), "dc_stations": _num(any_row, "dc_stations"),
                          "nodes": _num(any_row, "nodes")}
@@ -1434,31 +1450,53 @@ def _sec_real_data(exp: Mapping[str, Any], checks: _Checks, ctx: Mapping[str, An
                 vals.append(100.0 * (b[key] / a[key] - 1.0))
         return _mean(vals)
 
-    def runtime(net: str, algo: str) -> float | None:
+    def runtime(net: str, algo: str, q: float = 0.5) -> float | None:
+        """Quantile ``q`` of the runtimes of ``algo`` on ``net`` over the trips [s] (median by default)."""
         v = sorted(x for t in trips for x in [((t["nets"].get(net) or {}).get("plans") or {}).get(algo, {}).get("runtime_ms")]
                    if _finite(x))
-        return _quantile(v, 0.5) / 1000.0 if v else None
+        return _quantile(v, q) / 1000.0 if v else None
 
     def mean_gap(net: str, algo: str) -> float | None:
         return _mean(((t["nets"].get(net) or {}).get("plans") or {}).get(algo, {}).get("gap_pct") for t in trips)
 
+    def delta(net: str, value: Callable[[Mapping[str, Any]], Any]) -> float | None:
+        """Mean change of ``value`` of the exact optimum on ``net`` against the approximate network."""
+        vals = []
+        for t in trips:
+            a, b = ref_of(t, "approx"), ref_of(t, net)
+            if a and b and _finite(value(a)) and _finite(value(b)):
+                vals.append(value(b) - value(a))
+        return _mean(vals)
+
+    def stop_min(p: Mapping[str, Any]) -> float | None:
+        """Time not spent driving: charging, queues and set-up [min]."""
+        return p["time_min"] - p["drive_min"] if _finite(p.get("time_min")) and _finite(p.get("drive_min")) else None
+
     facts: dict[str, Any] = {"trips": len(trips), "reference": ref_algo, "feasible": {}, "infeasible_trips": {},
                              "time_change_pct": {}, "distance_change_pct": {}, "money_change_pct": {},
-                             "stops_change": {}, "runtime_s": {}, "mean_gap_pct": {}}
+                             "stops_change": {}, "drive_change_min": {}, "stop_time_change_min": {}, "runtime_s": {},
+                             "heuristic_runtime_s": {}, "heuristic_runtime_max_s": {}, "mean_gap_pct": {},
+                             "heuristic_budget_s": budget_s, "heuristic_runs": {}, "over_budget": {}, "stopped": {}}
     heur = [a for a in HEURISTIC_ALGOS if any(a in (t["nets"].get(n) or {}).get("plans", {}) for t in trips for n in net_keys)]
     for net in net_keys:
         ok = [t for t in trips if ref_of(t, net)]
         facts["feasible"][net] = len(ok)
         facts["infeasible_trips"][net] = [t["title"] for t in trips if net in t["nets"] and not ref_of(t, net)]
         facts["runtime_s"][net] = {a: runtime(net, a) for a in ("bls-astar", "cfp-astar")}
+        facts["heuristic_runtime_s"][net] = {a: runtime(net, a) for a in heur}
+        facts["heuristic_runtime_max_s"][net] = {a: runtime(net, a, 1.0) for a in heur}
         facts["mean_gap_pct"][net] = {a: mean_gap(net, a) for a in heur}
+        runs = {a: [p for t in trips for p in [((t["nets"].get(net) or {}).get("plans") or {}).get(a)] if p] for a in heur}
+        facts["heuristic_runs"][net] = {a: len(v) for a, v in runs.items()}
+        facts["over_budget"][net] = {a: sum(1 for p in v if p["over"]) for a, v in runs.items()}
+        facts["stopped"][net] = {a: sum(1 for p in v if p["stopped"]) for a, v in runs.items()}
         if net != "approx":
             facts["time_change_pct"][net] = rel(net, "time_min")
             facts["distance_change_pct"][net] = rel(net, "distance_km")
             facts["money_change_pct"][net] = rel(net, "money")
-            d = [ref_of(t, net)["stops"] - ref_of(t, "approx")["stops"] for t in trips
-                 if ref_of(t, net) and ref_of(t, "approx") and _finite(ref_of(t, net)["stops"]) and _finite(ref_of(t, "approx")["stops"])]
-            facts["stops_change"][net] = _mean(d)
+            facts["stops_change"][net] = delta(net, lambda p: p.get("stops"))
+            facts["drive_change_min"][net] = delta(net, lambda p: p.get("drive_min"))
+            facts["stop_time_change_min"][net] = delta(net, stop_min)
 
     def finding(lang: str) -> str:
         tr = lang == "tr"
@@ -1482,19 +1520,28 @@ def _sec_real_data(exp: Mapping[str, Any], checks: _Checks, ctx: Mapping[str, An
         if feas:
             sents.append(("OpenStreetMap yollarında kesin planlayıcılar " + " ve ".join(feas) + " rota buluyor") if tr
                          else ("On OpenStreetMap roads the exact planners find a route " + " and ".join(feas)))
+        def signed_min(x: float) -> str:
+            return ("+" if x >= 0 else "") + fmt_minutes(x, lang)
+
         chg = []
         for net in nets_:
             dt, dd = facts["time_change_pct"].get(net), facts["distance_change_pct"].get(net)
             if _finite(dt) and _finite(dd):
                 label = ("OSM istasyonlarıyla" if net == "osm" else "hibrit kümeyle") if tr else ("with the OSM stations" if net == "osm" else "with the hybrid set")
-                chg.append((label, signed(dt), signed(dd)))
+                dv, ds = facts["drive_change_min"].get(net), facts["stop_time_change_min"].get(net)
+                if _finite(dv) and _finite(ds):
+                    split = (f" (ortalama sürüş {signed_min(dv)}, duraklar {signed_min(ds)})" if tr
+                             else f" (driving {signed_min(dv)}, stops {signed_min(ds)} on average)")
+                else:
+                    split = ""
+                chg.append((label, signed(dt), signed(dd), split))
         if chg:
             if tr:
                 sents.append("Yaklaşık ağa göre kesin optimumun süresi ve mesafesi: "
-                             + "; ".join(f"{a} {b} süre, {c} mesafe" for a, b, c in chg))
+                             + "; ".join(f"{a} {b} süre, {c} mesafe{s}" for a, b, c, s in chg))
             else:
                 sents.append("Against the approximate network the exact optimum takes "
-                             + "; ".join(f"{b} time and {c} distance {a}" for a, b, c in chg))
+                             + "; ".join(f"{b} time and {c} distance {a}{s}" for a, b, c, s in chg))
         rt = facts["runtime_s"].get("osm") or facts["runtime_s"].get("hybrid") or {}
         ra = facts["runtime_s"].get("approx") or {}
         if _finite(rt.get("bls-astar")) and _finite(rt.get("cfp-astar")):
@@ -1517,12 +1564,61 @@ def _sec_real_data(exp: Mapping[str, Any], checks: _Checks, ctx: Mapping[str, An
         if gaps:
             sents.append(("Sezgisellerin optimuma ortalama farkı (yaklaşık ağ → OSM): " if tr
                           else "The heuristics' mean gap to the optimum (approximate network → OSM): ") + ", ".join(gaps))
+        hr = facts["heuristic_runtime_s"].get("osm") or {}
+        hmax = facts["heuristic_runtime_max_s"].get("osm") or {}
+
+        def took(a: str) -> str:
+            s = f"{algo_title(a, lang)} {fmt_minutes(hr[a] / 60.0, lang)}"
+            m = hmax.get(a)
+            if _finite(m) and m > 2.0 * hr[a]:  # a long tail: say how long the slowest trip took
+                s += f" ({'en çok' if tr else 'up to'} {fmt_minutes(m / 60.0, lang)})"
+            return s
+
+        times = [took(a) for a in heur if _finite(hr.get(a))]
+        if times:
+            listed = ", ".join(times[:-1]) + (" ve " if tr else " and ") + times[-1] if len(times) > 1 else times[0]
+            ref_rt = rt.get(ref_algo)
+            if _finite(ref_rt):
+                tail = (f"; {algo_title(ref_algo, lang)} için {fmt_minutes(ref_rt / 60.0, lang)}" if tr
+                        else f", against {fmt_minutes(ref_rt / 60.0, lang)} for {algo_title(ref_algo, lang)}")
+            else:
+                tail = ""
+            sents.append(("OSM ağında sezgisellerin medyan çalışma süresi " if tr
+                          else "On the OSM network the heuristics take a median of ") + listed + tail)
+        if budget_s is not None:
+            over_parts = []
+            for a in heur:
+                n_runs = sum((facts["heuristic_runs"].get(k) or {}).get(a, 0) for k in nets_)
+                n_over = sum((facts["over_budget"].get(k) or {}).get(a, 0) for k in nets_)
+                if not n_over:
+                    continue
+                n_stop = sum((facts["stopped"].get(k) or {}).get(a, 0) for k in nets_)
+                slow = max(((p["runtime_ms"], t["title"], k) for t in trips for k in nets_
+                            for p in [((t["nets"].get(k) or {}).get("plans") or {}).get(a)] if p and p["over"]),
+                           key=lambda x: x[0])
+                where = ("OSM istasyonları" if slow[2] == "osm" else "hibrit küme") if tr else ("OSM stations" if slow[2] == "osm" else "hybrid set")
+                if tr:
+                    s = (f"{algo_title(a, lang)} {n_over}/{n_runs} çalıştırmada (en yavaşı {fmt_minutes(slow[0] / 60000.0, lang)}, "
+                         f"{slow[1]}, {where}" + (f"; {n_stop} çalıştırma sınırda durduruldu" if n_stop else "") + ")")
+                else:
+                    s = (f"{algo_title(a, lang)} in {n_over} of {n_runs} runs (the slowest {fmt_minutes(slow[0] / 60000.0, lang)}, "
+                         f"{slow[1]} with the {where}" + (f"; {n_stop} stopped at the budget" if n_stop else "") + ")")
+                if a == "station-graph":
+                    s += ("; her genişlettiği istasyon için tüm ağı kaplayan bir etiket ağacı kuruyor, bu ölçekte pratik değil" if tr
+                          else ": it grows a label tree over the whole network for every station it expands, "
+                               "which makes this simple baseline impractical at this scale")
+                over_parts.append(s)
+            if over_parts:
+                b = fmt_minutes(budget_s / 60.0, lang)
+                sents.append((f"OSM veri kümelerinde çalıştırma başına {b} süre sınırını aşan sezgisel: " if tr
+                              else f"The time budget of {b} per heuristic run on the OSM data sets is exceeded by ")
+                             + "; ".join(over_parts))
         return " ".join(x + "." for x in sents)
 
     data = {"networks": [{"key": k, "title": titles.get(k, {"tr": k, "en": k})} for k in net_keys],
             "trips": trips, "reference": ref_algo, "heuristics": heur, "exact": [a for a in ("bls-astar", "cfp-astar")
                                                                                   if any(a in (t["nets"].get(n) or {}).get("plans", {}) for t in trips for n in net_keys)],
-            "credit": OSM_CREDIT}
+            "credit": OSM_CREDIT, "budget_s": budget_s}
     return {"data": data, "finding": _both(finding), "facts": facts}
 
 

@@ -1,6 +1,6 @@
 {
  "name": "EVRoute Turkey real-data network",
- "build_utc": "2026-10-28T01:30:08Z",
+ "build_utc": "2026-10-28T16:52:29Z",
  "build_script": "build_osm_turkey.py",
  "sources": {
   "osm": {
@@ -802,30 +802,30 @@
  "validation": {
   "kgm_table_date": "2026-03-03 00:00:00",
   "pairs": 3240,
-  "mean_rel_error_pct": -0.56,
-  "mean_abs_rel_error_pct": 2.43,
-  "median_abs_rel_error_pct": 1.28,
-  "p90_abs_rel_error_pct": 5.03,
-  "max_abs_rel_error_pct": 112.42,
-  "share_within_5pct": 0.898,
+  "mean_rel_error_pct": -0.82,
+  "mean_abs_rel_error_pct": 2.52,
+  "median_abs_rel_error_pct": 1.45,
+  "p90_abs_rel_error_pct": 5.12,
+  "max_abs_rel_error_pct": 110.67,
+  "share_within_5pct": 0.895,
   "share_within_10pct": 0.972,
   "no_toll_pairs_finite": 2932,
-  "no_toll_mean_rel_error_pct": 0.07,
-  "no_toll_mean_abs_rel_error_pct": 2.19,
+  "no_toll_mean_rel_error_pct": -0.17,
+  "no_toll_mean_abs_rel_error_pct": 2.23,
   "worst_pairs_pct_name_name_kgm_graph": [
    [
-    112.4,
+    110.7,
     "Elâzığ",
     "Tunceli",
     140.0,
-    297.4
+    294.9
    ],
    [
-    104.7,
+    104.3,
     "Kocaeli",
     "Yalova",
     65.0,
-    133.1
+    132.8
    ],
    [
     93.6,
@@ -842,18 +842,18 @@
     346.0
    ],
    [
-    69.6,
+    69.4,
     "Sakarya",
     "Yalova",
     103.0,
-    174.7
+    174.5
    ],
    [
-    54.6,
+    53.1,
     "Malatya",
     "Tunceli",
     233.0,
-    360.2
+    356.8
    ],
    [
     49.9,
@@ -870,11 +870,11 @@
     417.2
    ],
    [
-    46.6,
+    45.8,
     "Bursa",
     "Yalova",
     69.0,
-    101.2
+    100.6
    ],
    [
     45.5,

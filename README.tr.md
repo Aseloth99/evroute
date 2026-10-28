@@ -54,11 +54,14 @@ modellerin ve ticari planlayıcıların kendisiyle kıyaslanabileceği bir
 - **Görerek anlayın** — animasyonlu, çevrimdışı bir web görüntüleyici
   (yolculuk, yarış ve arama tekrarı modları; TR/EN; açık/koyu tema; mobil
   uyum), canlı bir planlama sunucusu ve etkileşimli bir deney paneli.
-- **Türkiye vaka çalışması** — 1 279 düğüm, 146 yol, 10 dağ geçidi ve 290
-  sentetik şarj istasyonu; ayrıca 40 000 düğüme kadar sentetik ağlar ve bir
-  OpenStreetMap yükleyicisi.
+- **Türkiye vaka çalışmaları** — yaklaşık bir ağ (1 279 düğüm, 146 yol, 10
+  dağ geçidi, 290 sentetik şarj istasyonu) ve
+  [gerçek veriyle bir ağ](#gerçek-veriyle-vaka-çalışması-openstreetmap):
+  SRTM yükseklikli 44 673 OpenStreetMap düğümü, OSM'deki 711 şarj
+  istasyonu ve operatör liste fiyatları; ayrıca 40 000 düğüme kadar
+  sentetik ağlar ve bir OpenStreetMap yükleyicisi.
 - **Tekrarlanabilir** — her tablonun ve grafiğin arkasında sabit tohumlu on
-  bir deney, tek komut; algoritmalar için [anlaşılır bir rehber](docs/guide.tr.md).
+  iki deney, tek komut; algoritmalar için [anlaşılır bir rehber](docs/guide.tr.md).
 
 ## Ekran görüntüleri
 
@@ -113,7 +116,7 @@ evroute plan turkey-karaman-istanbul                 # BLS-A* ile planlar (varsa
 evroute plan turkey-karaman-istanbul-tariff --objective cost      # %80 kuralı + puant saatler: 20:00'yi bekler
 evroute viz turkey-karaman-istanbul -o karaman-istanbul.html --lang en   # animasyonlu görüntüleyici, çevrimdışı çalışır
 evroute serve turkey-karaman-istanbul --open          # tarayıcıda canlı planlama
-evroute experiments --quick -o results/               # on bir deneyin tamamı, hızlı boyut (~1,5 dk)
+evroute experiments --quick -o results/               # on iki deneyin tamamı, hızlı boyut (~1,5 dk)
 ```
 
 ```text
@@ -211,6 +214,43 @@ optimumuna göre ölçülmüştür:
 > karşılaştırmak için kullanın, gerçek bir yolculuğu planlamak için değil
 > ([verilerin kaynağı](docs/index.md#turkey-case-study)).
 
+## Gerçek veriyle vaka çalışması (OpenStreetMap)
+
+Aynı yolculuklar, paketle birlikte gelen gerçek verilerle de çalışır:
+Türkiye'nin OpenStreetMap yol ağı (44 673 düğüm; 75 393 km otoyol, ana yol
+ve birincil yol; OSM hız sınırları ya da yasal varsayılanlar), her düğümde
+SRTM yükseklikleri, OSM'de işaretlenmiş 711 halka açık şarj istasyonu ve
+on operatörün yayımladığı liste fiyatları. **Varsayım** olanlar kuyruklar
+(EPDK'nin ulusal ortalamaları) ve OSM'de bulunmayan değerlerdir: istasyon
+güçlerinin %64'ü varsayılandır. 81 il merkezi arasındaki yol mesafeleri
+KGM'nin resmî tablosundan ortalama %2,52 sapar.
+
+```bash
+evroute plan turkey-osm-karaman-istanbul   # 9 sa 14 dk, 751,81 km, 2 mola, 999,92 TRY (BLS-A*, yaklaşık 5 sn)
+```
+
+- **OSM az sayıda şarj noktası biliyor:** EPDK'nin saydığı (Eylül 2026) AC
+  soketlerin yaklaşık %3,3'ü, DC soketlerin %1,9'u; 38° doğu boylamının
+  doğusunda hiç DC istasyon yok. `hybrid` istasyon kümesi
+  (`--stations hybrid`), bir ana yolun her DC şarj noktasına 75 km'den uzak
+  olduğu yerlere işaretli sentetik DC boşluk doldurucular ekler.
+- **Kesin planlayıcılar kesin ve hızlı kalır:** BLS-A\* ve CFP-A\*, OSM
+  istasyonlarıyla 6 yolculuğun 5'inde (doğuda DC şarj noktası olmayan
+  İzmir → Erzurum etiket sınırına takılır), hibrit kümeyle 6'sında da
+  optimumu 44 673 düğümde medyan 4,0 sn ve 9,9 sn'de bulur; BLS-A\*,
+  CFP-A\*'ın %0,4 yakınında kalır. OSM istasyonlarıyla optimum, yaklaşık
+  ağdakinden ortalama %7,0 daha uzun sürer; farkın neredeyse tamamı daha
+  yavaş sürüşten gelir.
+- **Sezgiseller kalmaz:** OSM istasyonlarıyla greedy, yavaş AC şarj
+  noktalarında saatlerce şarj ederek optimumdan ortalama %153 yavaş kalır
+  (yaklaşık ağda %6,4); station graph tek bir yolculuk için 3 sa 46 dk'ya
+  kadar uğraşır.
+
+> [!NOTE]
+> Veri © OpenStreetMap contributors, ODbL 1.0; yükseklikler SRTM (NASA/USGS).
+> Araştırma verisidir, navigasyon için uygun değildir. Mart 2026 şarj
+> yönetmeliği dahil ayrıntılar: [`docs/real-data.tr.md`](docs/real-data.tr.md) ([English](docs/real-data.md)).
+
 ## Tek bir en iyi rota yok
 
 Bir yolculuğun üç bedeli vardır: **zaman**, **para** ve **batarya
@@ -219,7 +259,9 @@ da keskinleştirir; EVRoute yaygın iki uygulamayı bir `Tariff` ile modeller:
 
 - **%80 kuralı.** SoC yaklaşık %80'i geçince şarj gücü keskin biçimde düşer;
   bu yüzden işletmeciler `high_soc` üzerinde depolanan her kWh için daha
-  yüksek bir fiyat ister.
+  yüksek bir fiyat ister (Türkiye'de halka açık istasyonlarda değil: bu tür
+  kademeler Mart 2026'dan beri yasak,
+  [gerçek veri](docs/real-data.tr.md#fiyatlar-ve-mart-2026-yönetmeliği)).
 - **Puant saatler.** Günün yoğun saatlerinde bir puant çarpanı uygulanır;
   ya sabit saat aralıklarında ya da istasyonun kuyruk modelinin yoğunluk
   beklediği saatlerde.
@@ -276,7 +318,7 @@ ve [`docs/algorithms.md`](docs/algorithms.md#at-a-glance) (genel bakış ve ispa
 
 ## Deneyler
 
-Sabit tohumlu on bir deney, eşlik eden makaledeki tüm tablo ve şekilleri
+Sabit tohumlu on iki deney, eşlik eden makaledeki tüm tablo ve şekilleri
 yeniden üretir. Her deney CSV, JSON, grafikler ve LaTeX tabloları yazar;
 koşu, etkileşimli ve çevrimdışı bir panel olan `results.html` ile tamamlanır.
 
@@ -294,8 +336,9 @@ evroute gallery -o docs/img                        # bu README'deki seaborn graf
 | `robustness` | İzmir → Erzurum: P(rezerv aşımı) güvenlik katsayısı 1,0'da %56, 1,1'de %9,7 (+21 dk), 1,2'de %0,4 (+36 dk) |
 | `tariffs` | maliyet-optimal plan en hızlı plandan 6,3 dk uzun sürer ama 76,73 TRY (%7,6) daha az öder |
 | `scalability` | 40 000 düğümlü sentetik ülkelerde BLS-A\* ortalama 1,7 sn'de, CFP-A\* 2,5 sn'de yanıt veriyor |
+| `real-data` | yaklaşık ağda ve OpenStreetMap verisinde altı yolculuk: OSM istasyonlarıyla optimum ortalama %7,0 daha uzun sürer, neredeyse tamamı daha yavaş sürüşten; BLS-A\* 4,0 sn'de, CFP-A\* 9,9 sn'de yanıt verir (medyan) |
 
-On bir deneyin tüm bulguları, çıktıları ve süreleri:
+On iki deneyin tüm bulguları, çıktıları ve süreleri:
 [dokümantasyon](docs/index.md#experiments-and-figures).
 
 ## Doğruluğun denetlenmesi
@@ -304,8 +347,8 @@ Her planlayıcının her planı **bağımsız bir değerlendiricide** yeniden si
 edilir; sabit tohumlu bir **çapraz doğrulama paketi** on bir değişmezi kaba
 kuvvete, analitik referans çözümlere, metamorfik bağıntılara ve yerel aramaya
 karşı, rastgele şarj tarifeleri altında da sınar
-([`tests/fuzz_report.md`](tests/fuzz_report.md)). Toplam 634 test vardır;
-bunların 541'i hızlı katmandadır ve CI'da Python 3.10-3.13 üzerinde
+([`tests/fuzz_report.md`](tests/fuzz_report.md)). Toplam 677 test vardır;
+bunların 574'ü hızlı katmandadır ve CI'da Python 3.10-3.13 üzerinde
 çalıştırılır ([ayrıntılar](docs/algorithms.md#8-how-correctness-is-verified)):
 
 ```bash
@@ -318,6 +361,9 @@ python -m pytest -m "not slow"   # hızlı katman, birkaç dakika
   adım, konuya yeni başlayanlar için; sonunda "hangi planlayıcıyı
   kullanmalıyım?"
 - [Model](docs/model.md) — tüm denklemler, onları gerçekleyen modüllerle birlikte
+- [Gerçek veriyle vaka çalışması](docs/real-data.tr.md) ([English](docs/real-data.md)) —
+  OpenStreetMap üzerinde Türkiye: kaynaklar, verinin hazırlanışı, doğrulama,
+  şarj kapsamı, fiyatlar ve 2026 yönetmeliği, sonuçlar, sınırlar
 - [Algoritmalar ve ispatlar](docs/algorithms.md) — doğruluk gerekçeleri ve kaynakça
 - [Dokümantasyon dizini](docs/index.md) — komut satırı, Python API'si,
   görüntüleyici, canlı sunucu, deneyler, senaryolar ve veriler, tarifeler,
@@ -327,7 +373,7 @@ python -m pytest -m "not slow"   # hızlı katman, birkaç dakika
   [sonuç paneli](docs/demo/results.html)
 - [Katkıda bulunma](CONTRIBUTING.md) — kurulum, proje yapısı, temel kurallar
 
-Rehber dışındaki belgeler İngilizcedir.
+Rehber ve gerçek veri vaka çalışması dışındaki belgeler İngilizcedir.
 
 ## Atıf
 
@@ -351,6 +397,13 @@ EVRoute araştırmanıza katkı sağladıysa lütfen atıf yapın
 [MIT](LICENSE) © 2026 Mustafa Açık, Karamanoğlu Mehmetbey Üniversitesi,
 Bilgisayar Mühendisliği Bölümü.
 
+`src/evroute/data/osm_turkey/` içindeki Türkiye gerçek veri ağı kod değil,
+veridir: yol ağı, yerleşimler ve şarj istasyonları ©
+[OpenStreetMap contributors](https://www.openstreetmap.org/copyright),
+[ODbL 1.0](https://opendatacommons.org/licenses/odbl/1-0/) lisansıyla;
+yükseklikler SRTM (NASA/USGS, kamu malı). Ayrıntılar:
+[`DATA_LICENSE.md`](src/evroute/data/osm_turkey/DATA_LICENSE.md).
+
 ## Teşekkürler
 
 - Algoritmalar; Artmeier vd. (2010), Storandt & Funke (2012), Baum, Dibbelt,
@@ -358,10 +411,16 @@ Bilgisayar Mühendisliği Bölümü.
   (2020), Montoya vd. (2017), Martins
   (1984) ile Mandow & Pérez de la Cruz (2010) çalışmalarına dayanır; tam
   kaynakça [`docs/algorithms.md`](docs/algorithms.md#references) dosyasındadır.
-- Türkiye vaka çalışmasındaki yer koordinatları ve rakımlar, genel coğrafya
-  bilgisinden yer adları sözlüğü (gazetteer) düzeyinde derlenmiştir; hiçbir
-  tescilli harita ya da şarj ağı verisi içerilmemiştir. İsteğe bağlı OSM
+- Yaklaşık Türkiye vaka çalışmasındaki yer koordinatları ve rakımlar,
+  genel coğrafya bilgisinden yer adları sözlüğü (gazetteer) düzeyinde
+  derlenmiştir; hiçbir tescilli harita ya da şarj ağı verisi
+  içerilmemiştir.
+- Gerçek veriyle vaka çalışması
+  [OpenStreetMap](https://www.openstreetmap.org/copyright) (© OpenStreetMap
+  contributors, ODbL 1.0), AWS Terrain Tiles üzerinden SRTM yükseklikleri
+  (NASA/USGS), KGM mesafe tablosu, EPDK şarj istatistikleri ve
+  operatörlerin yayımladığı fiyatlarla hazırlanmıştır
+  ([kaynaklar](docs/real-data.tr.md#kaynaklar)). İsteğe bağlı OSM
   yükleyicisi, indirmeyi seçtiğinizde
-  [OSMnx](https://github.com/gboeing/osmnx) ve
-  [OpenStreetMap](https://www.openstreetmap.org/copyright) verilerini
-  (© OpenStreetMap katkıcıları, ODbL) kullanır.
+  [OSMnx](https://github.com/gboeing/osmnx) ve OpenStreetMap verilerini
+  kullanır.
