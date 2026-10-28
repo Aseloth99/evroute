@@ -18,58 +18,45 @@ Pure Python ≥ 3.10 · zero runtime dependencies · MIT licence<br>
 ## Why EVRoute?
 
 Electric-vehicle route planning is "a solved problem" - until you list what a
-real trip involves. Most studies and tools handle one or two of these effects
-and simplify the rest away:
+real trip involves. Most tools handle one or two of these effects and
+simplify the rest away:
 
-| Effect | In reality | Common simplification | EVRoute |
-|---|---|---|---|
-| Nonlinear charging | power drops sharply above ~50-80 % SoC | constant power | exact piecewise-linear charging functions per vehicle × charger |
-| Partial charging | stop at 54 %, not at 100 % | always charge to full / fixed target | continuous amounts (CFP) or a fine target grid (BLS) |
-| Queues | 20-40 min at busy service areas in the afternoon | no waiting | Erlang-C M/M/c queues with hourly demand, time-dependent and FIFO-safe |
-| Terrain and regeneration | descents refill the battery | flat roads | physics model with grade, wind, stop-and-go, regeneration limit, full-battery clamp |
-| Temperature | −5 °C: smaller battery, heating, slower charging | 20 °C | usable capacity, HVAC load, cold-charging derating, preconditioning |
-| Battery wear | fast charging at high SoC ages the pack | ignored | SoH loss from C-rate, SoC and temperature, priced in the objective |
-| Prices | dearer above 80 % SoC and at peak hours | one price per kWh | tariffs by SoC and time of day (fixed or from the queue load), exact planning of when to wait for a cheaper price |
-| Uncertainty | consumption deviates ±10 % | deterministic | Monte Carlo reliability, safety factor, adaptive driver policy |
-| Eco-driving | driving slower can save a stop | one speed | several speed levels per road |
+| Effect | In reality | EVRoute |
+|---|---|---|
+| Nonlinear charging | power drops sharply above ~50-80 % SoC | exact charging curves per vehicle × charger |
+| Partial charging | stop at 54 %, not at 100 % | continuous amounts (CFP) or a fine grid (BLS) |
+| Queues | 20-40 min at busy service areas in the afternoon | Erlang-C queues with hourly demand |
+| Terrain and cold | descents refill the battery; −5 °C: smaller battery, slower charging | physics model with grade, wind and regeneration; cold-weather capacity and charging |
+| Battery wear | fast charging at high SoC ages the pack | priced in the objective |
+| Prices | dearer above 80 % SoC and at peak hours | tariffs, with exact planning of when to wait |
+| Uncertainty | consumption deviates ±10 % | Monte Carlo reliability, safety factor |
 
 EVRoute puts **all of them into one exact model**, solves it with algorithms
-that come with optimality proofs, verifies every answer with an independent
-replay, and makes the result tangible in an animated, offline web viewer. It
-is meant as a **reference implementation**: a baseline that other methods
-(heuristics, learned models, commercial planners) can be measured against.
+that come with optimality proofs and verifies every answer with an
+independent replay - a **reference implementation** that heuristics, learned
+models and commercial planners can be measured against. The full list of
+effects: [`docs/model.md`](docs/model.md#at-a-glance).
 
 ## Highlights
 
 - **9 planners behind one API** - from a battery-blind fastest path and an
-  "in-car navigator" heuristic to exact label-setting (BLS, BLS-A\*), exact
-  continuous charging (CFP, CFP-A\*) and a multi-criteria Pareto search over
-  time, money and battery wear.
-- **No single best route** - charging tariffs ("the 80 % rule", peak and
-  busy hours) with exact planning of when it pays to wait for a cheaper
-  price; the Pareto search shows how time, money and battery wear trade off
+  "in-car navigator" heuristic to exact label setting (BLS, BLS-A\*), exact
+  continuous charging (CFP, CFP-A\*) and a Pareto search over time, money
+  and battery wear.
+- **Exact and verified** - continuous energies, exact charging curves,
+  [optimality proofs](docs/algorithms.md); every plan is replayed by an
+  independent evaluator and cross-checked against brute force.
+- **No single best route** - charging tariffs with the 80 % rule and peak
+  hours, and exact planning of when it pays to wait for a cheaper price
   ([below](#there-is-no-single-best-route)).
-- **Exact means exact** - continuous energies (consumption is never rounded),
-  exact charging curves, consecutive stops at different chargers of one site,
-  optimality proofs in [`docs/algorithms.md`](docs/algorithms.md).
-- **Verified, not just tested** - every plan of every planner is replayed by an
-  independent evaluator; a seeded cross-validation suite checks 11 invariants
-  against brute force, metamorphic relations and local search
-  ([`tests/fuzz_report.md`](tests/fuzz_report.md)).
-- **A real application** - an animated single-file web viewer (trip, race and
-  search-replay modes, TR/EN, light/dark, mobile), a live planning server
-  (click the map, press *Plan*), an interactive experiment dashboard and
-  publication-quality seaborn figures.
-- **Turkey case study** - an approximate intercity network of 1 279 nodes, 146
-  roads, 10 mountain passes and 290 synthetic charging stations; plus
-  synthetic generators (up to 40 000 nodes) and an OpenStreetMap loader.
-- **Reproducible experiments** - eleven experiments behind every table and
-  figure, one command, seeded, CSV + JSON + LaTeX + figures.
-- **A gentle guide** - [`docs/guide.md`](docs/guide.md) explains the
-  algorithms step by step, for newcomers and experts, and ends with "which
-  planner should I use?".
-- **Zero dependencies** - the core is standard-library Python;
-  `matplotlib`/`seaborn` are optional and only used for static figures.
+- **See it** - an animated, offline web viewer (trip, race and search-replay
+  modes, TR/EN, light/dark, mobile), a live planning server and an
+  interactive experiment dashboard.
+- **Turkey case study** - 1 279 nodes, 146 roads, 10 mountain passes and 290
+  synthetic charging stations; plus synthetic networks of up to 40 000 nodes
+  and an OpenStreetMap loader.
+- **Reproducible** - eleven seeded experiments behind every table and
+  figure, one command; a [gentle guide](docs/guide.md) to the algorithms.
 
 ## Screenshots
 
@@ -85,7 +72,7 @@ is meant as a **reference implementation**: a baseline that other methods
 </table>
 
 <details>
-<summary><b>More: dark theme, charging animation, mobile, seaborn figures</b></summary>
+<summary><b>More: dark theme, charging animation, seaborn figures</b></summary>
 
 <p align="center">
 <img src="docs/img/viewer-dark.png" width="49%" alt="Race mode in the dark theme">
@@ -105,10 +92,6 @@ is meant as a **reference implementation**: a baseline that other methods
 <img src="docs/img/fig_pareto_turkey.png" width="42%" alt="Pareto front time vs charging cost">
 <img src="docs/img/fig_gap_heatmap_turkey.png" width="56%" alt="Optimality gap of every algorithm on 16 Turkish trips">
 </p>
-
-All static figures are regenerated with `evroute gallery -o docs/img`; the
-screenshots and the GIF with `python examples/viewer_demo.py --screenshots docs/img`
-(needs Node.js + Playwright).
 </details>
 
 ## Quick start
@@ -117,22 +100,17 @@ screenshots and the GIF with `python examples/viewer_demo.py --screenshots docs/
 git clone https://github.com/Aseloth99/evroute.git
 cd evroute
 pip install -e .            # the planner: no dependencies at all
-pip install -e ".[plot]"    # optional: matplotlib + seaborn for static figures
-pip install -e ".[dev]"     # optional: + pytest
+pip install -e ".[plot]"    # optional: seaborn for static figures
 ```
 
 ### Command line
 
 ```bash
 evroute scenarios                                    # list the preset scenarios
-evroute algorithms                                   # list the planners and their guarantees
 evroute plan turkey-karaman-istanbul                 # plan with BLS-A* (default)
-evroute plan turkey-karaman-istanbul --from Konya --to Ankara --soc 0.35 -a cfp
-evroute compare turkey-karaman-istanbul --algorithms naive,greedy,station-graph,genetic,bls,bls-astar,cfp,cfp-astar
 evroute plan turkey-karaman-istanbul-tariff --objective cost      # 80 % rule + peak hours: waits for 20:00
 evroute viz turkey-karaman-istanbul -o karaman-istanbul.html --lang en   # animated viewer, works offline
 evroute serve turkey-karaman-istanbul --open          # live planning in the browser
-evroute robustness turkey-izmir-erzurum -n 2000 --safety 1.1             # Monte Carlo reliability
 evroute experiments --quick -o results/               # all eleven experiments, smoke size (~1.5 min)
 ```
 
@@ -146,13 +124,9 @@ $ evroute plan turkey-karaman-istanbul
 arrival 16:06 | drive 7 h 19 min | charge 36 min | queue+setup 12 min | battery wear 0.0188 %SoH
 ```
 
-The scenario commands (`plan`, `compare`, `viz`, `robustness`, `figures`,
-`export-scenario`) take a preset name or a scenario `.json` file (`evroute
-export-scenario ... -o my.json`) and the overrides `--from --to --soc --depart
---temp --vehicle --objective --reserve --arrive --eco --no-queue --step
---safety` and, for charging tariffs, `--tariff 80|flat --high-soc
---high-soc-factor --peak --peak-factor --peak-high-soc-factor --busy`;
-`serve` takes a preset name. `evroute <command> -h` lists the options.
+Every command and option (origin, destination, SoC, departure, temperature,
+vehicle, tariff, ...): [documentation](docs/index.md#command-line), or
+`evroute <command> -h`.
 
 ### Python
 
@@ -164,9 +138,6 @@ from evroute.robustness import monte_carlo
 scenario = get_scenario("turkey-karaman-istanbul")
 route = plan(scenario, "bls-astar")  # exact on the charging-target grid
 print(route)
-for s in route.stops:
-    print(f"  {s.station_name:12} {s.soc_in:4.0%} -> {s.soc_out:4.0%}"
-          f"  queue {s.wait_s / 60:2.0f} min  charge {s.charge_s / 60:2.0f} min")
 
 # What if?  Treat a scenario as immutable: with_* returns a modified copy.
 print(plan(scenario.with_conditions(temperature_c=-5), "cfp-astar"))   # winter, continuous charging
@@ -183,8 +154,6 @@ print(f"P(strand) = {mc.p_strand:.2%}   P(reserve breach) = {mc.p_reserve_breach
 
 ```text
 [bls-astar] 8 h 07 min | 747.27 km | 2 stop(s) | arrive 10.4% | 1138.78 TRY
-  Akşehir DC    28% ->  54%  queue  3 min  charge 11 min
-  Kütahya DC    10% ->  72%  queue  3 min  charge 25 min
 [cfp-astar] 8 h 23 min | 747.27 km | 3 stop(s) | arrive 10.0% | 1669.75 TRY
 [bls-astar] 8 h 15 min | 747.27 km | 2 stop(s) | arrive 10.5% | 1092.91 TRY
 32 Pareto-optimal routes; complete: False
@@ -193,61 +162,19 @@ P(strand) = 0.40%   P(reserve breach) = 51.9%
 
 The last line is the point of the robustness module: a plan that is optimal
 for the *expected* consumption arrives with barely more than the 10 % reserve
-(10.4 %), so half of all random worlds dip below it. Plan with `safety_factor` > 1 (or
-`--safety` on the command line) to buy reliability with minutes - see
-[the robustness experiment](#experiments).
-
-<details>
-<summary><b>Bring your own road network, vehicle and chargers</b></summary>
-
-```python
-from evroute import (ChargingCurve, Conditions, NetworkBuilder, Preferences, Query,
-                     Scenario, Station, Vehicle, plan)
-
-b = NetworkBuilder()
-a = b.add_node(0, 0, elevation=50, name="A")                  # x, y in metres
-p = b.add_node(60_000, 5_000, elevation=900, name="Pass")
-s = b.add_node(120_000, 0, elevation=300, name="Service area")
-z = b.add_node(260_000, 0, elevation=20, name="Z")
-for u, v in [(a, p), (p, s), (s, z)]:
-    b.add_road(u, v, road_class="motorway")                   # two-way by default
-net = b.build()
-
-car = Vehicle(key="my-car", name="My car", battery_kwh=40.0, mass_kg=1500,
-              drag_coeff=0.28, frontal_area_m2=2.3, rolling_coeff=0.009,
-              dc_curve=ChargingCurve.from_points([(0, 60), (0.5, 60), (0.8, 30), (1.0, 8)]))
-scenario = Scenario(
-    name="custom", network=net, vehicle=car,
-    stations=[Station(id=0, node=s, power_kw=120, kind="DC", plugs=4, price_per_kwh=0.5)],
-    query=Query(origin=a, destination=z, initial_soc=0.8),
-    conditions=Conditions(temperature_c=10),
-    preferences=Preferences(reserve_soc=0.1, min_arrival_soc=0.15),
-)
-for name in ["naive", "bls-astar", "cfp"]:
-    print(plan(scenario, name))
-```
-
-```text
-[naive] infeasible: reserve undercut at node 3 (position 3): -17.443 < 3.840 kWh; arrival energy -17.443 kWh below required 5.760 kWh; battery empty after 162.8 km
-[bls-astar] 2 h 43 min | 260.43 km | 1 stop(s) | arrive 16.9% | 12.72 EUR
-[cfp] 2 h 41 min | 260.43 km | 1 stop(s) | arrive 15.0% | 12.34 EUR
-```
-
-Real data: `evroute.generators.osm.load_osm("Karaman, Turkey")` downloads an
-OpenStreetMap network (needs the optional `osmnx`),
-`stations_from_csv(path, network)` snaps your charger list onto it and
-`scenario_from_osm(...)` assembles a scenario. `Scenario.save()` /
-`Scenario.load()` round-trip a scenario losslessly through JSON.
-</details>
+(10.4 %), so half of all random worlds dip below it. Plan with
+`safety_factor` > 1 (`--safety`) to buy reliability with minutes - see
+[the robustness experiment](#experiments). Your own road network, vehicle
+and chargers, or OpenStreetMap data:
+[documentation](docs/index.md#your-own-network-vehicle-and-chargers).
 
 ## Example: Karaman → İstanbul
 
 747 km across the Konya plateau and the Afyon-Kütahya-Bursa corridor, a
 Turkish C-SUV (85 kWh battery) leaving at 08:00 with 80 %, 10 % reserve on
-the way and on arrival, expected queues at every charger. The columns are
-those of `evroute compare`; runtimes are the median of five runs of the
-planner alone on a 2.1 GHz Xeon core (Python 3.13), and the gap is measured
-against the continuous optimum of CFP:
+the way and on arrival, expected queues at every charger. Runtimes are the
+median of five runs of the planner alone on a 2.1 GHz Xeon core (Python
+3.13); the gap is measured against the continuous optimum of CFP:
 
 | algorithm | trip time | gap | stops | charging cost [TRY] | arrival SoC | labels settled | runtime |
 |---|---:|---:|---:|---:|---:|---:|---:|
@@ -260,93 +187,39 @@ against the continuous optimum of CFP:
 | `cfp` | 8:06:41 | 0 | 2 | 1,133.96 | 10.0 % | 5,665 | 383 ms |
 | **`cfp-astar`** | **8:06:41** | 0 | 2 | 1,133.96 | 10.0 % | **347** | **27 ms** |
 
-What the table shows:
-
-- **The battery-blind route strands** after 364 km. The greedy "charge to
-  80 % when needed" heuristic is feasible but 24 minutes slower and 46 %
-  more expensive - it fills the battery on the slow part of the charging
-  curve and arrives with 47 % it did not need.
-- **Partial charging is the whole game.** The optimum stops briefly at
+- **The battery-blind route strands** after 364 km; the greedy "charge to
+  80 % when needed" heuristic is 24 minutes slower and 46 % more expensive.
+- **Partial charging is the whole game:** the optimum stops briefly at
   Akşehir (28 → 54 %) and longer at Kütahya (10 → 72 %), arriving with
-  exactly the required 10 %. BLS, restricted to a 2 % SoC grid, is 15.6 s
-  behind the continuous optimum of CFP.
-- **A\* pays off.** BLS-A\* settles 29× fewer labels than BLS (CFP-A\*: 16×
-  fewer than CFP) and returns the identical optimum - the search-replay
-  screenshot above shows the difference.
-- The three-criteria Pareto search needs more than its default 2 million
-  labels on this 750 km instance (`evroute compare` then reports `pareto` as
-  infeasible); with `criteria=("time", "money")` it returns 32 non-dominated
-  routes within a 1-million-label budget, marked as possibly incomplete.
+  exactly the required 10 %.
+- **A\* pays off:** BLS-A\* settles 29× fewer labels than BLS (CFP-A\*: 16×
+  fewer than CFP) and returns the identical optimum.
+- BLS, restricted to a 2 % SoC grid, is only 15.6 s behind the continuous
+  optimum of CFP.
+
+> [!IMPORTANT]
+> The Turkey data is **approximate and illustrative, not for navigation**:
+> gazetteer-level geography, modelled road lengths and **synthetic charging
+> stations, prices, queues and tariff** with generic operator names. Use it
+> to compare algorithms, not to plan a real trip
+> ([data provenance](docs/index.md#turkey-case-study)).
 
 ## There is no single best route
 
 A trip costs three things - **time**, **money** and **battery wear** - and
-they pull in different directions.  Fast DC chargers save time but cost more
-per kWh than slow AC ones; charging high saves a stop but is slow at the
-plug; fast charging at high SoC wears the battery most.  Charging prices make
-the trade-off sharper.  EVRoute models two common practices with a `Tariff`:
+they pull in different directions. Charging prices make the trade-off
+sharper; EVRoute models two common practices with a `Tariff`:
 
-- **The 80 % rule.** Above about 80 % SoC the charging power drops steeply
-  (see [the charging curves](docs/img/fig_charging_curves.png)), so a car
-  that keeps charging there blocks a fast charger for little energy.
-  Operators discourage it with a higher price, and the drivers waiting in the
-  queue do not like it either: every kWh stored above `high_soc` costs
-  `high_soc_factor` times the price.
+- **The 80 % rule.** Above about 80 % SoC the charging power drops steeply,
+  so operators charge more for every kWh stored above `high_soc`.
 - **Peak hours.** At busy times of day a peak factor applies - on fixed
   clock hours, or whenever a station's queue model expects it to be busy.
-- **The price is fixed when you join the queue.** A car that reaches a
-  charger three minutes before the peak ends may wait for the cheaper price.
-  EVRoute plans such *voluntary holds* exactly, and only where they pay.
 
-The preset `turkey-karaman-istanbul-tariff` is the trip above leaving at
-14:00 under the demonstration tariff `DEMO_TARIFF` (illustrative, synthetic
-values like the station prices: ×1.3 above 80 % SoC, a 16:00-20:00 peak at
-×1.15, and ×2.3 above 80 % in the peak).  The fastest route makes the same
-two stops as at 08:00, but now both fall into the peak.  The cost objective
-(an hour is worth 250 TRY in this preset, and battery wear is priced too)
-charges at Ilgın before the peak begins and waits at İnegöl for the 20:00
-price change:
-
-```text
-$ evroute plan turkey-karaman-istanbul-tariff
-[bls-astar] 8 h 09 min | 747.27 km | 2 stop(s) | arrive 10.4% | 1309.59 TRY
-#  station     charger    arrive  queue  charge  SoC         tariff  cost
--  ----------  ---------  ------  -----  ------  ----------  ------  ----------
-1  Akşehir DC  DC 120 kW   16:20  5 min  11 min  28% -> 54%    peak  387.24 TRY
-2  Kütahya DC  DC 150 kW   18:30  3 min  25 min  10% -> 72%    peak  922.35 TRY
-arrival 22:09 | drive 7 h 19 min | charge 36 min | queue+setup 14 min | battery wear 0.0188 %SoH
-$ evroute plan turkey-karaman-istanbul-tariff --objective cost
-[bls-astar] 8 h 20 min | 747.27 km | 2 stop(s) | arrive 10.5% | 1111.61 TRY
-#  station    charger    arrive  hold   queue  charge  SoC         tariff         cost
--  ---------  ---------  ------  -----  -----  ------  ----------  -------------  ----------
-1  Ilgın DC   DC 120 kW   15:52      -  7 min  26 min  39% -> 85%  off-peak >80%  593.50 TRY
-2  İnegöl DC  DC 120 kW   19:57  2 min  2 min  18 min  10% -> 52%       off-peak  518.11 TRY
-arrival 22:20 | drive 7 h 19 min | charge 43 min | queue+setup 15 min | hold 2 min | battery wear 0.0182 %SoH
-```
-
-Between these two lie many more answers.  The Pareto search finds every
-plan that no other plan beats on both time and money:
-
-```python
-from evroute import plan
-from evroute.generators.presets import get_scenario
-
-sc = get_scenario("turkey-karaman-istanbul-tariff")
-fastest = plan(sc, "bls-astar")                                      # minimum trip time
-balanced = plan(sc.with_preferences(objective="cost"), "bls-astar")  # 250 TRY/h + money + wear
-front = plan(sc, "pareto", criteria=("time", "money"), max_labels=10_000_000)  # ~1.5 min
-cheapest = min(front.alternatives, key=lambda p: p.money)
-for p in (fastest, balanced, cheapest):
-    print(p)
-print(len(front.alternatives), "Pareto-optimal routes; complete:", front.stats.extra["complete"])
-```
-
-```text
-[bls-astar] 8 h 09 min | 747.27 km | 2 stop(s) | arrive 10.4% | 1309.59 TRY
-[bls-astar] 8 h 20 min | 747.27 km | 2 stop(s) | arrive 10.5% | 1111.61 TRY
-[pareto] 14 h 44 min | 768.22 km | 3 stop(s) | arrive 10.1% | 796.58 TRY
-268 Pareto-optimal routes; complete: True
-```
+The price is fixed when you join the queue, so waiting for a cheaper price
+can pay; EVRoute plans such *voluntary holds* exactly, and only where they
+pay. The preset `turkey-karaman-istanbul-tariff` is the trip above leaving
+at 14:00 under the illustrative demonstration tariff (×1.3 above 80 % SoC,
+a 16:00-20:00 peak at ×1.15, ×2.3 above 80 % in the peak):
 
 <p align="center"><img src="docs/img/fig_tradeoff_tariff.png" width="98%" alt="Time-money Pareto front of Karaman → İstanbul leaving at 14:00 under the demonstration tariff: 268 plans from 8 h 09 min for 1,309.59 TRY to 14 h 44 min for 796.58 TRY; the balanced plan, 8 h 20 min for 1,111.61 TRY, sits where the front flattens"></p>
 
@@ -356,291 +229,88 @@ print(len(front.alternatives), "Pareto-optimal routes; complete:", front.stats.e
 | balanced (`--objective cost`) | 8 h 20 min | 1,111.61 TRY | 0.0182 %SoH | Ilgın 39 → 85 %, joining the queue at 15:52, before the peak; İnegöl 10 → 52 % after waiting 2.4 min for 20:00 |
 | cheapest (end of the front) | 14 h 44 min | 796.58 TRY | 0.0162 %SoH | three slow 22 kW AC stops, never above 80 %; the first joins at 15:52 and charges for 3 h 09 min at the off-peak price |
 
-What the numbers say:
+No plan wins on every count, and the first minutes buy the most: 11 minutes
+more save 197.98 TRY (−15.1 %), the next 6 h 24 min only 315.04 TRY more.
+The Pareto search finds all 268 plans of the front; which one is right
+depends on what an hour is worth to you.
 
-- **No plan wins on every count.**  The fastest plan is the dearest, the
-  cheapest takes 6 h 35 min longer, and it also wears the battery least
-  (slow AC charging is gentle).  None of the 268 plans of the front is
-  beaten by another on both time and money.
-- **The first minutes buy the most.**  The front is steep at first and then
-  flat: 11 minutes more save 197.98 TRY (−15.1 %), the next 6 h 24 min only
-  315.04 TRY more.  Which point is right depends on what an hour is worth to
-  you - the value of time of the cost objective (`value_of_time_per_h`), or
-  your own pick from the front in the viewer.
-- **Waiting is a decision, too.**  28 of the 268 plans wait at a station for
-  a cheaper price.  Waiting never shortens a trip (queues are first come,
-  first served), so the time objective - BLS-A\*, CFP - never waits; the cost
-  objective and the Pareto search consider waiting until every price change
-  of a station, and that is provably enough
-  ([`docs/algorithms.md` §6](docs/algorithms.md#6-charging-tariffs-price-periods-and-voluntary-holds)).
-- **Over a whole day** of departures on two trips (experiment `tariffs`),
-  the tariff makes the fastest plan 2.6 % dearer than flat prices on average
-  and up to 10.5 %; the cost-optimal plan pays 76.73 TRY (7.6 %) less than
-  the fastest for 6.3 minutes more.
+```bash
+evroute plan turkey-karaman-istanbul-tariff --objective cost   # the balanced plan
+```
 
-The [guide](docs/guide.md#11-tariffs-there-is-no-single-best-route) explains
-the idea step by step and the model is in
-[`docs/model.md` §5](docs/model.md#5-charging-tariffs).  To explore the
-front in the viewer, `evroute viz turkey-karaman-istanbul-tariff --step 0.05
--o tariff.html` plans on a 5 % charging grid, where the complete front (180
-plans) fits the viewer's label budget.
+Step by step in the [guide](docs/guide.md#11-tariffs-there-is-no-single-best-route);
+the model in [`docs/model.md` §5](docs/model.md#5-charging-tariffs); the
+full worked example (CLI output, the Pareto search in Python, a whole day of
+departures) in the [documentation](docs/index.md#worked-example).
 
 ## Algorithms
 
 | name | idea | guarantee |
 |---|---|---|
-| `naive` | fastest path, battery ignored | none - shows *where* the battery runs out |
-| `greedy` | in-car navigator: drive the fastest path; when the battery is short, detour to the reachable station with the least time-to-station + lower bound to the goal, charge to 80 % (DC) / 100 % (AC), repeat | heuristic |
-| `station-graph` | Dijkstra on a meta-graph of stations; every stop charges to a fixed target (default 100 %), stretches use the fastest speed level (Storandt & Funke 2012 style) | optimal only on its meta-graph |
-| `genetic` | deterministic, seeded genetic algorithm over station sequences and target SoCs, decoded with exact "just enough" energies | heuristic |
-| `bls` | label setting on the battery-expanded state space (node, energy) in Dijkstra order | **exact** for charging targets on the grid (2 % SoC + charging-curve breakpoints) |
-| `bls-astar` | BLS + a consistent energy-deficit A\* potential (default planner) | same optimum as `bls`, far fewer labels |
-| `cfp` | charging-function propagation (Baum et al.): labels are functions of time, charging amounts stay continuous | **exact** fastest route with arbitrary charging amounts |
+| `naive` | fastest path, battery ignored | none |
+| `greedy` | in-car navigator: detour to a charger when the battery is short, charge to 80 % (DC) / 100 % (AC) | heuristic |
+| `station-graph` | Dijkstra over the stations, fixed charging target | optimal on its meta-graph |
+| `genetic` | seeded genetic algorithm over stations and target SoCs | heuristic |
+| `bls` | label setting over (node, energy), Dijkstra order | **exact** on the charging grid |
+| `bls-astar` | BLS + a consistent A\* potential (default) | same optimum as `bls`, far fewer labels |
+| `cfp` | charging-function propagation: continuous charging amounts | **exact** fastest route |
 | `cfp-astar` | CFP with the A\* key | same optimum as `cfp` |
-| `pareto` | multi-criteria label setting (Martins, NAMOA\*-style pruning) over time, money, wear | **exact** Pareto front on the target grid |
+| `pareto` | multi-criteria label setting over time, money, wear | **exact** Pareto front on the grid |
 
-Exact planners minimise the trip time or the generalised cost
-`VoT·T + money + w·wear` (BLS, BLS-A\*, Pareto; CFP is a time-objective
-algorithm). All of them handle time-dependent queues, several speed levels,
-regeneration and consecutive stops at different chargers of one site.  With
-a charging tariff whose prices depend on the clock, BLS and BLS-A\* (cost)
-and Pareto also consider waiting at a station until a price change, which
-is provably enough; the time objective never waits.  Not sure which planner
-to use? See the [guide](docs/guide.md#12-which-planner-should-i-use).
-
-<details>
-<summary><b>How BLS-A* works</b></summary>
-
-A *label* is a partial route summarised by `(t, e)` - trip time and battery
-energy at a node, with the energy kept **continuous**. Driving an edge moves
-`(v, e) → (w, min(e − c, Q))`; charging at station `j` to a target `y` costs
-`wait_j(t) + setup_j + F_j(y) − F_j(e)` seconds, with the exact charging
-function `F_j`. A label dominates another at the same node if it is no later
-and has no less energy (the cost objective adds money and wear). Every
-transition is monotone and the queues are FIFO, so pruning dominated labels
-is exact.
-
-The A\* key is `t + h(v, e)` with
-
-```
-h(v, e) = T_lb(v) + (3600 / P_max) · max(0, E_lb(v) + e_goal − e)   [+ unavoidable-stop overhead]
-```
-
-that is, the fastest remaining driving time plus the time needed to charge
-the energy deficit at the best possible power. `h` is consistent on the battery state
-graph (the deficit cannot shrink along a road, and charging `ΔE` takes at
-least `3600 ΔE / P_max` seconds) and non-increasing in `e`, so a dominating
-label is always popped first and the first label popped at the destination
-is optimal. The default *tight* potential measures time and energy on the
-same path and counts unavoidable stops. Proofs: [`docs/algorithms.md` §2-3](docs/algorithms.md#2-bls--battery-constrained-label-setting).
-</details>
-
-<details>
-<summary><b>How CFP works (continuous charging)</b></summary>
-
-BLS fixes *how much* to charge to a grid. CFP defers that decision: a label
-stores the last station `j`, the time and energy at which charging there
-began and the consumption profile `(in, cost, out)` of the road since then.
-Its *function* `B(t)` - the energy available at the current node if the car
-leaves `j` so that it arrives at time `t` - is piecewise linear and
-non-decreasing. Along an edge only the profile changes (closed form); at a
-new station the label spawns stop labels at the breakpoints of `B`, which is
-where an optimal switch from charging at `j` to charging at the new station
-lies (Lemma 3; plus the upward power breaks of non-concave curves and the
-knots of time-dependent waits). Dominance compares a label against the upper envelope of the
-settled labels of its node. The first destination entry popped is the
-fastest route over **all** charging amounts. Proofs and the extensions
-(non-concave curves, time-dependent queues, consecutive stops):
-[`docs/algorithms.md` §4](docs/algorithms.md#4-cfp--charging-function-propagation-continuous-charging).
-</details>
-
-## The model in one screen
-
-- **Road network** - directed graph with coordinates, elevation, length,
-  speed limit and road class (stop-and-go intensity).
-- **Driving** - longitudinal dynamics: rolling resistance, aerodynamic drag
-  with head-/tailwind and air density, grade, stop-and-go losses, auxiliary
-  and temperature-dependent HVAC power, regeneration with efficiency and
-  power limit; regeneration into a full battery is lost. Optional speed
-  levels (e.g. 100/90/80 %).
-- **Battery** - usable capacity shrinks in the cold; reserve SoC at every
-  node, minimum arrival SoC, maximum charging SoC.
-- **Charging** - vehicle charging curves (piecewise-constant power over SoC
-  bins) capped by the charger power, DC power derated for a cold battery
-  without preconditioning → exact, piecewise-linear charging functions
-  (concave above the low-SoC ramp-up; CFP handles both shapes exactly);
-  prices per kWh with charging losses;
-  set-up time per stop.
-- **Charging tariffs** - price factors above a SoC threshold ("the 80 %
-  rule") and in peak hours (fixed, or wherever a station's queue model
-  expects it to be busy); the price is fixed when the car joins the queue,
-  so waiting for a cheaper period can pay.
-- **Queues** - each station is an M/M/c queue with an hourly demand profile;
-  the Erlang-C expected wait is made FIFO-safe so that time-dependent
-  planning stays exact.
-- **Battery wear** - SoH loss per kWh as a function of C-rate, SoC and
-  temperature, priced per SoH percentage point.
-- **Objectives** - trip time, generalised cost
-  `VoT·T + w_money·money + w_wear·wear`, or the Pareto front of the three.
-- **Uncertainty** (evaluation) - log-normal trip and edge factors on the
-  consumption, exponential queueing delays.
-
-Every equation, with the module that implements it: [`docs/model.md`](docs/model.md).
-
-## Turkey case study
-
-`evroute.generators.turkey` builds an **approximate** Turkish intercity
-network from two bundled CSV tables: 171 places (30 metropolitan provinces,
-35 further provincial centres, 45 junction and 47 waypoint towns, 10 mountain
-passes such as Kop 2 409 m, Alacabel 1 825 m and Sertavul 1 610 m, and 4
-bridges) and 146 motorway and state-road links (O-3 ... O-53, D-100, D-300,
-D-400, ...) - 1 279 nodes, 2 632 edges, ~14 100 km of road - and a
-**synthetic** charging network of 290 stations (199 DC, 14 of them 300 kW
-HPC, and 91 AC; 1 174 plugs) with Turkish-lira prices and calibrated
-afternoon queues at the busiest service areas.
-
-| preset | trip |
-|---|---|
-| `turkey-karaman-istanbul` | 750 km: Konya plateau, Afyon/Eskişehir corridors, Marmara motorways (flagship) |
-| `turkey-karaman-istanbul-tariff` | the flagship trip leaving at 14:00 under the demonstration tariff (80 % rule, 16:00-20:00 peak) |
-| `turkey-antalya-ankara` | 530 km from the Mediterranean over the Taurus |
-| `turkey-izmir-erzurum` | 1 470 km west-east crossing, eastern mountains |
-| `turkey-istanbul-antalya-winter` | 680 km at −5 °C |
-| `turkey-karaman-mersin` | motorway (273 km) vs the Sertavul pass road (254 km) |
-| `turkey-istanbul-ankara-rush` | 450 km leaving at 14:30 into the afternoon queues |
-| `turkey-ankara-adana-evening` | 510 km leaving at 15:00 along the O-21 |
-
-Further presets: `corridor` / `corridor-winter` (a 600 km partial-charging
-instance with a 1 500 m pass), `country-small/-medium/-large` (synthetic
-countries with 2 000-40 000 nodes), `random-geometric`, `grid-small`.
-
-> [!IMPORTANT]
-> **Data provenance - approximate, illustrative, not for navigation.**
-> Coordinates and elevations are gazetteer-level approximations (about 1-5 km
-> and 50-150 m); road lengths are modelled and typically within ±10 % of
-> official distances; speeds are free-flow limits. **Charging stations,
-> powers, prices, queues and the demonstration tariff are synthetic** and use
-> generic operator names - they are *not* the network or the prices of any
-> company. The vehicle presets use
-> approximate public figures ("T10X-like" is not manufacturer data). Use the
-> case study to compare algorithms and to study effects, not to plan a real
-> trip; plug in measured data (`stations_from_csv`, the OSM loader) for any
-> operational conclusion. Details: the module docstring of
-> [`generators/turkey.py`](src/evroute/generators/turkey.py).
+The exact planners minimise the trip time or a generalised cost of time,
+money and wear (CFP: time only) and handle time-dependent queues, eco
+speeds, regeneration and tariffs. How they work: the [guide](docs/guide.md) (step by step, ending
+with "[which planner should I use?](docs/guide.md#12-which-planner-should-i-use)")
+and [`docs/algorithms.md`](docs/algorithms.md#at-a-glance) (overview and proofs).
 
 ## Experiments
 
-Eleven seeded experiments reproduce every table and figure of the accompanying
-paper. Each writes `results.csv` (pareto: one CSV per case) and PDF/PNG
-figures into `<out>/<experiment>/`, most a `summary.json`, and
-case-studies, optimality-gap and vehicles a booktabs `table.tex`; the run ends with
-`<out>/results.html`, an interactive offline dashboard of everything it
-measured (computed findings, exactness checks, charts, tables, CSV downloads).
+Eleven seeded experiments reproduce every table and figure of the
+accompanying paper. Each writes CSV, JSON, figures and LaTeX tables; the run
+ends with `results.html`, an interactive offline dashboard.
 
 ```bash
 evroute experiments --quick -o results/            # smoke size: ~1.5 minutes
 evroute experiments -o results/ --lang en          # full size, English dashboard
-evroute experiments optimality-gap robustness -o results/
-evroute results results/ --lang en                 # rebuild the dashboard of a results folder
 evroute gallery -o docs/img                        # the seaborn figures of this README
 ```
 
-Highlights of a full run (all experiments except scalability: 8 minutes on
-the machine above, 5 of them for `tariffs`; scalability alone needs 2 hours
-of planner time, 99 % of it in the station graph and the Dijkstra-order
-baselines):
-
 | experiment | finding |
 |---|---|
-| `case-studies` | on four Turkish trips BLS-A\* settles 10-29× fewer labels than BLS and CFP-A\* 6-16× fewer than CFP, with identical optima |
-| `optimality-gap` | 60 random trips ≥ 300 km, gap to the continuous optimum: greedy 5.2 % on average (max 10.5 %), station graph 12.8 % (max 20.8 %), genetic 0.75 % (max 2.8 %), BLS-A\* on its 2 % grid 0.11 % (max 0.26 %) |
-| `grid-resolution` | the BLS gap to CFP shrinks with the grid: Antalya → Ankara 65.5 s at a 20 % grid, 16.7 s at 2 %, 3.3 s at 0.5 % |
-| `temperature` | Karaman → İstanbul takes 8 h 07 min at 20 °C, 8 h 37 min at −15 °C with a preconditioned battery and 10 h 24 min without (cold charging) |
-| `queue-awareness` | over 27 trips × departure times, planning with the expected queues saves 3.4 min on average and up to 21.7 min (leaving Karaman at 12:00) against a queue-blind plan |
-| `pareto` | Antalya → Ankara: 495 Pareto-optimal routes; the cheapest saves 33.07 TRY (−5.6 %) for 34 more minutes than the fastest |
-| `robustness` | İzmir → Erzurum, 2 000 Monte Carlo runs: P(strand) 1.25 % and P(reserve breach) 56 % at safety factor 1.0; 0 % and 9.7 % at 1.1 (+21 min), 0 % and 0.4 % at 1.2 (+36 min) |
-| `eco-speed` | allowing 90 / 80 % speeds shortens 24 of 80 trips, by up to 2.8 min: driving a leg slower can save more charging time than it costs |
-| `vehicles` | Karaman → İstanbul: 7 h 50 min (75 kWh sedan, 2 stops) to 10 h 57 min (27 kWh city car, 5 stops) |
-| `tariffs` | Karaman → İstanbul and Antalya → Ankara, departures 06:00-22:00 every 2 h: under the demonstration tariff (80 % tier + 16:00-20:00 peak) the fastest plan pays 2.6 % more than at flat prices on average (up to 10.5 %, Karaman leaving at 12:00); the cost-optimal plan pays 76.73 TRY (7.6 %) less than the fastest for 6.3 min more and waits for the cheaper period in 2 of 18 trips (up to 2.4 min); the 80 % tier alone moves the cost-optimal plans below 80 % (energy charged above it: Karaman 2.34 → 0.47 kWh, Antalya 0.94 → 0 kWh on average); (time, money) fronts of 55-202 plans on a 5 % grid, 14 of 72 stopped by the 1-million-label budget |
-| `scalability` | synthetic countries of 1 000-40 000 nodes, 8 trips each: BLS-A\* answers in 0.03 s → 1.7 s and CFP-A\* in 0.03 s → 2.5 s on average; Dijkstra-order BLS and CFP are already 20× and 35× slower at 10 000 nodes and run out of their label budgets on 3 / 4 of 8 trips at 20 000 nodes (CFP: 6 of 8 at 40 000); the station graph needs 8 minutes per trip at 40 000 nodes to build its meta-graph |
+| `optimality-gap` | 60 random trips ≥ 300 km, gap to the continuous optimum: greedy 5.2 % on average, station graph 12.8 %, genetic 0.75 %, BLS-A\* on its 2 % grid 0.11 % |
+| `queue-awareness` | planning with the expected queues saves 3.4 min on average and up to 21.7 min against a queue-blind plan |
+| `temperature` | Karaman → İstanbul: 8 h 07 min at 20 °C, 8 h 37 min at −15 °C with a preconditioned battery, 10 h 24 min without |
+| `robustness` | İzmir → Erzurum: P(reserve breach) 56 % at safety factor 1.0, 9.7 % at 1.1 (+21 min), 0.4 % at 1.2 (+36 min) |
+| `tariffs` | the cost-optimal plan pays 76.73 TRY (7.6 %) less than the fastest for 6.3 min more |
+| `scalability` | synthetic countries of 40 000 nodes: BLS-A\* answers in 1.7 s and CFP-A\* in 2.5 s on average |
+
+All eleven findings, the outputs and the run times:
+[documentation](docs/index.md#experiments-and-figures).
 
 ## How correctness is verified
 
-An optimality claim is only as good as its checks:
-
-1. **Independent evaluator.** `evaluate.py` replays every plan from first
-   principles - energies, reserves, queues, charging curves, money, wear. An
-   exact planner must report exactly the objective the evaluator measures;
-   every heuristic's plan goes through the same replay.
-2. **Cross-validation suite** (`tests/test_crossval.py`, report in
-   [`tests/fuzz_report.md`](tests/fuzz_report.md)): seeded random grids,
-   random geometric graphs, mountain corridors and tiny digraphs with every
-   vehicle, −15 … 40 °C, 1-3 speed levels, both objectives, static and
-   time-dependent queues, stacked AC + DC chargers and 16 odd-but-legal edge
-   cases. Eleven invariants: BLS = BLS-A\*, CFP = CFP-A\*, CFP ≤ BLS, Pareto
-   extremes = BLS (time/cost), nothing beats CFP, finer grids are never worse,
-   lossless JSON round trips, metamorphic relations (relabelling, extra
-   stations, more energy ...), local search around every optimum.  A second
-   suite (`tests/test_crossval_tariffs.py`) repeats them under random
-   charging tariffs, against a price oracle written from the specification
-   alone, and checks that the time objective never waits and that dearer
-   prices never lower the optimal cost.
-3. **Brute force.** On tiny digraphs an exhaustive enumeration of walks,
-   stops and targets reproduces the BLS optimum and the Pareto front - with
-   tariffs also waiting until every price change (and, on the smallest
-   instances, until every 5-minute step of the next 24 hours).
-4. **Analytic oracles.** For consecutive stops at a multi-charger site an
-   exact dynamic programme over breakpoint energies; CFP matches it.
-
-The suites found and fixed real bugs - a Pareto front that kept a member 1 ulp
-faster but 6 EUR dearer, a lossy JSON round trip, a missed DC-then-AC double
-stop, an unsound 3-D dominance rule with time-dependent queues, a plan
-rebuilt from its stops that joined a queue 1 ulp before a price change.
-626 tests, 533 in the fast tier (`pytest -m "not slow"`), run on Python 3.10-3.13 in CI.
+Every plan of every planner is replayed by an **independent evaluator**; a
+seeded **cross-validation suite** checks eleven invariants against brute
+force, analytic oracles, metamorphic relations and local search, also under
+random charging tariffs ([`tests/fuzz_report.md`](tests/fuzz_report.md)).
+634 tests, 541 in the fast tier, run on Python 3.10-3.13 in CI
+([details](docs/algorithms.md#8-how-correctness-is-verified)):
 
 ```bash
-python -m pytest -m "not slow"                    # fast tier, a few minutes
-python -m pytest -m slow tests/test_crossval.py   # 3 200 random instances, ~40 min
-python -m pytest -m slow tests/test_crossval_tariffs.py   # 460 random tariff instances
+python -m pytest -m "not slow"   # fast tier, a few minutes
 ```
 
-## Project structure
+## Documentation
 
-```
-evroute/
-├── src/evroute/
-│   ├── units.py network.py vehicle.py energy.py   # model: units, graph, vehicles, physics
-│   ├── charging.py queueing.py scenario.py         # charging functions, Erlang-C queues, scenarios
-│   ├── plan.py evaluate.py search.py               # plans, independent evaluator, bounds
-│   ├── algorithms/      # naive, greedy, station_graph, genetic, labels (BLS), cfp, pareto
-│   ├── generators/      # basic grids, turkey, synthetic, osm, presets
-│   ├── data/            # Turkey places and roads (CSV)
-│   ├── robustness.py    # Monte Carlo reliability, safety-factor sweeps
-│   ├── viz/             # export.py + web/ (viewer), results.py (dashboard), figures.py + style.py (seaborn)
-│   ├── experiments/     # runner, plots, figures for the paper
-│   ├── server.py        # live planning server (http.server)
-│   └── cli.py           # `evroute` command
-├── tests/               # pytest suite + fuzz_report.md
-├── examples/            # quickstart.py, custom_network.py, viewer_demo.py
-└── docs/                # index, guide (EN/TR), model, algorithms, DEV_SPEC, PLAN.tr, demo/ (viewer + dashboard), img/
-```
-
-## Roadmap and ideas
-
-- **Learned energy and battery models.** The `EnergyModel` protocol
-  (`traverse(net, edge, speed_factor) -> Traversal`) already separates the
-  planner from the physics; the next step is to let `Scenario.prepare()`
-  accept any implementation - e.g. an **LSTM-based SoC/SoH estimator**
-  trained on driving data (the author's other research topic) - and to
-  recalibrate the `AgingModel` that prices battery wear.
-- Contraction hierarchies or ALT landmarks for continental networks.
-- Chance-constrained planning: optimise P(arrive with reserve) directly
-  instead of through a safety factor.
-- Live data: real-time charger availability and prices, traffic speeds.
-- Fleets and multi-day trips: overnight AC charging, driver breaks.
-- A browser-only build (Pyodide) of the live planner for GitHub Pages.
-
-Contributions are welcome - see [`CONTRIBUTING.md`](CONTRIBUTING.md).
+- [Guide](docs/guide.md) ([Türkçe](docs/guide.tr.md)) - the algorithms step
+  by step, for newcomers, and "which planner should I use?"
+- [Model](docs/model.md) - every equation, with the module that implements it
+- [Algorithms & proofs](docs/algorithms.md) - correctness arguments and references
+- [Documentation index](docs/index.md) - command line, Python API, viewer,
+  live server, experiments, scenarios and data, tariffs, FAQ, roadmap
+- Demo pages (one offline HTML file each): [viewer](docs/demo/index.html),
+  [tariff viewer](docs/demo/tariff.html), [results dashboard](docs/demo/results.html)
+- [Contributing](CONTRIBUTING.md) - set-up, project structure, ground rules
 
 ## Citation
 
@@ -669,14 +339,10 @@ Department of Computer Engineering.
   Funke (2012), Baum, Dibbelt, Gemsa, Wagner & Zündorf (2015, 2019), Baum,
   Dibbelt, Wagner & Zündorf (2020),
   Montoya et al. (2017), Martins (1984) and Mandow & Pérez de la Cruz
-  (2010) - full references in [`docs/algorithms.md`](docs/algorithms.md).
+  (2010) - full references in [`docs/algorithms.md`](docs/algorithms.md#references).
 - Place coordinates and elevations of the Turkey case study were compiled
   at gazetteer level from general geographic knowledge; no proprietary map
   or charging-network data is included. The optional OSM loader uses
   [OSMnx](https://github.com/gboeing/osmnx) and
   [OpenStreetMap](https://www.openstreetmap.org/copyright) data (© OpenStreetMap
   contributors, ODbL) when you choose to download it.
-- Static figures use [matplotlib](https://matplotlib.org/) and
-  [seaborn](https://seaborn.pydata.org/); screenshots are taken with
-  [Playwright](https://playwright.dev/). The viewer itself is hand-written
-  HTML, CSS and JavaScript with no third-party code.

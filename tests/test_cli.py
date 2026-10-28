@@ -173,3 +173,14 @@ def test_serve_reports_a_busy_port(monkeypatch, capsys):
         port = busy.getsockname()[1]
         assert main(["serve", SC, "--port", str(port)]) == 2
     assert "cannot serve on" in _error_line(capsys)
+
+
+@pytest.mark.parametrize("argv", [["gallery", "--quick"], ["figures", SC]])
+def test_figure_commands_without_seaborn(argv, monkeypatch, tmp_path, capsys):
+    import evroute.viz.style as style
+
+    monkeypatch.setattr(style, "has_seaborn", lambda: False)
+    monkeypatch.chdir(tmp_path)
+    assert main(argv) == 2
+    assert "pip install 'evroute[plot]'" in _error_line(capsys)
+    assert not any(tmp_path.iterdir())  # nothing written

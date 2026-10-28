@@ -1,4 +1,4 @@
-"""Experiment plots (seaborn + matplotlib, imported lazily).
+"""Experiment plots, drawn with seaborn (imported lazily).
 
 Small, generic helpers used by :mod:`evroute.experiments.runner`: every
 function takes plain numbers, draws one IEEE single-column figure in the
@@ -15,12 +15,14 @@ helper                    seaborn plot
                           series repeats an x value)
 :func:`box_plot`          :func:`seaborn.boxplot` + :func:`seaborn.stripplot`
 :func:`bar_plot`          :func:`seaborn.barplot` (95 % CI for lists)
-:func:`scatter_plot`      :func:`seaborn.scatterplot` (+ colour bar)
+:func:`scatter_plot`      :func:`seaborn.scatterplot` (+ colour bar, itself
+                          a one-row :func:`seaborn.heatmap`)
 :func:`heatmap`           :func:`seaborn.heatmap`
 ========================  ===================================================
 
-Each helper returns the list of written paths and closes its figure.
-Without seaborn the same figures are drawn with plain matplotlib.
+Each helper returns the list of written paths and closes its figure.  The
+figure itself comes from :func:`evroute.viz.style.subplots` (a
+:class:`seaborn.FacetGrid`).
 """
 
 from __future__ import annotations
@@ -49,28 +51,19 @@ FALLBACK_COLORS: dict[str, str] = {
 FIGSIZE: tuple[float, float] = (3.5, 2.5)
 
 
-def _plt() -> Any:
-    """``matplotlib.pyplot`` on the Agg backend with the paper style applied."""
-    import matplotlib
+def _figure(figsize: tuple[float, float] = FIGSIZE) -> tuple[Any, Any]:
+    """A new figure and axes (:func:`evroute.viz.style.subplots`) with the
+    paper style installed (:func:`evroute.viz.style.apply`)."""
+    from ..viz import style
 
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-
-    try:
-        from ..viz import style
-
-        style.apply()
-    except Exception:  # pragma: no cover - style module unavailable
-        plt.rcParams.update({"font.size": 8, "axes.spines.top": False, "axes.spines.right": False})
-    return plt
+    style.apply()
+    return style.subplots(figsize=figsize)
 
 
 def _sns() -> Any:
-    try:
-        import seaborn as sns
-    except ImportError:  # pragma: no cover - optional
-        return None
-    return sns
+    from ..viz import style
+
+    return style.require_seaborn()
 
 
 def _is_algorithm(name: str) -> bool:
@@ -127,22 +120,16 @@ def _markers(names: Sequence[str]) -> dict[str, str]:
 
 def save(fig: Any, path: Path) -> list[Path]:
     """Write ``path.pdf`` and ``path.png`` (300 dpi), close ``fig``."""
-    try:
-        from ..viz import style
+    from ..viz import style
 
-        return style.save(fig, Path(path), close=True)
-    except ImportError:  # pragma: no cover
-        path = Path(path)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        out = []
-        for ext in (".pdf", ".png"):
-            p = path.with_suffix(ext)
-            fig.savefig(p, dpi=300 if ext == ".png" else None, bbox_inches="tight")
-            out.append(p)
-        import matplotlib.pyplot as plt
+    return style.save(fig, Path(path), close=True)
 
-        plt.close(fig)
-        return out
+
+def _slant(ax: Any) -> None:
+    """Slant long category labels on the x axis."""
+    ax.tick_params(axis="x", labelrotation=20)
+    for t in ax.get_xticklabels():
+        t.set_horizontalalignment("right")
 
 
 def _wrap(label: str, width: int = 9) -> str:
@@ -196,9 +183,8 @@ def line_plot(
     instances) seaborn draws their mean with a 95 % bootstrap confidence
     band; otherwise the points are joined as given.
     """
-    plt = _plt()
     sns = _sns()
-    fig, ax = plt.subplots(figsize=FIGSIZE)
+    fig, ax = _figure()
     names = [n for n, (xs, ys) in series.items() if any(_finite(y) for y in ys)]
     pal = _palette(names)
     mk = _markers(names)
@@ -213,18 +199,9 @@ def line_plot(
                 Y.append(float(y))
                 H.append(_label(n))
     if X:
-        if sns is not None:
-            sns.lineplot(x=X, y=Y, hue=H, style=H, palette=pal, markers=mk if markers else False, dashes=False,
-                         errorbar=("ci", 95), n_boot=500, seed=0, markersize=4.5, markeredgecolor="white",
-                         markeredgewidth=0.5, lw=1.3, ax=ax, legend=len(names) > 1, sort=True)
-        else:  # pragma: no cover
-            for n in names:
-                lab = _label(n)
-                pts = sorted((x, y) for x, y, h in zip(X, Y, H) if h == lab)
-                ax.plot([p[0] for p in pts], [p[1] for p in pts], marker=mk[lab] if markers else None, ms=4, lw=1.3,
-                        color=pal[lab], label=lab)
-            if len(names) > 1:
-                ax.legend()
+        sns.lineplot(x=X, y=Y, hue=H, style=H, palette=pal, markers=mk if markers else False, dashes=False,
+                     errorbar=("ci", 95), n_boot=500, seed=0, markersize=4.5, markeredgecolor="white",
+                     markeredgewidth=0.5, lw=1.3, ax=ax, legend=len(names) > 1, sort=True)
     if logx:
         ax.set_xscale("log")
     if logy:
@@ -241,36 +218,27 @@ def line_plot(
 def box_plot(groups: dict[str, list[float]], ylabel: str, path: Path, title: str | None = None) -> list[Path]:
     """Distribution per group: box (median, quartiles, 1.5 IQR whiskers) in a
     pale tint of the group colour with every value as a jittered dot."""
-    plt = _plt()
+    from ..viz import style
+
     sns = _sns()
     names = [n for n, v in groups.items() if any(_finite(x) for x in v)]
-    fig, ax = plt.subplots(figsize=FIGSIZE)
+    fig, ax = _figure()
     if names:
         pal = _palette(names)
         X = [_label(n) for n in names for v in groups[n] if _finite(v)]
         Y = [float(v) for n in names for v in groups[n] if _finite(v)]
         order = [_label(n) for n in names]
-        if sns is not None:
-            from matplotlib.colors import to_rgb
-
-            pale = {k: tuple(c + (1 - c) * 0.68 for c in to_rgb(v)) for k, v in pal.items()}
-            with warnings.catch_warnings():  # seaborn 0.13 passes matplotlib's deprecated ``vert``
-                warnings.filterwarnings("ignore", message=".*vert: bool was deprecated.*")
-                sns.boxplot(x=X, y=Y, hue=X, order=order, hue_order=order, palette=pale, width=0.6, showfliers=False,
-                            saturation=1.0, linewidth=0.7, legend=False, ax=ax,
-                            medianprops={"color": "#262626", "linewidth": 1.1}, boxprops={"edgecolor": "#595959"},
-                            whiskerprops={"color": "#595959"}, capprops={"color": "#595959"})
-            sns.stripplot(x=X, y=Y, hue=X, order=order, hue_order=order, palette=pal, size=2.6, alpha=0.75,
-                          jitter=0.2, linewidth=0.3, edgecolor="white", legend=False, ax=ax)
-        else:  # pragma: no cover
-            bp = ax.boxplot([groups[n] for n in names], patch_artist=True, showfliers=True, widths=0.6)
-            for patch, n in zip(bp["boxes"], names):
-                patch.set_facecolor(color(n))
-                patch.set_alpha(0.6)
-            ax.set_xticks(range(1, len(names) + 1))
-            ax.set_xticklabels(order)
+        pale = {k: style.tint(v, 0.68) for k, v in pal.items()}
+        with warnings.catch_warnings():  # seaborn 0.13 passes matplotlib's deprecated ``vert``
+            warnings.filterwarnings("ignore", message=".*vert: bool was deprecated.*")
+            sns.boxplot(x=X, y=Y, hue=X, order=order, hue_order=order, palette=pale, width=0.6, showfliers=False,
+                        saturation=1.0, linewidth=0.7, legend=False, ax=ax,
+                        medianprops={"color": "#262626", "linewidth": 1.1}, boxprops={"edgecolor": "#595959"},
+                        whiskerprops={"color": "#595959"}, capprops={"color": "#595959"})
+        sns.stripplot(x=X, y=Y, hue=X, order=order, hue_order=order, palette=pal, size=2.6, alpha=0.75,
+                      jitter=0.2, linewidth=0.3, edgecolor="white", legend=False, ax=ax)
         if sum(len(_label(n)) for n in names) > 40:
-            plt.setp(ax.get_xticklabels(), rotation=20, ha="right")
+            _slant(ax)
     _finish(ax, None, ylabel, title)
     ax.grid(axis="y", color="#E5E5E5", lw=0.5)
     return save(fig, path)
@@ -286,9 +254,8 @@ def bar_plot(
 ) -> list[Path]:
     """One bar per name.  A list of values gives the mean with a 95 %
     bootstrap confidence interval (seaborn); a number is drawn as is."""
-    plt = _plt()
     sns = _sns()
-    fig, ax = plt.subplots(figsize=FIGSIZE)
+    fig, ax = _figure()
     names = list(values)
     X: list[str] = []
     Y: list[float] = []
@@ -304,13 +271,10 @@ def bar_plot(
         Y += vals
     order = [_label(n) for n in names]
     pal = _palette(names)
-    if sns is not None and X:
+    if X:
         sns.barplot(x=X, y=Y, hue=X, order=order, hue_order=order, palette=pal, legend=False, ax=ax, saturation=1.0,
                     errorbar=("ci", 95) if repeated else None, n_boot=1000, seed=0, err_kws={"linewidth": 1.0},
                     capsize=0.15, width=0.65, edgecolor="white", linewidth=0.6)
-    elif X:  # pragma: no cover
-        means = [sum(y for x, y in zip(X, Y) if x == o) / max(1, sum(1 for x in X if x == o)) for o in order]
-        ax.bar(order, means, color=[pal[o] for o in order])
     if annotate and X and not repeated:
         for i, o in enumerate(order):
             ys = [y for x, y in zip(X, Y) if x == o]
@@ -318,7 +282,7 @@ def bar_plot(
                 ax.annotate(f"{ys[0]:.3g}", (i, ys[0]), xytext=(0, 2), textcoords="offset points", ha="center",
                             va="bottom", fontsize=6.5, color="#262626")
     if sum(len(o) for o in order) > 40:
-        plt.setp(ax.get_xticklabels(), rotation=20, ha="right")
+        _slant(ax)
     _finish(ax, None, ylabel, title)
     ax.grid(axis="y", color="#E5E5E5", lw=0.5)
     ax.tick_params(axis="x", length=0)
@@ -339,40 +303,29 @@ def scatter_plot(
 ) -> list[Path]:
     """Scatter of ``(xs, ys)``; optional per-point ``sizes`` (marker area)
     and a continuous colour ``c`` with a colour bar labelled ``clabel``."""
-    plt = _plt()
-    sns = _sns()
     from ..viz import style
 
-    fig, ax = plt.subplots(figsize=FIGSIZE)
+    sns = _sns()
+    fig, ax = _figure()
     big = len(xs) > 150
     edge = {"edgecolor": "none", "linewidth": 0.0} if big else {"edgecolor": "white", "linewidth": 0.4}
     cmap = style.sequential_cmap()
-    norm = None
+    lim = None
     if c is not None and len(c):
-        from matplotlib.colors import Normalize
-
         lo, hi = min(c), max(c)
-        norm = Normalize(vmin=lo, vmax=hi if hi > lo else lo + 1e-9)
-    if sns is not None:
-        kw: dict[str, Any] = dict(x=list(xs), y=list(ys), ax=ax, legend=False, **edge)
-        if c is not None:
-            kw.update(hue=list(c), hue_norm=norm, palette=cmap)
-        else:
-            kw.update(color=style.OKABE_ITO["blue"])
-        if sizes is not None:
-            kw.update(size=list(sizes), sizes=(min(sizes), max(sizes)) if max(sizes) > min(sizes) else None)
-        else:
-            kw.update(s=8 if big else 18)
-        sns.scatterplot(**kw)
-    else:  # pragma: no cover
-        ax.scatter(xs, ys, s=sizes or 18, c=c if c is not None else style.OKABE_ITO["blue"], cmap=cmap, norm=norm)
-    if c is not None and norm is not None:
-        from matplotlib.cm import ScalarMappable
-
-        cb = fig.colorbar(ScalarMappable(norm=norm, cmap=cmap), ax=ax, pad=0.02, fraction=0.06, aspect=25)
-        if clabel:
-            cb.set_label(clabel)
-        cb.outline.set_linewidth(0.4)
+        lim = (lo, hi if hi > lo else lo + 1e-9)
+    kw: dict[str, Any] = dict(x=list(xs), y=list(ys), ax=ax, legend=False, **edge)
+    if c is not None:
+        kw.update(hue=list(c), hue_norm=lim, palette=cmap)
+    else:
+        kw.update(color=style.OKABE_ITO["blue"])
+    if sizes is not None:
+        kw.update(size=list(sizes), sizes=(min(sizes), max(sizes)) if max(sizes) > min(sizes) else None)
+    else:
+        kw.update(s=8 if big else 18)
+    sns.scatterplot(**kw)
+    if lim is not None:
+        style.colorbar(ax, cmap, lim[0], lim[1], label=clabel)
     _finish(ax, xlabel, ylabel, title)
     ax.grid(color="#E5E5E5", lw=0.5)
     return save(fig, path)
@@ -394,9 +347,9 @@ def heatmap(
 
     Non-finite entries are blank.  Column labels that name algorithms are
     shown by their titles.  ``log`` uses a logarithmic colour scale (for
-    runtimes and label counts).
+    runtimes and label counts; the heatmap colours ``log10`` of the values
+    and the colour bar is labelled in powers of ten).
     """
-    plt = _plt()
     sns = _sns()
     import numpy as np
 
@@ -406,31 +359,27 @@ def heatmap(
     finite = data[np.isfinite(data)]
     n_rows, n_cols = data.shape if data.size else (0, 0)
     w = min(7.16, max(FIGSIZE[0], 0.9 + 0.62 * n_cols))
-    fig, ax = plt.subplots(figsize=(w, 0.7 + 0.21 * max(n_rows, 1)))
+    fig, ax = _figure((w, 0.7 + 0.21 * max(n_rows, 1)))
     cmap = style.sequential_cmap(style.OKABE_ITO["blue"], light="#EEF5FB")
     cmap = cmap.with_extremes(bad="white")
-    norm = None
-    if log and finite.size and finite.min() > 0:
-        from matplotlib.colors import LogNorm
-
-        norm = LogNorm(vmin=float(finite.min()), vmax=float(finite.max()))
     cols = [_wrap(_label(c)) for c in col_labels]
-    if sns is not None and finite.size:
-        sns.heatmap(data, ax=ax, cmap=cmap, norm=norm, annot=annot, fmt=fmt, annot_kws={"fontsize": 6.5},
-                    linewidths=0.6, linecolor="white", mask=~np.isfinite(data), xticklabels=cols,
-                    yticklabels=list(row_labels), cbar_kws={"label": clabel or "", "pad": 0.015, "aspect": 30})
+    log = bool(log and finite.size and finite.min() > 0)
+    if finite.size:
+        shown = np.log10(data) if log else data
+        lo, hi = (float(np.log10(finite.min())), float(np.log10(finite.max()))) if log else (None, None)
+        sns.heatmap(shown, ax=ax, cmap=cmap, vmin=lo, vmax=hi, annot=data if annot else False, fmt=fmt,
+                    annot_kws={"fontsize": 6.5}, linewidths=0.6, linecolor="white", mask=~np.isfinite(data),
+                    xticklabels=cols, yticklabels=list(row_labels),
+                    cbar_kws={"label": clabel or "", "pad": 0.015, "aspect": 30})
         cbar = ax.collections[0].colorbar
         if cbar is not None:
             cbar.outline.set_linewidth(0)
-    elif finite.size:  # pragma: no cover
-        im = ax.imshow(np.ma.masked_invalid(data), cmap=cmap, norm=norm, aspect="auto")
-        fig.colorbar(im, ax=ax, label=clabel or "")
-        ax.set_xticks(range(n_cols), cols)
-        ax.set_yticks(range(n_rows), list(row_labels))
+            if log and lo is not None and hi is not None and hi > lo:
+                style.log_colorbar_ticks(cbar, lo, hi)
     ax.tick_params(axis="both", length=0)
     ax.xaxis.tick_top()
-    plt.setp(ax.get_xticklabels(), rotation=0)
-    plt.setp(ax.get_yticklabels(), rotation=0)
+    ax.tick_params(axis="x", labelrotation=0)
+    ax.tick_params(axis="y", labelrotation=0)
     if title:
         ax.set_title(title, loc="left", pad=16)
     return save(fig, path)

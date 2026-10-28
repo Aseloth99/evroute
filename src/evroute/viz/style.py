@@ -1,7 +1,8 @@
 """Paper style shared by every static figure of EVRoute.
 
 This module is the single place that decides how EVRoute's static figures
-*look*:
+*look*.  Every figure is drawn with seaborn (Waskom 2021, *J. Open Source
+Softw.* 6(60), 3021):
 
 * **one colour per algorithm**, taken from the colour-blind-safe palette of
   Okabe & Ito (2008, *Color Universal Design*) and identical to the colours
@@ -10,37 +11,46 @@ This module is the single place that decides how EVRoute's static figures
 * a **secondary encoding** per algorithm (marker shape, and a dashed line for
   heuristics without an optimality guarantee) so that the figures survive
   grey-scale printing and colour-vision deficiencies;
-* a **seaborn theme** (Waskom 2021, *J. Open Source Softw.* 6(60), 3021):
-  :func:`apply` calls :func:`seaborn.set_theme` with a clean ``"ticks"``
-  style, the ``"paper"`` context and the EVRoute palette, and
-  :func:`paper` installs the same settings temporarily; without seaborn
-  the equivalent plain-matplotlib settings are used;
+* a **seaborn theme**: :func:`apply` calls :func:`seaborn.set_theme` with a
+  clean ``"ticks"`` style, the ``"paper"`` context and the EVRoute palette,
+  and :func:`paper` installs the same settings temporarily;
 * fonts and sizes for **IEEE single-column (3.5 in) and double-column
   (7.16 in)** figures, with TrueType (Type 42) fonts embedded in PDF/PS
   output as IEEE PDF eXpress requires;
-* a :func:`save` helper that writes a vector PDF and a 300 dpi PNG at once.
+* :func:`subplots` makes a figure through :class:`seaborn.FacetGrid`,
+  :func:`colorbar` draws a colour scale as a one-row :func:`seaborn.heatmap`
+  and :func:`save` writes a vector PDF and a 300 dpi PNG at once.
 
-Everything at module level is plain Python; matplotlib and seaborn are
-imported lazily inside the functions that need them, so the palette can be
-imported by code that must stay dependency-free.
+seaborn draws through matplotlib, which it installs as its own dependency;
+EVRoute's figure code calls seaborn only.  The three helpers that must reach
+matplotlib's settings directly -- the temporary rc settings of
+:func:`paper`, :func:`close` and the text halo of :func:`halo` -- sit
+together at the end of this module, and none of them draws data.
+
+Everything at module level is plain Python; seaborn is imported lazily
+inside the functions that need it, so the palette can be imported by code
+that must stay dependency-free.
 
 Typical use::
 
+    import seaborn as sns
     from evroute.viz import style
     style.configure(font="serif")          # default for all EVRoute figures
     with style.paper():                    # or: style.apply() globally
-        fig, ax = plt.subplots(figsize=style.figsize("single"))
-        ax.plot(x, y, **style.line_kw("bls-astar"))
-        sns.barplot(data=rows, x="runtime", y="algorithm",
-                    hue="algorithm", palette=style.algorithm_palette(names))
-    style.save(fig, "figures/fig_soc")     # -> fig_soc.pdf + fig_soc.png
+        fig, ax = style.subplots(figsize=style.figsize("single"))
+        sns.lineplot(x=x, y=y, ax=ax, **style.line_kw("bls-astar"))
+        sns.barplot(data=rows, x="runtime", y="algorithm", hue="algorithm",
+                    palette=style.algorithm_palette(names), ax=ax)
+    style.save(fig, "figures/fig_soc", close=True)  # -> fig_soc.pdf + .png
 """
 
 from __future__ import annotations
 
+import math
 import zlib
 from collections.abc import Iterable, Iterator, Sequence
 from contextlib import contextmanager
+from itertools import pairwise
 from pathlib import Path
 from typing import Any
 
@@ -69,7 +79,16 @@ __all__ = [
     "apply",
     "paper",
     "has_seaborn",
+    "require_seaborn",
+    "subplots",
+    "colorbar",
+    "log_colorbar_ticks",
+    "nice_ticks",
+    "font_size",
+    "rgb",
+    "tint",
     "save",
+    "close",
     "terrain_cmap",
     "sequential_cmap",
     "halo",
@@ -258,7 +277,8 @@ def algorithm_linestyle(name: str) -> Any:
 
 
 def line_kw(name: str, **overrides: Any) -> dict[str, Any]:
-    """Keyword arguments for ``ax.plot`` that draw algorithm ``name`` in style."""
+    """Line keyword arguments that draw algorithm ``name`` in style (for
+    :func:`seaborn.lineplot`, which passes them on to the line)."""
     kw: dict[str, Any] = {
         "color": algorithm_color(name),
         "linestyle": algorithm_linestyle(name),
@@ -298,10 +318,21 @@ def figsize(width: str | float = "single", aspect: float = 0.68, height: float |
 
 # ================================================================ rc settings
 def has_seaborn() -> bool:
-    """``True`` if seaborn is installed (it is optional)."""
+    """``True`` if seaborn is installed (it is optional; ``pip install
+    evroute[plot]`` brings it, and matplotlib with it)."""
     import importlib.util
 
     return importlib.util.find_spec("seaborn") is not None
+
+
+def require_seaborn() -> Any:
+    """The :mod:`seaborn` module, or an :class:`ImportError` that says how to
+    install it."""
+    try:
+        import seaborn as sns
+    except ImportError as exc:  # pragma: no cover - depends on the installation
+        raise ImportError("EVRoute's figures need seaborn: pip install 'evroute[plot]'") from exc
+    return sns
 
 
 def _seaborn_base(theme: str, context: str) -> dict[str, Any]:
@@ -423,7 +454,7 @@ def rc_params(
             for k in ("axes.facecolor", "grid.color"):
                 if k in base:
                     rc[k] = base[k]
-    try:  # colour cycle (needs matplotlib; skipped when it is absent)
+    try:  # colour cycle (the cycler package comes with seaborn; skipped without it)
         from cycler import cycler
 
         rc["axes.prop_cycle"] = cycler(color=list(CATEGORICAL))
@@ -471,38 +502,200 @@ def apply(
 ) -> None:
     """Install the paper style globally.
 
-    With seaborn installed this calls :func:`seaborn.set_theme` with the
-    configured style (default ``"ticks"``), context (default ``"paper"``),
-    the EVRoute categorical palette and the EVRoute overrides of
-    :func:`rc_params`; every later matplotlib *and* seaborn plot uses them.
-    Without seaborn the same overrides are written to
-    ``matplotlib.rcParams``.
+    Calls :func:`seaborn.set_theme` with the configured style (default
+    ``"ticks"``), context (default ``"paper"``), the EVRoute categorical
+    palette and the EVRoute overrides of :func:`rc_params`, which seaborn
+    applies last; every later plot uses them.
     """
-    import matplotlib
-
+    sns = require_seaborn()
     theme = theme or _CURRENT["theme"]
     context = context or _CURRENT["context"]
     rc = rc_params(font, base_size, theme=theme, context=context)
-    try:
-        import seaborn as sns
-    except Exception:  # pragma: no cover - depends on the installation
-        matplotlib.rcParams.update(rc)
-        return
     sns.set_theme(context=context, style=theme, palette=list(CATEGORICAL), rc=rc)
-    matplotlib.rcParams.update(rc)  # seaborn rescales a few sizes: ours win
 
 
-@contextmanager
-def paper(font: str | None = None, base_size: float | None = None, **extra: Any) -> Iterator[None]:
-    """Context manager: the paper style (seaborn theme + EVRoute overrides,
-    see :func:`rc_params`) for everything created inside it.  ``extra``
-    rcParams are applied last.  Global settings are restored on exit."""
-    import matplotlib
+def font_size() -> float:
+    """Body font size [pt] currently in effect (inside :func:`paper`, the
+    configured size), read through :func:`seaborn.plotting_context`."""
+    return float(require_seaborn().plotting_context()["font.size"])
 
-    rc = rc_params(font, base_size)
-    rc.update(extra)
-    with matplotlib.rc_context(rc):
-        yield
+
+# ==================================================================== figures
+#: Subplot margins and gaps of a new figure (matplotlib's defaults, which
+#: seaborn's themes leave unchanged); ``bbox_inches="tight"`` in
+#: :func:`save` trims the outer margins anyway.
+_SUBPLOT_PARAMS: dict[str, float] = {"left": 0.125, "right": 0.9, "bottom": 0.11, "top": 0.88, "wspace": 0.2, "hspace": 0.2}
+
+
+def subplots(
+    nrows: int = 1,
+    ncols: int = 1,
+    *,
+    figsize: tuple[float, float],
+    sharex: bool = False,
+    sharey: bool = False,
+    squeeze: bool = True,
+    width_ratios: Sequence[float] | None = None,
+    height_ratios: Sequence[float] | None = None,
+    wspace: float | None = None,
+    hspace: float | None = None,
+) -> tuple[Any, Any]:
+    """A new figure of ``nrows x ncols`` axes, made by :class:`seaborn.FacetGrid`.
+
+    Returns ``(figure, axes)`` like :func:`matplotlib.pyplot.subplots`: one
+    axes, a 1-D array for a single row or column, else a 2-D array
+    (``squeeze=False`` always gives the 2-D array).  The grid's facets are
+    only the panel positions; every panel is then drawn with seaborn's
+    axes-level functions.  ``figsize`` is ``(width, height)`` in inches.
+    """
+    sns = require_seaborn()
+    import pandas as pd
+
+    w, h = figsize
+    cells = [(r, c) for r in range(nrows) for c in range(ncols)]
+    panels = pd.DataFrame({"row": [r for r, _ in cells], "col": [c for _, c in cells]})
+    ratios: dict[str, list[float]] = {}
+    if width_ratios is not None:
+        ratios["width_ratios"] = list(width_ratios)
+    if height_ratios is not None:
+        ratios["height_ratios"] = list(height_ratios)
+    grid = sns.FacetGrid(
+        panels, row="row" if nrows > 1 else None, col="col" if ncols > 1 else None, sharex=sharex, sharey=sharey,
+        height=h / nrows, aspect=(w / ncols) / (h / nrows), despine=False, gridspec_kws=ratios or None,
+    )
+    grid.set_titles(template="")
+    fig = grid.figure
+    params = dict(_SUBPLOT_PARAMS)
+    if wspace is not None:
+        params["wspace"] = wspace
+    if hspace is not None:
+        params["hspace"] = hspace
+    fig.subplots_adjust(**params)  # FacetGrid's own tight layout of the empty grid is replaced
+    axes = grid.axes
+    if squeeze:
+        if axes.size == 1:
+            return fig, axes[0, 0]
+        if nrows == 1 or ncols == 1:
+            return fig, axes.ravel()
+    return fig, axes
+
+
+#: Tick steps (x 10^k) of matplotlib's ``MaxNLocator`` and ``AutoLocator``.
+_MAXN_STEPS: tuple[float, ...] = (1.0, 1.5, 2.0, 2.5, 3.0, 4.0, 5.0, 6.0, 8.0, 10.0)
+_AUTO_STEPS: tuple[float, ...] = (1.0, 2.0, 2.5, 5.0, 10.0)
+
+
+def nice_ticks(lo: float, hi: float, n: int = 5, steps: Sequence[float] = _MAXN_STEPS) -> list[float]:
+    """At most ``n + 1`` round tick values inside ``[lo, hi]``: multiples of
+    the smallest ``step x 10^k`` (``steps`` as in ``MaxNLocator(n)``) that
+    gives at most ``n`` intervals."""
+    lo, hi = float(lo), float(hi)
+    if not hi > lo:
+        return [lo]
+    raw = (hi - lo) / max(n, 1)
+    mag = 10.0 ** math.floor(math.log10(raw))
+    step = next((m * mag for m in steps if m * mag >= raw * (1 - 1e-9)), 10.0 * mag)
+    first = math.ceil(lo / step - 1e-9)
+    ticks = []
+    k = first
+    while k * step <= hi * (1 + 1e-12) + 1e-12 * step:
+        ticks.append(round(k * step, 12))
+        k += 1
+    return ticks
+
+
+def _tick_label(v: float, ticks: Sequence[float]) -> str:
+    """``v`` with as many decimals as the tick spacing needs."""
+    step = min((abs(b - a) for a, b in pairwise(ticks)), default=abs(v) or 1.0)
+    dec = 0
+    while dec < 6 and abs(round(step, dec) - step) > 1e-9 * max(step, 1.0):
+        dec += 1
+    return f"{v:.{dec}f}"
+
+
+def colorbar(
+    ax: Any,
+    cmap: Any,
+    vmin: float,
+    vmax: float,
+    *,
+    label: str | None = None,
+    ticks: Sequence[float] | None = None,
+    ticklabels: Sequence[str] | None = None,
+    orientation: str = "vertical",
+    cax: Any = None,
+    fraction: float = 0.06,
+    pad: float = 0.02,
+    aspect: float = 25.0,
+    outline: float = 0.4,
+) -> Any:
+    """A colour scale for ``cmap`` on ``[vmin, vmax]``, drawn as a one-row
+    :func:`seaborn.heatmap` of the colour ramp; returns its axes.
+
+    Without ``cax`` the scale takes ``fraction`` of the width of ``ax``
+    (``pad`` is the gap) on its right, with ``aspect`` = height / width,
+    the layout of ``Figure.colorbar(ax=...)``.  ``ticks`` default to
+    :func:`nice_ticks` with steps of 1, 2, 2.5 or 5 x 10^k, about one per
+    three label heights.
+    """
+    sns = require_seaborn()
+    vertical = orientation == "vertical"
+    if cax is None:
+        fig = ax.figure
+        pos = ax.get_position()
+        fw, fh = fig.get_size_inches()
+        ax.set_position([pos.x0, pos.y0, pos.width * (1.0 - fraction - pad), pos.height])
+        bar_w = min(pos.height * fh / aspect / fw, pos.width * fraction)
+        cax = fig.add_axes((pos.x0 + pos.width * (1.0 - fraction), pos.y0, bar_w, pos.height))
+    lo, hi = float(vmin), float(vmax)
+    if not hi > lo:
+        hi = lo + 1e-9
+    n = 256
+    ramp = [lo + (hi - lo) * (i + 0.5) / n for i in range(n)]
+    sns.heatmap([[v] for v in reversed(ramp)] if vertical else [ramp], ax=cax, cmap=cmap, vmin=lo, vmax=hi, cbar=False,
+                xticklabels=False, yticklabels=False)
+    if ticks is None:
+        pos = cax.get_position()
+        fw, fh = cax.figure.get_size_inches()
+        length_pt = 72.0 * (pos.height * fh if vertical else pos.width * fw)
+        ticks = nice_ticks(lo, hi, max(2, int(length_pt / (3.0 * (font_size() - 1.0)))), steps=_AUTO_STEPS)
+    else:
+        ticks = [float(t) for t in ticks]
+    labels = list(ticklabels) if ticklabels is not None else [_tick_label(t, ticks) for t in ticks]
+    where = [((hi - t) if vertical else (t - lo)) / (hi - lo) * n for t in ticks]
+    if vertical:
+        cax.yaxis.tick_right()
+        cax.yaxis.set_label_position("right")
+        cax.set_yticks(where, labels)
+        if label:
+            cax.set_ylabel(label)
+    else:
+        cax.xaxis.tick_bottom()
+        cax.set_xticks(where, labels)
+        if label:
+            cax.set_xlabel(label)
+    cax.tick_params(length=2, width=0.5)
+    for sp in cax.spines.values():
+        sp.set_visible(outline > 0)
+        sp.set_linewidth(outline)
+    return cax
+
+
+def log_colorbar_ticks(cbar: Any, lo: float, hi: float) -> None:
+    """Ticks of a colour bar whose values are ``log10`` of the data (a
+    logarithmic colour scale drawn by :func:`seaborn.heatmap`): powers of
+    ten for every decade, or 1-2-5 steps within a single decade."""
+    decades = list(range(math.ceil(lo - 1e-9), math.floor(hi + 1e-9) + 1))
+    if len(decades) >= 2:
+        ticks = [float(e) for e in decades]
+        labels = [f"$\\mathdefault{{10^{{{e}}}}}$" for e in decades]
+    else:
+        vals = [m * 10.0 ** e for e in range(math.floor(lo) - 1, math.ceil(hi) + 1) for m in (1, 2, 5)]
+        vals = [v for v in vals if lo - 1e-9 <= math.log10(v) <= hi + 1e-9]
+        ticks = [math.log10(v) for v in vals]
+        labels = [f"{v:g}" for v in vals]
+    cbar.set_ticks(ticks, labels=labels)
+    cbar.ax.minorticks_off()
 
 
 # ===================================================================== saving
@@ -551,49 +744,105 @@ def save(
         )
         out.append(target)
     if close:
-        import matplotlib.pyplot as plt
-
-        plt.close(fig)
+        _close_figure(fig)
     return out
 
 
 # ================================================================= colour maps
+def rgb(color: Any) -> tuple[float, float, float]:
+    """``(r, g, b)`` in ``[0, 1]`` of a colour (``"#RRGGBB"`` parsed in
+    plain Python, other colour specifications through seaborn)."""
+    if isinstance(color, str) and color.startswith("#") and len(color) in (4, 7):
+        h = color[1:]
+        if len(h) == 3:
+            h = "".join(ch * 2 for ch in h)
+        return (int(h[0:2], 16) / 255.0, int(h[2:4], 16) / 255.0, int(h[4:6], 16) / 255.0)
+    if isinstance(color, (tuple, list)) and len(color) in (3, 4):
+        return (float(color[0]), float(color[1]), float(color[2]))
+    r, g, b = require_seaborn().color_palette([color])[0]
+    return (float(r), float(g), float(b))
+
+
+def tint(color: Any, amount: float = 0.62) -> tuple[float, float, float]:
+    """``color`` mixed with ``amount`` of white (pale fills behind dots)."""
+    r, g, b = rgb(color)
+    return (r + (1 - r) * amount, g + (1 - g) * amount, b + (1 - b) * amount)
+
+
+#: Stops of the muted hypsometric tint (position, colour).
+_TERRAIN_STOPS: tuple[tuple[float, str], ...] = (
+    (0.00, "#CFE0C3"),
+    (0.20, "#E0E7C4"),
+    (0.42, "#ECE2C2"),
+    (0.66, "#DDC8A6"),
+    (0.86, "#CBB59E"),
+    (1.00, "#BFB2A6"),
+)
+
+
 def terrain_cmap() -> Any:
     """Muted hypsometric tint (lowland green -> upland tan -> summit grey-brown).
 
     Deliberately pale, so that routes, stations and labels drawn on top keep
     their contrast; relief comes from the hill-shading, not from saturation.
+    Built with :func:`seaborn.blend_palette`, which spaces its colours
+    evenly: the ramp is sampled every 2 %, a grid every stop lies on, so the
+    colour map is exactly the piecewise-linear ramp through the stops.
     """
-    from matplotlib.colors import LinearSegmentedColormap
-
-    return LinearSegmentedColormap.from_list(
-        "evroute_terrain",
-        [
-            (0.00, "#CFE0C3"),
-            (0.20, "#E0E7C4"),
-            (0.42, "#ECE2C2"),
-            (0.66, "#DDC8A6"),
-            (0.86, "#CBB59E"),
-            (1.00, "#BFB2A6"),
-        ],
-    )
+    cols = []
+    for i in range(51):
+        t = i / 50.0
+        k = max(j for j in range(len(_TERRAIN_STOPS) - 1) if _TERRAIN_STOPS[j][0] <= t + 1e-12)
+        (t0, c0), (t1, c1) = _TERRAIN_STOPS[k], _TERRAIN_STOPS[min(k + 1, len(_TERRAIN_STOPS) - 1)]
+        f = 0.0 if t1 <= t0 else min(max((t - t0) / (t1 - t0), 0.0), 1.0)
+        a, b = rgb(c0), rgb(c1)
+        cols.append(tuple(x + (y - x) * f for x, y in zip(a, b)))
+    return require_seaborn().blend_palette(cols, as_cmap=True)
 
 
 def sequential_cmap(color: str = OKABE_ITO["blue"], light: str = "#D4E6F4") -> Any:
     """Single-hue sequential ramp from ``light`` to a darkened ``color``.
 
     Used for magnitudes (settle order, battery wear): one hue, light to dark,
-    starting light enough to stay visible on white.
+    starting light enough to stay visible on white
+    (:func:`seaborn.blend_palette`).
     """
-    from matplotlib.colors import LinearSegmentedColormap, to_rgb
-
-    r, g, b = to_rgb(color)
+    r, g, b = rgb(color)
     deep = (r * 0.45, g * 0.45, b * 0.45)
-    return LinearSegmentedColormap.from_list("evroute_seq", [light, color, deep])
+    return require_seaborn().blend_palette([rgb(light), (r, g, b), deep], as_cmap=True)
+
+
+# ========================================================= matplotlib bridge
+# seaborn draws through matplotlib.  These three helpers are the only places
+# where EVRoute reaches matplotlib directly, and none of them draws data:
+# temporary rc settings (seaborn's own context managers cover only its
+# style and context keys, not fonts or PDF output), closing a finished
+# figure, and the white halo behind labels (a text path effect).
+@contextmanager
+def paper(font: str | None = None, base_size: float | None = None, **extra: Any) -> Iterator[None]:
+    """Context manager: the paper style (seaborn theme + EVRoute overrides,
+    see :func:`rc_params`) for everything created inside it.  ``extra``
+    rcParams are applied last.  Global settings are restored on exit."""
+    from matplotlib import rc_context
+
+    rc = rc_params(font, base_size)
+    rc.update(extra)
+    with rc_context(rc):
+        yield
+
+
+def close(fig: Any = "all") -> None:
+    """Release a finished figure (``"all"``: every open figure)."""
+    from matplotlib import pyplot
+
+    pyplot.close(fig)
+
+
+_close_figure = close  # ``save(close=True)`` shadows the name
 
 
 def halo(width: float = 2.0, color: str = "white", alpha: float = 0.85) -> list[Any]:
     """Path effect list that draws a halo behind text or lines."""
-    import matplotlib.patheffects as pe
+    from matplotlib.patheffects import withStroke
 
-    return [pe.withStroke(linewidth=width, foreground=color, alpha=alpha)]
+    return [withStroke(linewidth=width, foreground=color, alpha=alpha)]

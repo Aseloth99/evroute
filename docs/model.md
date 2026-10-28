@@ -3,6 +3,57 @@
 This document states the optimisation problem solved by EVRoute precisely.
 Code references point to the module that implements each equation.
 
+## At a glance
+
+Electric-vehicle route planning is "a solved problem" - until you list what a
+real trip involves. Most studies and tools handle one or two of these effects
+and simplify the rest away:
+
+| Effect | In reality | Common simplification | EVRoute |
+|---|---|---|---|
+| Nonlinear charging | power drops sharply above ~50-80 % SoC | constant power | exact piecewise-linear charging functions per vehicle × charger |
+| Partial charging | stop at 54 %, not at 100 % | always charge to full / fixed target | continuous amounts (CFP) or a fine target grid (BLS) |
+| Queues | 20-40 min at busy service areas in the afternoon | no waiting | Erlang-C M/M/c queues with hourly demand, time-dependent and FIFO-safe |
+| Terrain and regeneration | descents refill the battery | flat roads | physics model with grade, wind, stop-and-go, regeneration limit, full-battery clamp |
+| Temperature | −5 °C: smaller battery, heating, slower charging | 20 °C | usable capacity, HVAC load, cold-charging derating, preconditioning |
+| Battery wear | fast charging at high SoC ages the pack | ignored | SoH loss from C-rate, SoC and temperature, priced in the objective |
+| Prices | dearer above 80 % SoC and at peak hours | one price per kWh | tariffs by SoC and time of day (fixed or from the queue load), exact planning of when to wait for a cheaper price |
+| Uncertainty | consumption deviates ±10 % | deterministic | Monte Carlo reliability, safety factor, adaptive driver policy |
+| Eco-driving | driving slower can save a stop | one speed | several speed levels per road |
+
+The model in one screen; the sections below state each part exactly.
+
+- **Road network** ([§1](#1-road-network)) - directed graph with
+  coordinates, elevation, length, speed limit and road class (stop-and-go
+  intensity).
+- **Driving** ([§2](#2-driving-time-and-energy)) - longitudinal dynamics:
+  rolling resistance, aerodynamic drag with head-/tailwind and air density,
+  grade, stop-and-go losses, auxiliary and temperature-dependent HVAC power,
+  regeneration with efficiency and power limit; regeneration into a full
+  battery is lost. Optional speed levels (e.g. 100/90/80 %).
+- **Battery** ([§3](#3-battery)) - usable capacity shrinks in the cold;
+  reserve SoC at every node, minimum arrival SoC, maximum charging SoC.
+- **Charging** ([§4](#4-charging)) - vehicle charging curves
+  (piecewise-constant power over SoC bins) capped by the charger power, DC
+  power derated for a cold battery without preconditioning → exact,
+  piecewise-linear charging functions (concave above the low-SoC ramp-up;
+  CFP handles both shapes exactly); prices per kWh with charging losses;
+  set-up time per stop.
+- **Charging tariffs** ([§5](#5-charging-tariffs)) - price factors above a
+  SoC threshold ("the 80 % rule") and in peak hours (fixed, or wherever a
+  station's queue model expects it to be busy); the price is fixed when the
+  car joins the queue, so waiting for a cheaper period can pay.
+- **Queues** ([§6](#6-queues)) - each station is an M/M/c queue with an
+  hourly demand profile; the Erlang-C expected wait is made FIFO-safe so that
+  time-dependent planning stays exact.
+- **Battery wear** ([§7](#7-battery-wear)) - SoH loss per kWh as a function
+  of C-rate, SoC and temperature, priced per SoH percentage point.
+- **Objectives** ([§8](#8-objectives)) - trip time, generalised cost
+  `VoT·T + w_money·money + w_wear·wear`, or the Pareto front of the three.
+- **Uncertainty** ([§9](#9-uncertainty-evaluation-only), evaluation only) -
+  log-normal trip and edge factors on the consumption, exponential queueing
+  delays.
+
 ## 1. Road network
 
 A directed graph $G = (V, E)$.  Node $v$ has projected coordinates

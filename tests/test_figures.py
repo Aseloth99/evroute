@@ -3,14 +3,15 @@
 
 Every figure function is run on a small instance and must write non-empty
 PDF and PNG files that are not blank; the numbers the figures show are
-cross-checked against the independent evaluator.  The whole module runs in
-well under a minute on the Agg backend.
+cross-checked against the independent evaluator.  Figures are drawn with
+seaborn only; the whole module runs in well under a minute.
 """
 
 from __future__ import annotations
 
 import importlib.util
 import math
+import re
 from itertools import pairwise
 from pathlib import Path
 
@@ -23,10 +24,7 @@ from evroute.plan import RoutePlan
 from evroute.viz import figures as F
 from evroute.viz import style
 
-matplotlib = pytest.importorskip("matplotlib")
-matplotlib.use("Agg")
-pytest.importorskip("seaborn")
-plt = pytest.importorskip("matplotlib.pyplot")
+sns = pytest.importorskip("seaborn")
 
 
 # --------------------------------------------------------------- fixtures
@@ -63,7 +61,7 @@ def multi():
 @pytest.fixture(autouse=True)
 def _close_figures():
     yield
-    plt.close("all")
+    style.close("all")
 
 
 def _assert_written(paths, min_bytes: int = 2000) -> None:
@@ -123,27 +121,54 @@ def test_rc_params_layer_seaborn_and_paper_overrides():
 
 
 def test_apply_installs_seaborn_theme_and_palette():
-    before = dict(matplotlib.rcParams)
-    try:
-        style.apply()
-        assert matplotlib.rcParams["font.size"] == 8.0
-        first = matplotlib.rcParams["axes.prop_cycle"].by_key()["color"][0]
-        assert first.lower() == style.CATEGORICAL[0].lower()
-    finally:
-        matplotlib.rcParams.update(before)
+    with style.paper():  # restores the global settings afterwards
+        style.apply(base_size=9.0)
+        assert sns.plotting_context()["font.size"] == 9.0
+        assert sns.color_palette()[0] == pytest.approx(style.rgb(style.CATEGORICAL[0]), abs=1e-6)
 
 
 def test_paper_context_restores_rcparams():
-    size = matplotlib.rcParams["font.size"]
+    size = sns.plotting_context()["font.size"]
     with style.paper(base_size=11.0):
-        assert matplotlib.rcParams["font.size"] == 11.0
-    assert matplotlib.rcParams["font.size"] == size
+        assert sns.plotting_context()["font.size"] == 11.0 == style.font_size()
+    assert sns.plotting_context()["font.size"] == size
+
+
+def test_subplots_colour_maps_and_ticks():
+    with style.paper():
+        fig, axes = style.subplots(2, 3, figsize=(6.0, 3.0), sharey=True, width_ratios=[1, 2, 1])
+        assert axes.shape == (2, 3) and tuple(fig.get_size_inches()) == pytest.approx((6.0, 3.0))
+        assert axes[0, 1].get_position().width == pytest.approx(2 * axes[0, 0].get_position().width)
+        _, ax = style.subplots(figsize=(3.5, 2.0))
+        assert hasattr(ax, "get_xlim")
+    # the terrain ramp passes exactly through its stops; the sequential ramp ends dark
+    cmap = style.terrain_cmap()
+    for t, c in ((0.2, "#E0E7C4"), (0.66, "#DDC8A6"), (1.0, "#BFB2A6")):
+        assert tuple(cmap(t)[:3]) == pytest.approx(style.rgb(c), abs=2e-3)
+    assert sum(style.sequential_cmap()(1.0)[:3]) < sum(style.rgb(style.OKABE_ITO["blue"]))
+    assert style.rgb("#0072B2") == pytest.approx((0.0, 0x72 / 255, 0xB2 / 255))
+    assert style.nice_ticks(0, 2700, 4) == [0.0, 800.0, 1600.0, 2400.0]
+    assert style.nice_ticks(0.0, 1.0) == pytest.approx([0.0, 0.2, 0.4, 0.6, 0.8, 1.0])
+
+
+def test_figure_code_draws_with_seaborn_only():
+    """No figure module imports matplotlib; style.py reaches it only in its
+    three bridge helpers (rc context, close, text halo)."""
+    import evroute.experiments.figures as EF
+    import evroute.experiments.plots as EP
+
+    pattern = re.compile(r"^\s*(import matplotlib|from matplotlib)", re.MULTILINE)
+    for mod in (F, EP, EF):
+        assert not pattern.search(Path(mod.__file__).read_text(encoding="utf-8")), mod.__name__
+    src = Path(style.__file__).read_text(encoding="utf-8")
+    assert len(pattern.findall(src)) == 3
+    assert src.index("matplotlib bridge") < min(m.start() for m in pattern.finditer(src))
 
 
 def test_save_writes_pdf_and_png_reproducibly(tmp_path):
     with style.paper():
-        fig, ax = plt.subplots(figsize=style.figsize("single"))
-        ax.plot([0, 1, 2], [1, 3, 2], **style.line_kw("bls-astar"))
+        fig, ax = style.subplots(figsize=style.figsize("single"))
+        sns.lineplot(x=[0, 1, 2], y=[1, 3, 2], ax=ax, **style.line_kw("bls-astar"))
     a = style.save(fig, tmp_path / "a")
     b = style.save(fig, tmp_path / "b.png")  # suffix is replaced
     assert [p.name for p in a] == ["a.pdf", "a.png"] and [p.name for p in b] == ["b.pdf", "b.png"]
@@ -236,9 +261,16 @@ def test_plot_map_variants(case, tmp_path):
     _assert_written(_written(tmp_path / "map_hi"))
     F.plot_map(sc, plans["bls-astar"], terrain=False, labels=False, stations=False, width="single", path=tmp_path / "map1")
     _assert_written(_written(tmp_path / "map1"))
-    # into an existing axes
-    f2, a2 = plt.subplots(figsize=(4, 4))
+    # into an existing axes; the terrain is a seaborn heatmap in an axes underneath
+    f2, a2 = style.subplots(figsize=(4, 4))
     assert F.plot_map(sc, routed, ax=a2) is f2
+    under = [a for a in f2.axes if a is not a2]
+    assert len(under) == 1 and under[0].get_zorder() < a2.get_zorder() and under[0].collections
+    # ... and it follows the map axes when the layout changes afterwards
+    f2.set_size_inches(6, 3)
+    f2.subplots_adjust(left=0.02, right=0.6, bottom=0.05, top=0.95)
+    f2.canvas.draw()
+    assert under[0].get_position().bounds == pytest.approx(a2.get_position().bounds)
 
 
 def test_identical_routes_share_a_map_lane(case):
@@ -319,6 +351,30 @@ def test_plot_pareto(case, tmp_path):
     assert any(abs(m.total_time_s - par.total_time_s) < 1e-6 and abs(m.money - par.money) < 1e-6 for m in par.alternatives)
     with pytest.raises(ValueError):
         F.plot_pareto([plans["naive"]] if "naive" in plans else [])
+
+
+@pytest.mark.parametrize("levels", [1, 3, 7, 12])
+def test_plot_pareto_stop_keys(case, levels):
+    """The stop keys come from seaborn's size legend: every stop count up to
+    seven levels, a brief selection beyond -- never an empty legend."""
+    from dataclasses import replace
+
+    _, plans = case
+    base = plans["bls-astar"]
+    assert base.stops
+    members = [replace(base, stops=[base.stops[0]] * k, total_time_s=base.total_time_s + 600.0 * i,
+                       money=base.money + 0.5 * (40 - i), alternatives=[])
+               for i, k in enumerate(1 + (j % levels) for j in range(40))]
+    fig = F.plot_pareto(members)
+    leg = fig.axes[0].get_legend()
+    texts = [t.get_text() for t in leg.get_texts()]
+    counts = [int(t.split()[0]) for t in texts]
+    assert texts and all(t.endswith(("stop", "stops")) for t in texts)
+    assert counts == sorted(counts) and set(counts) <= set(range(1, levels + 1))
+    assert counts[-1] == levels and (levels > 7 or counts[0] == 1)
+    assert len(counts) == (min(levels, 4) if levels <= 4 else 3)
+    sizes = [h.get_markersize() for h in leg.legend_handles]
+    assert sizes == sorted(sizes)
 
 
 def test_plot_tradeoff(case, tmp_path):

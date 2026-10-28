@@ -5,6 +5,73 @@ seconds.  $\underline e$ is the reserve, $\bar e$ the charging cap, $Q$ the
 capacity, $e_d$ the destination requirement and $P_{\max}$ the highest
 effective charging power of any station.
 
+## At a glance
+
+| name | idea | guarantee |
+|---|---|---|
+| `naive` | fastest path, battery ignored | none - shows *where* the battery runs out |
+| `greedy` | in-car navigator: drive the fastest path; when the battery is short, detour to the reachable station with the least time-to-station + lower bound to the goal, charge to 80 % (DC) / 100 % (AC), repeat | heuristic |
+| `station-graph` | Dijkstra on a meta-graph of stations; every stop charges to a fixed target (default 100 %), stretches use the fastest speed level (Storandt & Funke 2012 style) | optimal only on its meta-graph |
+| `genetic` | deterministic, seeded genetic algorithm over station sequences and target SoCs, decoded with exact "just enough" energies | heuristic |
+| `bls` | label setting on the battery-expanded state space (node, energy) in Dijkstra order | **exact** for charging targets on the grid (2 % SoC + charging-curve breakpoints) |
+| `bls-astar` | BLS + a consistent energy-deficit A\* potential (default planner) | same optimum as `bls`, far fewer labels |
+| `cfp` | charging-function propagation (Baum et al.): labels are functions of time, charging amounts stay continuous | **exact** fastest route with arbitrary charging amounts |
+| `cfp-astar` | CFP with the A\* key | same optimum as `cfp` |
+| `pareto` | multi-criteria label setting (Martins, NAMOA\*-style pruning) over time, money, wear | **exact** Pareto front on the target grid |
+
+Exact planners minimise the trip time or the generalised cost
+`VoT·T + money + w·wear` (BLS, BLS-A\*, Pareto; CFP is a time-objective
+algorithm). All of them handle time-dependent queues, several speed levels,
+regeneration and consecutive stops at different chargers of one site.  With
+a charging tariff whose prices depend on the clock, BLS and BLS-A\* (cost)
+and Pareto also consider waiting at a station until a price change, which
+is provably enough; the time objective never waits.  Not sure which planner
+to use? See the [guide](guide.md#12-which-planner-should-i-use).
+
+### How BLS-A\* works
+
+A *label* is a partial route summarised by `(t, e)` - trip time and battery
+energy at a node, with the energy kept **continuous**. Driving an edge moves
+`(v, e) → (w, min(e − c, Q))`; charging at station `j` to a target `y` costs
+`wait_j(t) + setup_j + F_j(y) − F_j(e)` seconds, with the exact charging
+function `F_j`. A label dominates another at the same node if it is no later
+and has no less energy (the cost objective adds money and wear). Every
+transition is monotone and the queues are FIFO, so pruning dominated labels
+is exact.
+
+The A\* key is `t + h(v, e)` with
+
+```
+h(v, e) = T_lb(v) + (3600 / P_max) · max(0, E_lb(v) + e_goal − e)   [+ unavoidable-stop overhead]
+```
+
+that is, the fastest remaining driving time plus the time needed to charge
+the energy deficit at the best possible power. `h` is consistent on the battery state
+graph (the deficit cannot shrink along a road, and charging `ΔE` takes at
+least `3600 ΔE / P_max` seconds) and non-increasing in `e`, so a dominating
+label is always popped first and the first label popped at the destination
+is optimal. The default *tight* potential measures time and energy on the
+same path and counts unavoidable stops. Proofs: Sections
+[2](#2-bls--battery-constrained-label-setting) and
+[3](#3-a-consistent-heuristic-for-the-battery-state-space).
+
+### How CFP works (continuous charging)
+
+BLS fixes *how much* to charge to a grid. CFP defers that decision: a label
+stores the last station `j`, the time and energy at which charging there
+began and the consumption profile `(in, cost, out)` of the road since then.
+Its *function* `B(t)` - the energy available at the current node if the car
+leaves `j` so that it arrives at time `t` - is piecewise linear and
+non-decreasing. Along an edge only the profile changes (closed form); at a
+new station the label spawns stop labels at the breakpoints of `B`, which is
+where an optimal switch from charging at `j` to charging at the new station
+lies (Lemma 3; plus the upward power breaks of non-concave curves and the
+knots of time-dependent waits). Dominance compares a label against the upper envelope of the
+settled labels of its node. The first destination entry popped is the
+fastest route over **all** charging amounts. Proofs and the extensions
+(non-concave curves, time-dependent queues, consecutive stops):
+[Section 4](#4-cfp--charging-function-propagation-continuous-charging).
+
 ## 1. The battery-expanded state space
 
 A *state* is a pair $(v, x)$ of a node and the energy in the battery.  Driving
@@ -507,7 +574,7 @@ dominance keeps more labels.  BLS-A\* answers the cost objective of the
 README example in under a second, but the complete (time, money) front of
 that 750 km trip creates about 6 million labels (85 s of search) on the
 default 2 % charging grid -- more than the viewer's budget of 1 million,
-hence `max_labels=10_000_000` in the README -- against fewer than 1 million
+hence `max_labels=10_000_000` in the [worked example](index.md#worked-example) -- against fewer than 1 million
 (7 s) on the 5 % grid of the `tariffs` experiment.  A possible pruning, not
 implemented: skip a hold into a period that is nowhere cheaper than the
 current one (its price is no lower in every energy band); joining at once
@@ -543,7 +610,9 @@ exact planners trade speed for energy.
 ## 8. How correctness is verified
 
 1. An **independent evaluator** (`evaluate.py`) replays every plan from first
-   principles; the objective an algorithm claims must match it.
+   principles - energies, reserves, queues, charging curves, money, wear;
+   the objective an exact algorithm claims must match it, and every
+   heuristic's plan goes through the same replay.
 2. **Cross-validation** on thousands of seeded random instances
    (`tests/test_crossval.py`, summarised in `tests/fuzz_report.md`): BLS =
    BLS-A\*; CFP = CFP-A\*; CFP ≤ BLS; Pareto extremes = BLS (time / cost);
@@ -564,6 +633,28 @@ exact planners trade speed for energy.
    objective never holding, monotonicity in the prices, and the brute force
    of item 3 with holds until every price change (on the smallest instances
    until every 5-minute step of the next 24 hours, Section 6).
+
+The random instances are seeded grids, random geometric graphs, mountain
+corridors and tiny digraphs with every vehicle, −15 … 40 °C, 1-3 speed
+levels, both objectives, static and time-dependent queues, stacked AC + DC
+chargers and 16 odd-but-legal edge cases.  Eleven invariants are checked:
+those of item 2 plus lossless JSON round trips and metamorphic relations
+such as relabelling, extra stations and more energy; the tariff suite checks
+its prices against an oracle written from the specification alone, and that
+dearer prices never lower the optimal cost.
+
+The suites found and fixed real bugs (`tests/fuzz_report.md` §5) - a Pareto
+front that kept a member 1 ulp faster but 6 EUR dearer, a lossy JSON round
+trip, a missed DC-then-AC double stop, an unsound 3-D dominance rule with
+time-dependent queues, a plan rebuilt from its stops that joined a queue
+1 ulp before a price change.  634 tests, 541 in the fast tier
+(`pytest -m "not slow"`), run on Python 3.10-3.13 in CI:
+
+```bash
+python -m pytest -m "not slow"                    # fast tier, a few minutes
+python -m pytest -m slow tests/test_crossval.py   # 3 200 random instances, ~40 min
+python -m pytest -m slow tests/test_crossval_tariffs.py   # 460 random tariff instances
+```
 
 ## References
 

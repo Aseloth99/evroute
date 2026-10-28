@@ -8,7 +8,7 @@ implementation*, so correctness and clarity come before speed and features.
 ```bash
 git clone https://github.com/Aseloth99/evroute.git
 cd evroute
-pip install -e ".[dev]"            # pytest + matplotlib + seaborn
+pip install -e ".[dev]"            # pytest + seaborn
 python -m pytest -m "not slow"     # fast tier, a few minutes
 ```
 
@@ -19,8 +19,8 @@ algorithm.
 
 ## Ground rules
 
-- **The core stays pure standard-library Python ≥ 3.10.** `matplotlib` and
-  `seaborn` are allowed only in `viz/figures.py`, `viz/style.py` and
+- **The core stays pure standard-library Python ≥ 3.10.** Charts are drawn
+  with `seaborn` only, and only in `viz/figures.py`, `viz/style.py` and
   `experiments/`, imported lazily; optional loaders such as `osmnx` are
   imported inside functions with a helpful error message.
 - **Fixed units** (`src/evroute/units.py`): m, s, kWh, kW, m/s, currency, SoC
@@ -29,6 +29,27 @@ algorithm.
   `random.Random(seed)`.
 - Type hints, docstrings for modules and public functions, small functions;
   match the style of the surrounding code.
+
+## Project structure
+
+```
+evroute/
+├── src/evroute/
+│   ├── units.py network.py vehicle.py energy.py   # model: units, graph, vehicles, physics
+│   ├── charging.py queueing.py scenario.py         # charging functions, Erlang-C queues, scenarios
+│   ├── plan.py evaluate.py search.py               # plans, independent evaluator, bounds
+│   ├── algorithms/      # naive, greedy, station_graph, genetic, labels (BLS), cfp, pareto
+│   ├── generators/      # basic grids, turkey, synthetic, osm, presets
+│   ├── data/            # Turkey places and roads (CSV)
+│   ├── robustness.py    # Monte Carlo reliability, safety-factor sweeps
+│   ├── viz/             # export.py + web/ (viewer), results.py (dashboard), figures.py + style.py (seaborn)
+│   ├── experiments/     # runner, plots, figures for the paper
+│   ├── server.py        # live planning server (http.server)
+│   └── cli.py           # `evroute` command
+├── tests/               # pytest suite + fuzz_report.md
+├── examples/            # quickstart.py, custom_network.py, viewer_demo.py
+└── docs/                # index, guide (EN/TR), model, algorithms, DEV_SPEC, PLAN.tr, demo/ (viewer + dashboard), img/
+```
 
 ## Adding or changing a planner
 
@@ -59,7 +80,7 @@ best possible report; the suite keeps such reproductions as
   explain the algorithms for newcomers; every number in them comes from the
   code or the READMEs, so update them when a quoted result changes.
 - Regenerate the static figures with `evroute gallery -o docs/img` and the
-  viewer screenshots with `python examples/viewer_demo.py --screenshots docs/img`
+  viewer screenshots and the GIF with `python examples/viewer_demo.py --screenshots docs/img`
   (Node.js + Playwright).
 - `README.md` and `README.tr.md` are translations of each other; please
   update both, or say in the pull request that the other one needs an update.

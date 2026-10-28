@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -383,9 +384,21 @@ def cmd_serve(args: argparse.Namespace) -> int:
     return 0
 
 
+def _figures_off_screen(*, required: bool = True) -> None:
+    """Commands that write figure files draw them off screen (the ``Agg``
+    backend, unless ``MPLBACKEND`` names another); with ``required``,
+    a missing seaborn is reported as a usage error."""
+    from .viz.style import has_seaborn
+
+    if required and not has_seaborn():
+        raise UsageError("figures need seaborn: pip install 'evroute[plot]'")
+    os.environ.setdefault("MPLBACKEND", "Agg")
+
+
 def cmd_gallery(args: argparse.Namespace) -> int:
     from .viz.figures import make_gallery
 
+    _figures_off_screen()
     paths = make_gallery(args.out, quick=args.quick)
     for p in paths or []:
         print(f"wrote {p}")
@@ -395,6 +408,7 @@ def cmd_gallery(args: argparse.Namespace) -> int:
 def cmd_figures(args: argparse.Namespace) -> int:
     from .experiments.figures import case_study_figures
 
+    _figures_off_screen()
     sc = _load_scenario(args)
     paths = case_study_figures(sc, Path(args.outdir), algorithms=_algorithms(args.algorithms))
     for p in paths:
@@ -421,6 +435,7 @@ def cmd_robustness(args: argparse.Namespace) -> int:
 def cmd_experiments(args: argparse.Namespace) -> int:
     from .experiments.runner import run_experiments
 
+    _figures_off_screen(required=False)  # without seaborn the experiments skip their figures
     run_experiments(args.names or None, out_dir=Path(args.out), quick=args.quick, panel=not args.no_panel, lang=args.lang)
     return 0
 
@@ -512,12 +527,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--open", action="store_true", help="open a browser tab")
     p.set_defaults(func=cmd_serve)
 
-    p = sub.add_parser("gallery", help="render the seaborn figure gallery (needs matplotlib + seaborn)")
+    p = sub.add_parser("gallery", help="render the figure gallery with seaborn (pip install evroute[plot])")
     p.add_argument("-o", "--out", default="docs/img")
     p.add_argument("--quick", action="store_true", help="fewer instances, faster")
     p.set_defaults(func=cmd_gallery)
 
-    p = sub.add_parser("figures", help="publication figures for one scenario")
+    p = sub.add_parser("figures", help="publication figures for one scenario (seaborn)")
     _scenario_options(p)
     p.add_argument("--outdir", default="figures")
     p.add_argument("--algorithms", default="all")

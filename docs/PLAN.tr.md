@@ -105,7 +105,7 @@ evroute/
 ├── src/evroute/          # çekirdek paket (saf Python)
 │   ├── algorithms/       # naive, greedy, station_graph, genetic, labels, cfp, pareto
 │   ├── generators/       # Türkiye ağı, sentetik ağlar, OSM yükleyici, hazır senaryolar
-│   ├── viz/              # web görüntüleyici, matplotlib figür/animasyon
+│   ├── viz/              # web görüntüleyici, seaborn figürleri
 │   ├── experiments/      # tekrar üretilebilir deneyler
 │   ├── robustness.py     # Monte Carlo
 │   ├── server.py         # canlı mod
@@ -120,7 +120,7 @@ evroute/
 1. ✅ Çekirdek model katmanı + bağımsız değerlendirici + testler
 2. ⏳ Algoritmalar (BLS, BLS-A*, CFP, Pareto, sezgiseller) + çapraz doğrulama
 3. ⏳ Türkiye veri seti + sentetik benchmark üreteçleri
-4. ⏳ Web görüntüleyici + animasyonlar + matplotlib figürleri
+4. ⏳ Web görüntüleyici + animasyonlar + statik figürler
 5. ⏳ Deneyler, etkileşimli sonuç paneli, seaborn grafikleri, dokümantasyon
 6. ⏳ Bağımsız inceleme turu (doğruluk, performans, tasarım), düzeltmeler
 7. 🔔 **En son: GitHub'da paylaşım** (ayrı depo önerisi, README, lisans, DOI)

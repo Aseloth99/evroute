@@ -8,7 +8,7 @@ Run everything::
 
 Each experiment writes into ``<out>/<id>/``: ``results.csv`` (one row per
 run), ``summary.json``, ``table.tex`` (booktabs) and figures (PDF + PNG) when
-matplotlib is available.  All randomness is seeded.
+seaborn is installed.  All randomness is seeded.
 """
 
 from __future__ import annotations
@@ -40,13 +40,11 @@ def _scenario(name: str, **overrides: Any):
     return get_scenario(name, **overrides)
 
 
-def _has_mpl() -> bool:
-    try:
-        import matplotlib  # noqa: F401
+def _can_plot() -> bool:
+    """``True`` if seaborn (which draws every figure) is installed."""
+    from ..viz.style import has_seaborn
 
-        return True
-    except Exception:
-        return False
+    return has_seaborn()
 
 
 # =============================================================== E1 cases
@@ -64,7 +62,7 @@ def exp_case_studies(out: Path, quick: bool) -> dict[str, Any]:
                 continue
             plans.append(p)
             rows.append(plan_row(p, case=case))
-        if _has_mpl():
+        if _can_plot():
             try:
                 from .figures import case_study_figures
 
@@ -125,7 +123,7 @@ def exp_scalability(out: Path, quick: bool) -> dict[str, Any]:
                 ss.append(sum(r["settled"] for r in sel) / len(sel))
         summary[a] = {"nodes": xs, "runtime_ms": ys, "settled": ss}
     write_json(out / "summary.json", summary)
-    if _has_mpl():
+    if _can_plot():
         plots.line_plot({a: (v["nodes"], v["runtime_ms"]) for a, v in summary.items()}, "nodes", "mean runtime [ms]",
                         out / "fig_runtime", logx=True, logy=True)
         plots.line_plot({a: (v["nodes"], v["settled"]) for a, v in summary.items()}, "nodes", "settled labels",
@@ -170,7 +168,7 @@ def exp_optimality_gap(out: Path, quick: bool) -> dict[str, Any]:
                     ["algorithm", "feasible", "mean gap [\\%]", "p95 gap [\\%]", "max gap [\\%]"],
                     "Optimality gap of heuristics with respect to the continuous optimum (CFP).", "tab:gap")
     )
-    if _has_mpl():
+    if _can_plot():
         plots.box_plot(groups, "gap to optimum [%]", out / "fig_gap")
     return summary
 
@@ -194,7 +192,7 @@ def exp_grid_resolution(out: Path, quick: bool) -> dict[str, Any]:
                 rows.append({**plan_row(p, case=case, step=step, targets=targets),
                              "gap_s": p.total_time_s - ref.total_time_s})
     write_csv(out / "results.csv", rows)
-    if _has_mpl() and rows:
+    if _can_plot() and rows:
         series = {}
         for case in cases:
             for targets in ("grid", "grid+breaks"):
@@ -218,7 +216,7 @@ def exp_temperature(out: Path, quick: bool) -> dict[str, Any]:
                 continue
             rows.append(plan_row(p, temperature_c=t, preconditioning=int(pre)))
     write_csv(out / "results.csv", rows)
-    if _has_mpl():
+    if _can_plot():
         series = {}
         for pre in (1, 0):
             sel = [r for r in rows if r["preconditioning"] == pre and r["feasible"]]
@@ -256,7 +254,7 @@ def exp_queue_awareness(out: Path, quick: bool) -> dict[str, Any]:
     write_csv(out / "results.csv", rows)
     summary = describe(r["saving_min"] for r in rows)
     write_json(out / "summary.json", summary)
-    if _has_mpl() and rows:
+    if _can_plot() and rows:
         series = {}
         for case in cases:
             sel = [r for r in rows if r["case"] == case]
@@ -279,7 +277,7 @@ def exp_pareto(out: Path, quick: bool) -> dict[str, Any]:
         rows = [plan_row(a, case=case) for a in alts]
         write_csv(out / f"{case}.csv", rows)
         res[case] = {"front_size": len(alts)}
-        if _has_mpl():
+        if _can_plot():
             plots.scatter_plot([r["time_min"] for r in rows], [r["money"] for r in rows], "trip time [min]",
                                f"charging cost [{sc.currency}]", out / f"fig_pareto_{case}",
                                c=[r["soh_pct"] * 1000 for r in rows], clabel="wear [m%SoH]")
@@ -296,7 +294,7 @@ def exp_robustness(out: Path, quick: bool) -> dict[str, Any]:
     factors = (1.0, 1.1, 1.2) if quick else (1.0, 1.05, 1.1, 1.15, 1.2, 1.3)
     rows = safety_sweep(sc, factors=factors, n=200 if quick else 2000, seed=0)
     write_csv(out / "results.csv", [dict(r) for r in rows])
-    if _has_mpl() and rows:
+    if _can_plot() and rows:
         xs = [r.get("safety_factor", r.get("factor")) for r in rows]
         plots.line_plot({"P(reserve breach)": (xs, [r.get("p_reserve_breach") for r in rows]),
                          "P(strand)": (xs, [r.get("p_strand") for r in rows])},
@@ -484,7 +482,7 @@ def exp_tariffs(out: Path, quick: bool) -> dict[str, Any]:
                               title=f"{case_title(case)} · {h:02d}:00")
         except Exception as exc:
             print(f"  ! viewer for {case}: {exc}")
-    if _has_mpl() and rows:
+    if _can_plot() and rows:
         for case in CASES[:2]:
             series = {}
             for name in names:
