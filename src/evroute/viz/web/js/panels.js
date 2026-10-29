@@ -12,11 +12,22 @@
   const I = EVR.i18n;
   const M = EVR.model;
 
+  /**
+   * A result its label budget stopped: an exact planner that ran into
+   * max_labels (stats.extra.status "limit": no route, or a route whose
+   * optimality is not proven) or a Pareto front that may be incomplete.
+   */
+  function budgetStopped(r) {
+    const ex = (r && r.stats && r.stats.extra) || {};
+    return ex.status === 'limit' || r.complete === false;
+  }
+
   function guaranteeBadge(r) {
     const g = r.exact || 'heuristic';
     const wrap = U.el('span', { class: 'badges' });
     wrap.appendChild(U.el('span', { class: `badge badge-${g}`, title: I.t(`g_${g}_title`), text: I.t(`g_${g}`) }));
     if (r.complete === false) wrap.appendChild(U.el('span', { class: 'badge badge-partial', title: I.t('partial_front'), text: I.t('g_partial') }));
+    else if (budgetStopped(r)) wrap.appendChild(U.el('span', { class: 'badge badge-partial', title: I.t('label_limit'), text: I.t('g_incomplete') }));
     return wrap;
   }
 
@@ -146,7 +157,7 @@
         vis,
         U.el('div', { class: 'algo-text' },
           U.el('div', { class: 'algo-name' }, U.el('span', { text: r.title }), guaranteeBadge(r)),
-          U.el('div', { class: 'algo-meta', text: r.feasible ? meta : `✕ ${r._strand ? I.t('stranded_at', { km: I.km(r._strand.dist, 0) }) : I.t('infeasible')}` })),
+          U.el('div', { class: 'algo-meta', text: r.feasible ? meta : budgetStopped(r) ? `⚠ ${I.t('label_limit')}` : `✕ ${r._strand ? I.t('stranded_at', { km: I.km(r._strand.dist, 0) }) : I.t('infeasible')}` })),
         U.el('div', { class: 'algo-time', text: r.feasible ? I.hm(r.total_time_s) : '—' }));
         li.addEventListener('click', () => app.select(ri, -1));
         li.addEventListener('keydown', (ev) => {
@@ -181,7 +192,8 @@
           U.el('span', { class: 'arrive', text: `${I.t('arrival')} ${I.clock(app.model.departure + r.total_time_s)}` })));
       } else {
         kids.push(U.el('div', { class: 'summary-hero' }, U.el('span', { class: 'big', text: '—' }),
-          U.el('span', { class: 'badge badge-bad', text: I.t('infeasible') })));
+          budgetStopped(r) ? U.el('span', { class: 'badge badge-partial', text: I.t('g_incomplete') })
+            : U.el('span', { class: 'badge badge-bad', text: I.t('infeasible') })));
       }
       kids.push(U.el('div', { class: 'summary-route', text: `${od} · ${I.t('departs')} ${I.clock(app.model.departure)}` }));
       if (r._ok) {
@@ -391,7 +403,9 @@
       }
       U.setChildren(this.el.kv, rows.flatMap(([k, val, label]) => [U.el('dt', { text: label || I.t(k) }), U.el('dd', { text: val, title: val })]));
       const credit = sc.meta && sc.meta.attribution;
-      const disc = [sc.meta && sc.meta.disclaimer, credit && I.t('data_credit', { c: credit })].filter(Boolean).join(' ');
+      const licence = sc.meta && sc.meta.licence;   // e.g. "ODbL 1.0 (data), MIT (code)" (OpenStreetMap data)
+      const disc = [sc.meta && sc.meta.disclaimer, credit && I.t('data_credit', { c: credit }),
+        licence && I.t('data_licence', { l: licence })].filter(Boolean).join(' ');
       this.el.disclaimer.hidden = !disc;
       this.el.disclaimer.textContent = disc || '';
     }
@@ -455,5 +469,5 @@
     ];
   }
 
-  EVR.panels = { Panels, guaranteeBadge, tariffText, tariffFactors };
+  EVR.panels = { Panels, guaranteeBadge, budgetStopped, tariffText, tariffFactors };
 })(window.EVR = window.EVR || {});

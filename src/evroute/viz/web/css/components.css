@@ -307,6 +307,26 @@ input[type="range"]:focus-visible::-webkit-slider-thumb { box-shadow: var(--focu
 #algo-picks { display: grid; grid-template-columns: 1fr 1fr; gap: 0 8px; }
 #algo-picks .check { font-size: 12.5px; padding: 3px 0; }
 .form-error { margin-top: 10px; color: var(--bad); font-size: 12.5px; }
+/* a run stopped by a web budget (web site only): what happened and the local command */
+.form-note {
+  margin-top: 10px; padding: 9px 11px;
+  border-radius: var(--radius-xs);
+  background: var(--warn-soft);
+  color: var(--text-2);
+  font-size: 12px; line-height: 1.45;
+}
+.form-note p { margin: 0 0 6px; }
+.form-note b { color: var(--warn); }
+.form-note .cmd {
+  margin: 0; padding: 7px 9px;
+  border-radius: 7px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  font: 11px/1.45 var(--mono);
+  color: var(--text);
+  white-space: pre-wrap; overflow-wrap: anywhere;
+  user-select: all;
+}
 .badge-live { background: var(--ok-soft); color: var(--ok); }
 .live-card .toggles { margin: 2px 0 4px; }
 
@@ -590,6 +610,43 @@ input[type="range"]:focus-visible::-webkit-slider-thumb { box-shadow: var(--focu
   -webkit-backdrop-filter: blur(2px); backdrop-filter: blur(2px);
   font-weight: 650;
 }
+
+/* first-visit loading screen of the in-browser planner (web site only) */
+.boot {
+  position: absolute; inset: 0; z-index: 6;
+  display: grid; place-items: center;
+  padding: 16px;
+  background: color-mix(in srgb, var(--bg) 40%, transparent);
+  -webkit-backdrop-filter: blur(3px); backdrop-filter: blur(3px);
+}
+.boot[hidden] { display: none; }
+.boot-card {
+  width: min(420px, 100%);
+  padding: 18px 20px 16px;
+  border-radius: var(--radius);
+}
+.boot-head { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; }
+.boot-head .brand-mark { width: 32px; height: 32px; border-radius: 9px; }
+.boot-head .brand-mark svg { width: 18px; height: 18px; }
+.boot-head h2 { font-size: 16px; font-weight: 700; letter-spacing: -.01em; }
+.boot-lead { margin: 0 0 12px; color: var(--text-2); font-size: 12.5px; line-height: 1.5; }
+.boot-steps { list-style: none; margin: 0; padding: 0; display: grid; gap: 9px; }
+.boot-steps li {
+  display: grid; grid-template-columns: 14px minmax(0, 1fr) auto; align-items: center; gap: 4px 9px;
+  font-size: 13px; color: var(--text-3);
+}
+.boot-steps li[data-state="active"], .boot-steps li[data-state="done"] { color: var(--text); }
+.boot-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.boot-val { font-variant-numeric: tabular-nums; font-size: 12px; color: var(--text-2); white-space: nowrap; }
+.boot-dot { width: 10px; height: 10px; border-radius: 50%; border: 2px solid var(--border-strong); }
+.boot-steps li[data-state="active"] .boot-dot { border-color: var(--accent); border-right-color: transparent; animation: spin .8s linear infinite; }
+.boot-steps li[data-state="done"] .boot-dot { border-color: var(--ok); background: var(--ok); }
+.boot-bar { grid-column: 2 / 4; height: 4px; border-radius: 999px; background: var(--surface-3); overflow: hidden; }
+.boot-bar i { display: block; height: 100%; width: 0; border-radius: inherit; background: var(--accent); transition: width .2s var(--ease); }
+.boot-steps li[data-state="done"] .boot-bar i { background: var(--ok); }
+.boot-steps li[data-state="todo"] .boot-bar { opacity: .5; }
+.boot-card .form-error { margin: 12px 0 0; }
+.boot-card #boot-retry { margin-top: 10px; }
 
 .toast {
   position: absolute; left: 50%; top: 14px; z-index: 7;

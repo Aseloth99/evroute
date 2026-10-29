@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="en" data-lang="en" data-title-tr="EVRoute · Elektrikli araçlar için kesin rota planlama" data-title-en="EVRoute · Exact route planning for electric vehicles">
+<head>
+{{> head}}
+<title>EVRoute · Exact route planning for electric vehicles</title>
+<meta name="description" content="EVRoute: exact, battery-, queue- and degradation-aware route planning for electric vehicles with charging stations. Pure Python, live demo in the browser.">
+</head>
+<body>
+{{> header}}
+
+<main id="main">
+  <div class="wrap">
+    <section class="hero">
+      <span class="eyebrow">v{{version}} · <span lang="tr">saf Python · MIT</span><span lang="en">pure Python · MIT</span></span>
+      <h1><span lang="tr">Elektrikli araçlar için kesin rota planlama</span><span lang="en">Exact route planning for electric vehicles</span></h1>
+      <p class="lead">
+        <span lang="tr">Nerede, ne kadar ve hangi güçte şarj edileceği, ne zaman yola çıkılacağı: doğrusal olmayan şarj, kuyruklar, arazi, soğuk, batarya yıpranması ve şarj tarifeleriyle, optimalliği kanıtlanmış algoritmalarla hesaplanır ve bağımsız bir değerlendiriciyle doğrulanır.</span>
+        <span lang="en">Where to charge, how much, at what speed and when to leave: with nonlinear charging, queues, terrain, cold, battery wear and charging tariffs, computed by provably optimal algorithms and checked by an independent evaluator.</span>
+      </p>
+      <p class="facts"><span lang="tr">Python ≥ 3.10 · çalışma zamanı bağımlılığı yok · 9 planlayıcı · Türkçe/İngilizce görüntüleyici</span><span lang="en">Python ≥ 3.10 · zero runtime dependencies · 9 planners · Turkish/English viewer</span></p>
+      <div class="cta">
+        <a class="btn btn-primary" href="live/" data-viewer="live/"><span lang="tr">Canlı dene</span><span lang="en">Try it live</span>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg></a>
+        <a class="btn" href="examples/"><span lang="tr">Örnekler</span><span lang="en">Examples</span></a>
+        <a class="btn" href="{{repo}}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 19c-4 1.5-4-2-6-2.5m12 5v-3.5c0-1 .1-1.4-.5-2 2.8-.3 5.5-1.4 5.5-6a4.6 4.6 0 0 0-1.3-3.2 4.2 4.2 0 0 0-.1-3.2s-1.1-.3-3.5 1.3a12 12 0 0 0-6.2 0C6.5 2.8 5.4 3.1 5.4 3.1a4.2 4.2 0 0 0-.1 3.2A4.6 4.6 0 0 0 4 9.5c0 4.6 2.7 5.7 5.5 6-.6.6-.6 1.2-.5 2V21"/></svg>GitHub</a>
+      </div>
+      <figure class="demo">
+        <img src="assets/demo.gif" width="960" height="600" alt="The EVRoute viewer: the optimal plan drives Karaman → İstanbul with two charging stops, then every algorithm races on the same clock">
+        <figcaption><span lang="tr">En iyi plan Karaman → İstanbul yolunu iki şarj duraklamasıyla sürer; ardından bütün algoritmalar aynı saatle yarışır.</span><span lang="en">The optimal plan drives Karaman → İstanbul with two charging stops; then every algorithm races on the same clock.</span></figcaption>
+      </figure>
+    </section>
+
+    <section aria-labelledby="h-what">
+      <h2 id="h-what"><span lang="tr">Ne yapar?</span><span lang="en">What it does</span></h2>
+      <p class="sub"><span lang="tr">Gerçek bir yolculuğun bütün etkileri tek bir kesin modelde: sezgiseller, öğrenilmiş modeller ve ticari planlayıcılar için bir başvuru uygulaması.</span><span lang="en">Every effect of a real trip in one exact model: a reference implementation that heuristics, learned models and commercial planners can be measured against.</span></p>
+      <div class="grid">
+        <div class="card"><h3><span lang="tr">9 planlayıcı, tek arayüz</span><span lang="en">9 planners, one API</span></h3>
+          <p><span lang="tr">Bataryayı görmeyen en hızlı yoldan araç içi navigasyon sezgiseline; kesin etiket belirleme (BLS, BLS-A*), sürekli şarjla kesin CFP ve CFP-A*, süre, ücret ve yıpranma üzerinde Pareto araması.</span><span lang="en">From a battery-blind fastest path and an in-car navigator heuristic to exact label setting (BLS, BLS-A*), exact continuous charging (CFP, CFP-A*) and a Pareto search over time, money and wear.</span></p></div>
+        <div class="card"><h3><span lang="tr">Kesin ve doğrulanmış</span><span lang="en">Exact and verified</span></h3>
+          <p><span lang="tr">Optimallik kanıtları; her plan bağımsız bir değerlendiriciyle yeniden oynatılır, kaba kuvvet ve analitik kâhinlerle çapraz denetlenir.</span><span lang="en">Optimality proofs; every plan is replayed by an independent evaluator and cross-checked against brute force and analytic oracles.</span></p></div>
+        <div class="card"><h3><span lang="tr">Tek bir en iyi rota yok</span><span lang="en">No single best route</span></h3>
+          <p><span lang="tr">%80 kuralı ve puant saatleriyle şarj tarifeleri; daha ucuz fiyatı beklemenin ne zaman kazandırdığını kesin olarak planlar.</span><span lang="en">Charging tariffs with the 80 % rule and peak hours; it plans exactly when waiting for a cheaper price pays.</span></p></div>
+        <div class="card"><h3><span lang="tr">Türkiye vaka çalışmaları</span><span lang="en">Turkey case studies</span></h3>
+          <p><span lang="tr">Sentetik istasyonlu yaklaşık bir ağ ve gerçek veri: OpenStreetMap yolları, SRTM rakımları ve OSM'deki 711 şarj istasyonu.</span><span lang="en">An approximate network with synthetic chargers, and real data: OpenStreetMap roads, SRTM elevations and the 711 charging stations mapped in OSM.</span></p></div>
+      </div>
+    </section>
+
+    <section id="live" aria-labelledby="h-live">
+      <div class="card live-card">
+        <div>
+          <span class="tag tag-ok"><span lang="tr">canlı</span><span lang="en">live</span></span>
+          <h2 id="h-live"><span lang="tr">Tarayıcınızda planlayın</span><span lang="en">Plan in your browser</span></h2>
+          <p class="sub" style="margin-bottom:0"><span lang="tr">Görüntüleyicinin canlı kipi tamamen tarayıcınızda çalışır: bir Web Worker içinde Pyodide ile Python, <code>evroute serve</code> ile aynı kod ve komut satırıyla aynı sonuçlar.</span><span lang="en">The viewer's live mode runs entirely in your browser: Python via Pyodide in a Web Worker, the same code as <code>evroute serve</code> and the same results as the command line.</span></p>
+          <ul>
+            <li><span lang="tr">Sentetik ağlar: yaklaşık Türkiye ağı (8 yolculuk), koridor, sentetik ülkeler, rastgele geometrik ağ, ızgara</span><span lang="en">Synthetic networks: the approximate Turkey network (8 trips), corridor, synthetic countries, random geometric network, grid</span></li>
+            <li><span lang="tr">Dokuz planlayıcının hepsi, tarayıcı için etiket ve zaman bütçeleriyle</span><span lang="en">All nine planners, with label and time budgets for the browser</span></li>
+            <li><span lang="tr">İlk ziyarette bir kez yaklaşık {{download_mb_tr}} indirilir, sonra önbellekten gelir</span><span lang="en">The first visit downloads about {{download_mb_en}} once, later visits use the cache</span></li>
+          </ul>
+          <p class="note"><span lang="tr">Gerçek veri (OpenStreetMap) ağı canlı planlanmaz: onun için paketi kurun.</span><span lang="en">The real-data (OpenStreetMap) network is not planned live: install the package for it.</span></p>
+        </div>
+        <div class="side">
+          <a class="btn btn-primary" href="live/" data-viewer="live/"><span lang="tr">Canlı planlayıcıyı aç</span><span lang="en">Open the live planner</span></a>
+          <p class="note" style="margin:0;text-align:center">Pyodide {{pyodide}} · jsDelivr</p>
+        </div>
+      </div>
+    </section>
+
+    <section id="examples" aria-labelledby="h-examples">
+      <h2 id="h-examples"><span lang="tr">Örnekler</span><span lang="en">Examples</span></h2>
+      <p class="sub"><span lang="tr">Önceden hesaplanmış sayfalar, hemen açılır: hiçbir şey hesaplanmaz.</span><span lang="en">Prebuilt pages that open at once: nothing is computed.</span></p>
+      <div class="grid">
+        <a class="card" href="examples/karaman-istanbul.html" data-viewer="examples/karaman-istanbul.html">
+          <span class="tag tag-accent"><span lang="tr">sentetik</span><span lang="en">synthetic</span></span>
+          <h3>Karaman → İstanbul</h3>
+          <p><span lang="tr">Yaklaşık Türkiye ağında dokuz planlayıcı: yolculuk, yarış ve arama tekrarı animasyonu.</span><span lang="en">All nine planners on the approximate Turkey network: trip, race and search-replay animation.</span></p>
+          <span class="go"><span lang="tr">Aç →</span><span lang="en">Open →</span></span></a>
+        <a class="card" href="examples/tariff.html" data-viewer="examples/tariff.html">
+          <span class="tag tag-warn"><span lang="tr">tarife</span><span lang="en">tariff</span></span>
+          <h3><span lang="tr">Şarj tarifesi</span><span lang="en">Charging tariff</span></h3>
+          <p><span lang="tr">Aynı yolculuk 14:00'te, örnek tarifeyle: maliyet açısından en iyi plan puant dışı fiyatı bekler.</span><span lang="en">The same trip at 14:00 under the demonstration tariff: the cost-optimal plan waits for the off-peak price.</span></p>
+          <span class="go"><span lang="tr">Aç →</span><span lang="en">Open →</span></span></a>
+        <a class="card" href="examples/osm-karaman-istanbul.html" data-viewer="examples/osm-karaman-istanbul.html">
+          <span class="tag tag-ok"><span lang="tr">gerçek veri</span><span lang="en">real data</span></span>
+          <h3><span lang="tr">OpenStreetMap ağında</span><span lang="en">On OpenStreetMap</span></h3>
+          <p><span lang="tr">Karaman → İstanbul, OSM yolları ve OSM şarj istasyonlarıyla. © OpenStreetMap katkıcıları, ODbL 1.0.</span><span lang="en">Karaman → İstanbul on OSM roads with the OSM charging stations. © OpenStreetMap contributors, ODbL 1.0.</span></p>
+          <span class="go"><span lang="tr">Aç →</span><span lang="en">Open →</span></span></a>
+        <a class="card" href="examples/results.html">
+          <span class="tag"><span lang="tr">deneyler</span><span lang="en">experiments</span></span>
+          <h3><span lang="tr">Sonuç panosu</span><span lang="en">Results dashboard</span></h3>
+          <p><span lang="tr">Makalenin bütün deneyleri tek sayfada: bulgular, kesinlik denetimleri, grafikler, CSV indirmeleri.</span><span lang="en">Every experiment of the paper on one page: findings, exactness checks, charts, CSV downloads.</span></p>
+          <span class="go"><span lang="tr">Aç →</span><span lang="en">Open →</span></span></a>
+      </div>
+    </section>
+
+    <section id="docs" aria-labelledby="h-docs">
+      <h2 id="h-docs"><span lang="tr">Belgeler</span><span lang="en">Documentation</span></h2>
+      <p class="sub"><span lang="tr">GitHub'daki belgeler.</span><span lang="en">The documentation on GitHub.</span></p>
+      <div class="docs">
+        <a lang="en" href="{{repo}}#readme">README</a>
+        <a lang="tr" href="{{repo}}/blob/main/README.tr.md">BENİOKU</a>
+        <a lang="en" href="{{repo}}/blob/main/docs/guide.md">Guide <small>for newcomers</small></a>
+        <a lang="tr" href="{{repo}}/blob/main/docs/guide.tr.md">Rehber <small>yeni başlayanlar için</small></a>
+        <a lang="en" href="{{repo}}/blob/main/docs/real-data.md">Real-data case study</a>
+        <a lang="tr" href="{{repo}}/blob/main/docs/real-data.tr.md">Gerçek veri vaka çalışması</a>
+        <a href="{{repo}}/blob/main/docs/model.md"><span lang="tr">Model <small>İngilizce</small></span><span lang="en">Model</span></a>
+        <a href="{{repo}}/blob/main/docs/algorithms.md"><span lang="tr">Algoritmalar ve kanıtlar <small>İngilizce</small></span><span lang="en">Algorithms &amp; proofs</span></a>
+        <a href="{{repo}}/blob/main/docs/index.md"><span lang="tr">Belge dizini <small>İngilizce</small></span><span lang="en">Documentation index</span></a>
+      </div>
+    </section>
+
+    <section id="cite" aria-labelledby="h-cite">
+      <div class="two">
+        <div class="card">
+          <h3 id="h-install"><span lang="tr">Kurulum</span><span lang="en">Install</span></h3>
+          <p><span lang="tr">Python ≥ 3.10, bağımlılık yok. Bütün komutlar ve seçenekler: <a href="{{repo}}#quick-start">README</a>.</span><span lang="en">Python ≥ 3.10, no dependencies. Every command and option: <a href="{{repo}}#quick-start">README</a>.</span></p>
+<pre class="code">pip install git+{{repo}}
+evroute plan turkey-karaman-istanbul
+evroute serve --open</pre>
+          <p class="note"><a href="{{repo}}"><span lang="tr">Depo</span><span lang="en">Repository</span></a> · <a href="{{repo}}/releases"><span lang="tr">Sürümler</span><span lang="en">Releases</span></a></p>
+        </div>
+        <div class="card">
+          <h3 id="h-cite"><span lang="tr">Atıf</span><span lang="en">How to cite</span></h3>
+          <p><span lang="tr">EVRoute araştırmanıza yardımcı olduysa lütfen atıf yapın (<a href="{{repo}}/blob/main/CITATION.cff">CITATION.cff</a>):</span><span lang="en">If EVRoute helps your research, please cite it (<a href="{{repo}}/blob/main/CITATION.cff">CITATION.cff</a>):</span></p>
+<pre class="code">@software{acik_evroute_2026,
+  author  = {Açık, Mustafa},
+  title   = {{EVRoute}: exact, battery-, queue- and
+             degradation-aware route planning for
+             electric vehicles with charging stations},
+  version = {{{version}}},
+  year    = {2026},
+  url     = {{{repo}}}
+}</pre>
+        </div>
+      </div>
+    </section>
+  </div>
+</main>
+
+{{> footer}}
+</body>
+</html>

@@ -13,3 +13,5 @@ viewer_demo.html
 /figures/
 /results/
 /results-ci/
+# output of tools/build_site.py (the web site)
+/_site/

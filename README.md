@@ -9,7 +9,7 @@
 *Where to charge, how much, at what speed and when to leave - computed with provably optimal algorithms, checked by an independent evaluator, and animated in your browser.*
 
 Pure Python ≥ 3.10 · zero runtime dependencies · MIT licence<br>
-**English** · [Türkçe](README.tr.md) · [Documentation](docs/index.md) · [Guide](docs/guide.md) · [Model](docs/model.md) · [Algorithms & proofs](docs/algorithms.md)
+**English** · [Türkçe](README.tr.md) · [**Live demo**](https://aseloth99.github.io/evroute/live/?lang=en) · [Documentation](docs/index.md) · [Guide](docs/guide.md) · [Model](docs/model.md) · [Algorithms & proofs](docs/algorithms.md)
 
 </div>
 
@@ -98,6 +98,8 @@ effects: [`docs/model.md`](docs/model.md#at-a-glance).
 </details>
 
 ## Quick start
+
+To try it without installing anything, open the [live demo](https://aseloth99.github.io/evroute/live/?lang=en): it plans in your browser.
 
 ```bash
 git clone https://github.com/Aseloth99/evroute.git
@@ -364,7 +366,7 @@ Every plan of every planner is replayed by an **independent evaluator**; a
 seeded **cross-validation suite** checks eleven invariants against brute
 force, analytic oracles, metamorphic relations and local search, also under
 random charging tariffs ([`tests/fuzz_report.md`](tests/fuzz_report.md)).
-711 tests, 608 in the fast tier, run on Python 3.10-3.13 in CI
+726 tests, 623 in the fast tier, run on Python 3.10-3.13 in CI
 ([details](docs/algorithms.md#8-how-correctness-is-verified)):
 
 ```bash
@@ -382,8 +384,8 @@ python -m pytest -m "not slow"   # fast tier, a few minutes
 - [Algorithms & proofs](docs/algorithms.md) - correctness arguments and references
 - [Documentation index](docs/index.md) - command line, Python API, viewer,
   live server, experiments, scenarios and data, tariffs, FAQ, roadmap
-- Demo pages (one offline HTML file each): [viewer](docs/demo/index.html),
-  [tariff viewer](docs/demo/tariff.html), [results dashboard](docs/demo/results.html)
+- [Web site](https://aseloth99.github.io/evroute/): the live planner in your browser and prebuilt
+  [examples](https://aseloth99.github.io/evroute/examples/) (viewer, tariff viewer, real data, results dashboard)
 - [Contributing](CONTRIBUTING.md) - set-up, project structure, ground rules
 
 ## Citation

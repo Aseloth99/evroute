@@ -290,6 +290,24 @@ the preset's own tariff) and answers with `results_payload(...)`:
 `Tariff()`, `station_tariffs` (per station, in station order, the `peak_s`
 and `price_factors` above).
 
+The logic behind the four endpoints is HTTP-free: `PlanningService` (presets
+on offer, scenario cache, planner `options`) and `api_call(service, endpoint,
+request) -> (status, answer)` / `api_call_json` (the same with JSON text).
+`live.js` reaches it through a *transport*: `HttpTransport` (`evroute
+serve`) or, on the web site, `WorkerTransport`, which talks to a Web Worker
+(`site/worker.js`) running EVRoute under Pyodide.  The web site's live page
+carries a `"worker"` block in its payload (`tools/build_site.py`): `script`,
+`pyodide` (pinned CDN index URL) and `pyodide_version`, `wheel` (site-relative
+path), `service` (the `PlanningService` keyword arguments, with the browser's
+label budgets as `options`), `time_budget_s`, `download_bytes`, `sizes` and
+`install`.  Messages: page → worker `{type: "init", config}`, `{type: "call",
+id, endpoint, args}`; worker → page `{type: "progress", phase, loaded,
+total}`, `{type: "ready", ...}`, `{type: "failed", message}`, `{type:
+"reply", id, status, body, fatal}` (`args` and `body` are JSON text).  The
+page plans one algorithm per request and terminates and restarts the worker
+when a planner runs over `time_budget_s`; a result whose `stats.extra.status`
+is `"limit"` or whose `complete` is `false` is shown as possibly incomplete.
+
 ## 4. Testing expectations
 
 * Every module gets `tests/test_<module>.py`.

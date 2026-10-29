@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en" data-lang="en" data-title-tr="Örnekler · EVRoute" data-title-en="Examples · EVRoute">
+<head>
+{{> head}}
+<title>Examples · EVRoute</title>
+<meta name="description" content="Prebuilt EVRoute viewer pages: Karaman → İstanbul on the approximate Turkey network, under a charging tariff and on OpenStreetMap data, and the results dashboard.">
+</head>
+<body>
+{{> header}}
+
+<main id="main">
+  <div class="wrap">
+    <section class="page-head">
+      <h1><span lang="tr">Örnekler</span><span lang="en">Examples</span></h1>
+      <p><span lang="tr">Önceden hesaplanmış sayfalar: her biri tek bir çevrimdışı HTML dosyası, açılınca hiçbir şey hesaplanmaz. Kendi yolculuğunuz için <a href="../live/" data-viewer="../live/">canlı planlayıcı</a> ya da <code>evroute viz SENARYO -o trip.html</code>.</span><span lang="en">Prebuilt pages: each is one offline HTML file, nothing is computed when it opens. For your own trip: the <a href="../live/" data-viewer="../live/">live planner</a> or <code>evroute viz SCENARIO -o trip.html</code>.</span></p>
+    </section>
+    <section>
+      <div class="grid">
+        <a class="card ex-card" href="karaman-istanbul.html" data-viewer="karaman-istanbul.html">
+          <span class="tag tag-accent"><span lang="tr">sentetik</span><span lang="en">synthetic</span></span>
+          <h3>Karaman → İstanbul</h3>
+          <p><span lang="tr">747 km, 85 kWh'lik C-SUV, 08:00'de %80 ile yola çıkar. Yaklaşık Türkiye ağında dokuz planlayıcı: yolculuk, yarış ve arama tekrarı.</span><span lang="en">747 km, an 85 kWh C-SUV leaving at 08:00 with 80 %. All nine planners on the approximate Turkey network: trip, race and search replay.</span></p>
+          <p class="meta"><code>evroute viz turkey-karaman-istanbul</code> · {{size_karaman}}</p>
+          <span class="go"><span lang="tr">Aç →</span><span lang="en">Open →</span></span></a>
+        <a class="card ex-card" href="tariff.html" data-viewer="tariff.html">
+          <span class="tag tag-warn"><span lang="tr">tarife</span><span lang="en">tariff</span></span>
+          <h3><span lang="tr">Şarj tarifesi</span><span lang="en">Charging tariff</span></h3>
+          <p><span lang="tr">Aynı yolculuk 14:00'te, örnek tarifeyle (%80 üstü ×1,3, 16:00-20:00 puant), maliyet amacıyla ve süre-ücret Pareto cephesiyle.</span><span lang="en">The same trip at 14:00 under the demonstration tariff (×1.3 above 80 %, 16:00-20:00 peak), cost objective, with the time-money Pareto front.</span></p>
+          <p class="meta"><code>evroute viz turkey-karaman-istanbul-tariff --objective cost --step 0.05</code> · {{size_tariff}}</p>
+          <span class="go"><span lang="tr">Aç →</span><span lang="en">Open →</span></span></a>
+        <a class="card ex-card" href="osm-karaman-istanbul.html" data-viewer="osm-karaman-istanbul.html">
+          <span class="tag tag-ok"><span lang="tr">gerçek veri</span><span lang="en">real data</span></span>
+          <h3><span lang="tr">OpenStreetMap ağında</span><span lang="en">On OpenStreetMap</span></h3>
+          <p><span lang="tr">Karaman → İstanbul, 44 673 düğümlü OSM yol ağında, SRTM rakımları ve OSM'deki şarj istasyonlarıyla.</span><span lang="en">Karaman → İstanbul on the 44 673-node OSM road network with SRTM elevations and the charging stations mapped in OSM.</span></p>
+          <p class="meta"><code>evroute viz turkey-osm-karaman-istanbul</code> · {{size_osm}}</p>
+          <p class="meta"><span lang="tr">Veri © OpenStreetMap katkıcıları, <a href="https://opendatacommons.org/licenses/odbl/1-0/">Open Database License (ODbL 1.0)</a> ile; rakımlar SRTM (NASA/USGS).</span><span lang="en">Data © OpenStreetMap contributors, available under the <a href="https://opendatacommons.org/licenses/odbl/1-0/">Open Database License (ODbL 1.0)</a>; elevations SRTM (NASA/USGS).</span></p>
+          <span class="go"><span lang="tr">Aç →</span><span lang="en">Open →</span></span></a>
+        <a class="card ex-card" href="results.html">
+          <span class="tag"><span lang="tr">deneyler</span><span lang="en">experiments</span></span>
+          <h3><span lang="tr">Sonuç panosu</span><span lang="en">Results dashboard</span></h3>
+          <p><span lang="tr">On iki deneyin tam çalıştırması: hesaplanmış bulgular, kesinlik denetimleri, grafikler, tablolar ve CSV indirmeleri.</span><span lang="en">A full run of all twelve experiments: computed findings, exactness checks, charts, tables and CSV downloads.</span></p>
+          <p class="meta"><code>evroute experiments -o results/</code> · {{size_results}}</p>
+          <span class="go"><span lang="tr">Aç →</span><span lang="en">Open →</span></span></a>
+      </div>
+      <p class="note"><span lang="tr">Yaklaşık Türkiye ağı ve istasyonları sentetiktir, seyir için değildir. Gerçek veri ağı © OpenStreetMap katkıcıları (ODbL 1.0).</span><span lang="en">The approximate Turkey network and its stations are synthetic, not for navigation. Real-data network © OpenStreetMap contributors (ODbL 1.0).</span></p>
+    </section>
+  </div>
+</main>
+
+{{> footer}}
+</body>
+</html>

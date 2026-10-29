@@ -4,7 +4,9 @@ EVRoute plans electric-vehicle trips with charging stops: exact algorithms
 for a model that includes nonlinear charging, partial charging, queues,
 terrain and regeneration, temperature, battery wear and uncertainty.  This
 page is the map of the documentation; the [README](../README.md)
-([Türkçe](../README.tr.md)) is the tour.
+([Türkçe](../README.tr.md)) is the tour.  The project web site,
+[aseloth99.github.io/evroute/](https://aseloth99.github.io/evroute/), has a [live planner](https://aseloth99.github.io/evroute/live/)
+that runs in your browser and prebuilt [examples](https://aseloth99.github.io/evroute/examples/).
 
 | document | what is in it |
 |---|---|
@@ -217,6 +219,25 @@ station graph take minutes there.  The server uses only the standard library
 `GET /api/scenarios`, `GET /api/scenario?name=...`, `POST /api/plan`
 (documented in [`server.py`](../src/evroute/server.py)).  It binds to
 `127.0.0.1` by default; it is a research tool, not a hardened web service.
+
+**In the browser.**  The [live planner of the web site](https://aseloth99.github.io/evroute/live/) is the
+same page without a server: EVRoute runs in the visitor's browser, in a Web
+Worker under [Pyodide](https://pyodide.org) 0.29.5 (Python 3.13, loaded once
+from the jsDelivr CDN, about 6 MB; later visits use the browser cache), and
+answers the page through the same functions as `evroute serve`
+(`evroute.server.api_call_json`), so a plan is the one `evroute plan`
+computes.  It offers the synthetic presets only -- the approximate Turkey
+network, `corridor`, the synthetic countries up to `country-medium`,
+`random-geometric`, `grid-small`; the real-data network is not planned live
+-- and all nine planners with browser budgets: at most 1.5 million labels for
+BLS / BLS-A\*, 1 million for CFP / CFP-A\* and the Pareto search, and 60 s
+per planner (on `country-medium` only BLS-A\* and CFP-A\* are ticked at first:
+greedy and the station graph take tens of seconds there in a browser).  A run
+stopped by a budget is marked *possibly incomplete*, with the commands that
+repeat it locally.  `python
+tools/build_site.py -o _site` builds the whole site (landing page, live
+planner, examples); `.github/workflows/pages.yml` deploys it on every push to
+`main`.
 
 ## Experiments and figures
 
@@ -655,6 +676,5 @@ and incomplete charger coverage - see [`real-data.md`](real-data.md).
   instead of through a safety factor.
 - Live data: real-time charger availability and prices, traffic speeds.
 - Fleets and multi-day trips: overnight AC charging, driver breaks.
-- A browser-only build (Pyodide) of the live planner for GitHub Pages.
 
 Contributions are welcome - see [`CONTRIBUTING.md`](../CONTRIBUTING.md).

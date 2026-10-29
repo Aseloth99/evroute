@@ -47,7 +47,9 @@ evroute/
 │   ├── server.py        # live planning server (http.server)
 │   └── cli.py           # `evroute` command
 ├── tests/               # pytest suite + fuzz_report.md
-├── tools/               # build_osm_turkey.py: rebuilds data/osm_turkey from OpenStreetMap
+├── tools/               # build_osm_turkey.py: rebuilds data/osm_turkey from OpenStreetMap;
+│                        # build_site.py: builds the web site (GitHub Pages, .github/workflows/pages.yml)
+├── site/                # web site sources: landing and examples pages, worker.js (EVRoute under Pyodide)
 ├── examples/            # quickstart.py, custom_network.py, viewer_demo.py
 └── docs/                # index, guide (EN/TR), real-data (EN/TR), model, algorithms, DEV_SPEC, PLAN.tr, demo/ (viewer + dashboard), img/
 ```

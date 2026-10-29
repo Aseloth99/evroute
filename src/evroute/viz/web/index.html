@@ -152,6 +152,7 @@
         <kbd>⏎</kbd>
       </button>
       <p class="form-error" id="plan-error" role="alert" hidden></p>
+      <div class="form-note" id="plan-note" role="status" hidden></div>
     </section>
 
     <section class="card" id="algo-card">
@@ -227,7 +228,25 @@
     </div>
 
     <div class="map-tip" id="map-tip" role="tooltip" hidden></div>
-    <div class="map-busy" id="map-busy" hidden><span class="spinner spinner-lg"></span><span data-i18n="planning">Planlanıyor…</span></div>
+    <div class="map-busy" id="map-busy" hidden><span class="spinner spinner-lg"></span><span id="map-busy-text" data-i18n="planning">Planlanıyor…</span></div>
+
+    <!-- in-browser planner (web site only): first-visit loading screen -->
+    <div class="boot" id="boot" hidden>
+      <div class="boot-card glass" role="status" aria-live="polite" aria-labelledby="boot-title">
+        <div class="boot-head">
+          <div class="brand-mark" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M13.2 2 4.5 13.4h6.1L9.2 22l9.3-12.6h-6.3z"/></svg></div>
+          <h2 id="boot-title" data-i18n="boot_title">Planlayıcı tarayıcınızda</h2>
+        </div>
+        <p class="boot-lead" id="boot-lead"></p>
+        <ol class="boot-steps">
+          <li data-step="download" data-state="active"><span class="boot-dot" aria-hidden="true"></span><span class="boot-label" data-i18n="boot_download">Python indiriliyor</span><span class="boot-val"></span><span class="boot-bar" aria-hidden="true"><i></i></span></li>
+          <li data-step="install" data-state="todo"><span class="boot-dot" aria-hidden="true"></span><span class="boot-label" data-i18n="boot_install">EVRoute kuruluyor</span><span class="boot-val"></span><span class="boot-bar" aria-hidden="true"><i></i></span></li>
+          <li data-step="scenario" data-state="todo"><span class="boot-dot" aria-hidden="true"></span><span class="boot-label" data-i18n="boot_scenario">Senaryo yükleniyor</span><span class="boot-val"></span><span class="boot-bar" aria-hidden="true"><i></i></span></li>
+        </ol>
+        <p class="form-error" id="boot-error" role="alert" hidden></p>
+        <button type="button" class="btn btn-primary" id="boot-retry" data-i18n="boot_retry" hidden>Tekrar dene</button>
+      </div>
+    </div>
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
     <div class="playbar glass" id="playbar" hidden>

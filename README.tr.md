@@ -9,7 +9,7 @@
 *Nerede ve ne kadar şarj edeceğiniz, hangi hızla gideceğiniz, ne zaman yola çıkacağınız — hepsi optimallikleri ispatlanmış algoritmalarla hesaplanır, bağımsız bir değerlendiriciyle denetlenir ve tarayıcınızda canlandırılır.*
 
 Saf Python ≥ 3.10 · çalışma zamanında sıfır bağımlılık · MIT lisansı<br>
-[English](README.md) · **Türkçe** · [Dokümantasyon](docs/index.md) · [Rehber](docs/guide.tr.md) · [Model](docs/model.md) · [Algoritmalar ve ispatlar](docs/algorithms.md)
+[English](README.md) · **Türkçe** · [**Canlı demo**](https://aseloth99.github.io/evroute/live/?lang=tr) · [Dokümantasyon](docs/index.md) · [Rehber](docs/guide.tr.md) · [Model](docs/model.md) · [Algoritmalar ve ispatlar](docs/algorithms.md)
 
 </div>
 
@@ -100,6 +100,8 @@ modellerin ve ticari planlayıcıların kendisiyle kıyaslanabileceği bir
 </details>
 
 ## Hızlı başlangıç
+
+Hiçbir şey kurmadan denemek için [canlı demoyu](https://aseloth99.github.io/evroute/live/?lang=tr) açın: planlama tarayıcınızda yapılır.
 
 ```bash
 git clone https://github.com/Aseloth99/evroute.git
@@ -377,8 +379,8 @@ Her planlayıcının her planı **bağımsız bir değerlendiricide** yeniden si
 edilir; sabit tohumlu bir **çapraz doğrulama paketi** on bir değişmezi kaba
 kuvvete, analitik referans çözümlere, metamorfik bağıntılara ve yerel aramaya
 karşı, rastgele şarj tarifeleri altında da sınar
-([`tests/fuzz_report.md`](tests/fuzz_report.md)). Toplam 711 test vardır;
-bunların 608'i hızlı katmandadır ve CI'da Python 3.10-3.13 üzerinde
+([`tests/fuzz_report.md`](tests/fuzz_report.md)). Toplam 726 test vardır;
+bunların 623'ü hızlı katmandadır ve CI'da Python 3.10-3.13 üzerinde
 çalıştırılır ([ayrıntılar](docs/algorithms.md#8-how-correctness-is-verified)):
 
 ```bash
@@ -398,9 +400,8 @@ python -m pytest -m "not slow"   # hızlı katman, birkaç dakika
 - [Dokümantasyon dizini](docs/index.md) — komut satırı, Python API'si,
   görüntüleyici, canlı sunucu, deneyler, senaryolar ve veriler, tarifeler,
   SSS, yol haritası
-- Demo sayfaları (her biri tek bir çevrimdışı HTML dosyası):
-  [görüntüleyici](docs/demo/index.html), [tarife görüntüleyicisi](docs/demo/tariff.html),
-  [sonuç paneli](docs/demo/results.html)
+- [Web sitesi](https://aseloth99.github.io/evroute/?lang=tr): tarayıcınızda çalışan canlı planlayıcı ve hazır
+  [örnekler](https://aseloth99.github.io/evroute/examples/?lang=tr) (görüntüleyici, tarife görüntüleyicisi, gerçek veri, sonuç paneli)
 - [Katkıda bulunma](CONTRIBUTING.md) — kurulum, proje yapısı, temel kurallar
 
 Rehber ve gerçek veri vaka çalışması dışındaki belgeler İngilizcedir.

@@ -59,6 +59,22 @@ GIL, so concurrent requests are served one after another in practice, which
 is what an interactive single-user tool needs.  The server binds to the
 loopback interface by default and has no authentication: do not expose it
 to an untrusted network.
+
+Without HTTP
+============
+
+The logic behind the four ``/api/...`` endpoints does not depend on HTTP:
+:class:`PlanningService` holds the configuration and the scenario cache, and
+the plain functions :func:`api_health`, :func:`api_scenarios`,
+:func:`api_scenario` and :func:`api_plan` answer the requests.
+:func:`api_call` dispatches one request by endpoint name and returns ``(HTTP
+status, JSON object)`` exactly as this server sends it, and
+:func:`api_call_json` does the same with JSON text in and out.  The server
+calls :func:`api_call` for its API routes; the in-browser planner of the
+project web site runs this module in a Web Worker under Pyodide and calls
+:func:`api_call_json` (``site/worker.js``, built by ``tools/build_site.py``)
+-- the viewer's ``live.js`` talks to either through the same small
+transport interface.
 """
 
 from __future__ import annotations
@@ -74,15 +90,23 @@ import time
 import webbrowser
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 from urllib.parse import parse_qs, urlsplit
 
 from .scenario import Scenario
 
 __all__ = [
+    "API_ENDPOINTS",
     "MAX_BODY_BYTES",
     "PlanRequestError",
+    "PlanningService",
     "ViewerServer",
+    "api_call",
+    "api_call_json",
+    "api_health",
+    "api_plan",
+    "api_scenario",
+    "api_scenarios",
     "build_plan_scenario",
     "make_server",
     "serve",
@@ -101,11 +125,17 @@ DEFAULT_ALGORITHMS: tuple[str, ...] = ("greedy", "station-graph", "bls-astar", "
 LARGE_NETWORK_ALGORITHMS: tuple[str, ...] = ("bls-astar", "cfp-astar")
 
 
-def default_algorithms(scenario: Scenario) -> tuple[str, ...]:
-    """The algorithms a plan request without ``"algorithms"`` runs (and the live page ticks)."""
+def default_algorithms(scenario: Scenario, large_network_nodes: int | None = None) -> tuple[str, ...]:
+    """The algorithms a plan request without ``"algorithms"`` runs (and the live page ticks).
+
+    :data:`LARGE_NETWORK_ALGORITHMS` on a network of more than
+    ``large_network_nodes`` nodes (default :data:`evroute.cli.LARGE_NETWORK_NODES`),
+    else :data:`DEFAULT_ALGORITHMS`.
+    """
     from .cli import LARGE_NETWORK_NODES
 
-    return LARGE_NETWORK_ALGORITHMS if scenario.network.num_nodes > LARGE_NETWORK_NODES else DEFAULT_ALGORITHMS
+    limit = LARGE_NETWORK_NODES if large_network_nodes is None else large_network_nodes
+    return LARGE_NETWORK_ALGORITHMS if scenario.network.num_nodes > limit else DEFAULT_ALGORITHMS
 
 
 _PLAN_FIELDS = frozenset(
@@ -179,12 +209,16 @@ def _departure(value: Any) -> float:
     return x % 86400.0
 
 
-def build_plan_scenario(base: Scenario, body: Mapping[str, Any]) -> tuple[Scenario, list[str]]:
+def build_plan_scenario(
+    base: Scenario, body: Mapping[str, Any], *, large_network_nodes: int | None = None
+) -> tuple[Scenario, list[str]]:
     """Apply a ``POST /api/plan`` body to ``base``; return ``(scenario, algorithms)``.
 
     Every field is validated (type, range, membership) and unknown fields are
     rejected, so a typo never silently plans a different trip.  The base
-    scenario is not modified.  Raises :class:`PlanRequestError`.
+    scenario is not modified.  Without ``"algorithms"`` the request plans
+    :func:`default_algorithms` (``large_network_nodes`` as there).  Raises
+    :class:`PlanRequestError`.
     """
     from .algorithms import REGISTRY
     from .vehicle import VEHICLES
@@ -265,7 +299,7 @@ def build_plan_scenario(base: Scenario, body: Mapping[str, Any]) -> tuple[Scenar
     # ------------------------------------------------------------ algorithms
     algos = body.get("algorithms")
     if algos is None:
-        names = [a for a in default_algorithms(sc) if a in REGISTRY]
+        names = [a for a in default_algorithms(sc, large_network_nodes) if a in REGISTRY]
     else:
         if not isinstance(algos, list) or not all(isinstance(a, str) for a in algos):
             raise PlanRequestError("algorithms must be a list of names")
@@ -278,48 +312,85 @@ def build_plan_scenario(base: Scenario, body: Mapping[str, Any]) -> tuple[Scenar
     return sc, names
 
 
-# ====================================================================== server
-class ViewerServer(ThreadingHTTPServer):
-    """HTTP server holding the scenario cache and the viewer page cache."""
+# ====================================================================== service
+class PlanningService:
+    """The live planner without HTTP: configuration, scenario cache, requests.
 
-    daemon_threads = True
-    allow_reuse_address = True
+    What the API endpoints answer is computed here (see the module docs);
+    :class:`ViewerServer` serves it over HTTP and the web site's Web Worker
+    calls it under Pyodide.  Thread-safe.
+
+    Parameters
+    ----------
+    default_scenario:
+        Preset planned when a request names none (always offered).
+    lang:
+        Initial language of the viewer payloads (``"tr"`` or ``"en"``).
+    max_nodes:
+        Presets with more nodes than this are not offered.
+    robustness_runs:
+        Monte Carlo replays per route for the reliability badge.
+    options:
+        Planner options per algorithm, passed to
+        :func:`~evroute.viz.export.run_all` (they replace
+        :data:`~evroute.viz.export.VIEWER_OPTIONS` for that algorithm), e.g.
+        the label budgets of the in-browser planner.  ``None`` (the server):
+        the viewer's defaults.
+    exclude_families:
+        Preset families never offered (the web site: ``("turkey-osm",)``).
+    reuse_last:
+        Keep the scenario of the last plan request and reuse it (with its
+        prepared data) when the next request asks for the same trip with
+        other algorithms, as the web site does when it plans one algorithm
+        per request.  The answers are the same either way.
+    large_network_nodes:
+        Above this many nodes only :data:`LARGE_NETWORK_ALGORITHMS` are
+        planned by default (:func:`default_algorithms`; ``None``: the
+        command line's limit, 20 000 nodes).  The web site lowers it, since
+        greedy and the station graph take tens of seconds on 10 000 nodes in a
+        browser.
+    """
 
     def __init__(
         self,
-        address: tuple[str, int],
-        scenario_name: str,
+        default_scenario: str = "turkey-karaman-istanbul",
         *,
         lang: str = "tr",
         max_nodes: int = DEFAULT_MAX_NODES,
         robustness_runs: int = 200,
+        options: Mapping[str, Mapping[str, Any]] | None = None,
+        exclude_families: Sequence[str] = (),
+        reuse_last: bool = False,
+        large_network_nodes: int | None = None,
     ) -> None:
         from .generators.presets import PRESETS
 
-        if scenario_name not in PRESETS:
-            raise KeyError(f"unknown scenario {scenario_name!r}; choose from {sorted(PRESETS)}")
-        self.default_scenario = scenario_name
+        if default_scenario not in PRESETS:
+            raise KeyError(f"unknown scenario {default_scenario!r}; choose from {sorted(PRESETS)}")
+        self.default_scenario = default_scenario
         self.lang = lang if lang in ("tr", "en") else "tr"
         self.max_nodes = max_nodes
         self.robustness_runs = robustness_runs
+        # JSON has no tuples: option values that are lists (e.g. Pareto criteria) become tuples
+        self.options: dict[str, dict[str, Any]] | None = (
+            {a: {k: tuple(v) if isinstance(v, list) else v for k, v in o.items()} for a, o in options.items()}
+            if options is not None else None
+        )
+        self.exclude_families = tuple(exclude_families)
+        self.reuse_last = reuse_last
+        self.large_network_nodes = large_network_nodes
         self._lock = threading.Lock()
         self._scenarios: dict[str, Scenario] = {}
-        self._pages: dict[str, bytes] = {}
-        super().__init__(address, ViewerRequestHandler)
+        self._last: tuple[str, Scenario] | None = None
 
-    @property
-    def url(self) -> str:
-        host, port = self.server_address[:2]
-        if host in ("0.0.0.0", "::", ""):
-            host = "127.0.0.1"
-        return f"http://{host}:{port}/"
-
-    # ------------------------------------------------------------ caches
     def preset_names(self) -> list[dict[str, Any]]:
+        """Info of the offered presets (``name``, ``description``, ``family``, ``tags``, ``approx_nodes``)."""
         from .generators.presets import list_scenarios
 
         out = []
         for info in list_scenarios():
+            if info.get("family") in self.exclude_families and info["name"] != self.default_scenario:
+                continue
             n = info.get("approx_nodes")
             if n is not None and n > self.max_nodes and info["name"] != self.default_scenario:
                 continue
@@ -327,7 +398,7 @@ class ViewerServer(ThreadingHTTPServer):
         return out
 
     def base_scenario(self, name: str | None) -> Scenario:
-        """The preset ``name`` (default: the server's scenario), built once."""
+        """The preset ``name`` (default: the service's scenario), built once."""
         from .generators.presets import get_scenario
 
         name = name or self.default_scenario
@@ -349,8 +420,183 @@ class ViewerServer(ThreadingHTTPServer):
         return viewer_payload(
             sc, [], lang=self.lang, animate=True, live=True,
             extra={"scenario_preset": name or self.default_scenario, "demo_tariff": DEMO_TARIFF.to_dict(),
-                   "default_algorithms": list(default_algorithms(sc))},
+                   "default_algorithms": list(default_algorithms(sc, self.large_network_nodes))},
         )
+
+    def plan(self, body: Mapping[str, Any]) -> dict[str, Any]:
+        """Handle a ``POST /api/plan`` body (see the module docs)."""
+        from .viz.export import results_payload, run_all
+
+        if not isinstance(body, Mapping):
+            raise PlanRequestError("the request body must be a JSON object")
+        name = body.get("scenario") or self.default_scenario
+        sc, algos = build_plan_scenario(self.base_scenario(name), body, large_network_nodes=self.large_network_nodes)
+        if self.reuse_last:
+            sc = self._reuse(name, body, sc)
+        errors: list[dict[str, str]] = []
+
+        def report(algo: str, exc: BaseException) -> None:
+            log.warning("algorithm %s failed: %r", algo, exc)
+            errors.append({"algorithm": algo, "message": str(exc) or type(exc).__name__})
+
+        t0 = time.perf_counter()
+        plans = run_all(sc, algos, trace=True, options=self.options, on_error=report)
+        data = results_payload(sc, plans, robustness_runs=self.robustness_runs, options=self.options)
+        data["errors"] = errors
+        data["elapsed_ms"] = round((time.perf_counter() - t0) * 1000.0, 1)
+        data["scenario_preset"] = name
+        return data
+
+    def _reuse(self, name: str, body: Mapping[str, Any], sc: Scenario) -> Scenario:
+        """The scenario of the previous request if it asked for the same trip (any algorithms), else ``sc``."""
+        trip = {k: v for k, v in body.items() if k not in ("algorithms", "lang", "scenario")}
+        key = name + "\n" + json.dumps(trip, sort_keys=True, default=repr)
+        with self._lock:
+            if self._last is not None and self._last[0] == key:
+                return self._last[1]
+            self._last = (key, sc)
+        return sc
+
+
+# ====================================================================== API functions
+def api_health() -> dict[str, Any]:
+    """``GET /api/health``: ``{"ok": true, "version": ...}``."""
+    from . import __version__
+
+    return {"ok": True, "version": __version__}
+
+
+def api_scenarios(service: PlanningService) -> dict[str, Any]:
+    """``GET /api/scenarios``: the default preset and the offered presets."""
+    return {"default": service.default_scenario, "scenarios": service.preset_names()}
+
+
+def api_scenario(service: PlanningService, name: str | None = None) -> dict[str, Any]:
+    """``GET /api/scenario?name=NAME``: the live viewer payload of a preset, without results."""
+    return service.scenario_payload(name)
+
+
+def api_plan(service: PlanningService, body: Any) -> dict[str, Any]:
+    """``POST /api/plan``: plan a trip (body and answer: see the module docs)."""
+    return service.plan(body)
+
+
+#: Endpoint names of :func:`api_call` (the paths are ``/api/<name>``).
+API_ENDPOINTS: tuple[str, ...] = ("health", "scenarios", "scenario", "plan")
+
+
+def api_call(service: PlanningService, endpoint: str, request: Any = None) -> tuple[int, Any]:
+    """Answer one API request: ``(HTTP status, JSON-serialisable answer)``.
+
+    ``endpoint`` is one of :data:`API_ENDPOINTS`; ``request`` is the JSON
+    body of ``plan`` or ``{"name": ...}`` for ``scenario``.  Errors are
+    answered as the server answers them: an invalid request with 400 and
+    ``{"error": message}`` (for ``plan`` also a value the scenario rejects),
+    an unknown endpoint with 404, anything else with 500 and ``{"error":
+    "internal error"}`` (the traceback goes to the log, never to the client).
+    """
+    try:
+        if endpoint == "health":
+            return HTTPStatus.OK, api_health()
+        if endpoint == "scenarios":
+            return HTTPStatus.OK, api_scenarios(service)
+        if endpoint == "scenario":
+            name = request.get("name") if isinstance(request, Mapping) else None
+            return HTTPStatus.OK, api_scenario(service, name)
+        if endpoint == "plan":
+            return HTTPStatus.OK, api_plan(service, request)
+        return HTTPStatus.NOT_FOUND, {"error": "not found"}
+    except PlanRequestError as exc:
+        return HTTPStatus.BAD_REQUEST, {"error": str(exc)}
+    except (KeyError, ValueError) as exc:
+        if endpoint == "plan":  # scenario construction rejected the parameters
+            return HTTPStatus.BAD_REQUEST, {"error": str(exc).strip("'\"")}
+        log.exception("api %s failed", endpoint)
+        return HTTPStatus.INTERNAL_SERVER_ERROR, {"error": "internal error"}
+    except Exception:  # noqa: BLE001 - never leak a traceback to the client
+        log.exception("api %s failed", endpoint)
+        return HTTPStatus.INTERNAL_SERVER_ERROR, {"error": "internal error"}
+
+
+def api_call_json(service: PlanningService, endpoint: str, request_json: str | None = None) -> tuple[int, str]:
+    """:func:`api_call` with JSON text in and out, exactly as the server reads and writes it.
+
+    ``request_json`` is parsed like a ``POST /api/plan`` body (empty: ``{}``;
+    invalid JSON: 400); the answer is serialised like every response of the
+    server.  The web site's Web Worker calls this under Pyodide.
+    """
+    try:
+        request = json.loads(request_json or "{}")
+    except (json.JSONDecodeError, RecursionError) as exc:  # RecursionError: deep nesting
+        return HTTPStatus.BAD_REQUEST, _dumps({"error": f"invalid JSON: {exc}"})
+    status, obj = api_call(service, endpoint, request)
+    return int(status), _dumps(obj)
+
+
+def _dumps(obj: Any) -> str:
+    """The JSON text of an API answer (UTF-8, compact, no NaN)."""
+    return json.dumps(obj, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
+
+
+# ====================================================================== server
+class ViewerServer(ThreadingHTTPServer):
+    """HTTP server around a :class:`PlanningService`, with the viewer page cache."""
+
+    daemon_threads = True
+    allow_reuse_address = True
+
+    def __init__(
+        self,
+        address: tuple[str, int],
+        scenario_name: str,
+        *,
+        lang: str = "tr",
+        max_nodes: int = DEFAULT_MAX_NODES,
+        robustness_runs: int = 200,
+    ) -> None:
+        self.service = PlanningService(scenario_name, lang=lang, max_nodes=max_nodes, robustness_runs=robustness_runs)
+        self._lock = threading.Lock()
+        self._pages: dict[str, bytes] = {}
+        super().__init__(address, ViewerRequestHandler)
+
+    @property
+    def url(self) -> str:
+        host, port = self.server_address[:2]
+        if host in ("0.0.0.0", "::", ""):
+            host = "127.0.0.1"
+        return f"http://{host}:{port}/"
+
+    @property
+    def default_scenario(self) -> str:
+        return self.service.default_scenario
+
+    @property
+    def lang(self) -> str:
+        return self.service.lang
+
+    @property
+    def max_nodes(self) -> int:
+        return self.service.max_nodes
+
+    @property
+    def robustness_runs(self) -> int:
+        return self.service.robustness_runs
+
+    # ------------------------------------------------- service delegates
+    def preset_names(self) -> list[dict[str, Any]]:
+        return self.service.preset_names()
+
+    def base_scenario(self, name: str | None) -> Scenario:
+        """The preset ``name`` (default: the server's scenario), built once."""
+        return self.service.base_scenario(name)
+
+    def scenario_payload(self, name: str | None) -> dict[str, Any]:
+        """Live-mode viewer payload without results."""
+        return self.service.scenario_payload(name)
+
+    def plan(self, body: Mapping[str, Any]) -> dict[str, Any]:
+        """Handle a ``POST /api/plan`` body (see the module docs)."""
+        return self.service.plan(body)
 
     def page(self) -> bytes:
         """The live viewer page (built once)."""
@@ -363,28 +609,6 @@ class ViewerServer(ThreadingHTTPServer):
             with self._lock:
                 self._pages[self.default_scenario] = cached
         return cached
-
-    def plan(self, body: Mapping[str, Any]) -> dict[str, Any]:
-        """Handle a ``POST /api/plan`` body (see the module docs)."""
-        from .viz.export import results_payload, run_all
-
-        if not isinstance(body, Mapping):
-            raise PlanRequestError("the request body must be a JSON object")
-        name = body.get("scenario") or self.default_scenario
-        sc, algos = build_plan_scenario(self.base_scenario(name), body)
-        errors: list[dict[str, str]] = []
-
-        def report(algo: str, exc: BaseException) -> None:
-            log.warning("algorithm %s failed: %r", algo, exc)
-            errors.append({"algorithm": algo, "message": str(exc) or type(exc).__name__})
-
-        t0 = time.perf_counter()
-        plans = run_all(sc, algos, trace=True, on_error=report)
-        data = results_payload(sc, plans, robustness_runs=self.robustness_runs)
-        data["errors"] = errors
-        data["elapsed_ms"] = round((time.perf_counter() - t0) * 1000.0, 1)
-        data["scenario_preset"] = name
-        return data
 
 
 class ViewerRequestHandler(BaseHTTPRequestHandler):
@@ -410,8 +634,7 @@ class ViewerRequestHandler(BaseHTTPRequestHandler):
             self.wfile.write(body)
 
     def _json(self, status: int, obj: Any) -> None:
-        body = json.dumps(obj, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode("utf-8")
-        self._send(status, body, "application/json; charset=utf-8")
+        self._send(status, _dumps(obj).encode("utf-8"), "application/json; charset=utf-8")
 
     def _error(self, status: int, message: str) -> None:
         self._json(status, {"error": message})
@@ -426,15 +649,11 @@ class ViewerRequestHandler(BaseHTTPRequestHandler):
             path = url.path
             if path in ("/", "/index.html"):
                 self._send(HTTPStatus.OK, self.server.page(), "text/html; charset=utf-8")
-            elif path == "/api/health":
-                from . import __version__
-
-                self._json(HTTPStatus.OK, {"ok": True, "version": __version__})
-            elif path == "/api/scenarios":
-                self._json(HTTPStatus.OK, {"default": self.server.default_scenario, "scenarios": self.server.preset_names()})
+            elif path in ("/api/health", "/api/scenarios"):
+                self._json(*api_call(self.server.service, path[len("/api/"):]))
             elif path == "/api/scenario":
                 name = parse_qs(url.query).get("name", [None])[0]
-                self._json(HTTPStatus.OK, self.server.scenario_payload(name))
+                self._json(*api_call(self.server.service, "scenario", {"name": name}))
             elif path.startswith(("/css/", "/js/")):
                 self._asset(path)
             elif path == "/favicon.ico":
@@ -486,12 +705,7 @@ class ViewerRequestHandler(BaseHTTPRequestHandler):
             except (UnicodeDecodeError, json.JSONDecodeError, RecursionError) as exc:  # RecursionError: deep nesting
                 self._error(HTTPStatus.BAD_REQUEST, f"invalid JSON: {exc}")
                 return
-            self._json(HTTPStatus.OK, self.server.plan(body))
-        except PlanRequestError as exc:
-            self._error(HTTPStatus.BAD_REQUEST, str(exc))
-        except (KeyError, ValueError) as exc:
-            # scenario construction rejected the parameters
-            self._error(HTTPStatus.BAD_REQUEST, str(exc).strip("'\""))
+            self._json(*api_call(self.server.service, "plan", body))
         except Exception:  # noqa: BLE001 - never leak a traceback to the client
             log.exception("POST %s failed", self.path)
             self._error(HTTPStatus.INTERNAL_SERVER_ERROR, "internal error")
