@@ -33,6 +33,56 @@
 
   /** Drawing order of road classes (minor first, motorways on top). */
   const CLASS_ORDER = ['residential', 'link', 'urban', 'secondary', 'primary', 'trunk', 'motorway'];
+  /** Networks with more directed edges than this get level-of-detail road drawing. */
+  const LOD_EDGES = 20000;
+
+  /**
+   * The roads of one class as polylines: maximal chains of edges joined at
+   * nodes where exactly two roads of the class meet, so that the map draws
+   * one path per chain and can skip the sub-pixel vertices of long chains
+   * when zoomed out.  Returns {pts, offs, bbox}: the node ids of chain c are
+   * pts[offs[c] .. offs[c + 1] - 1] and its world bounding box is
+   * bbox[4c .. 4c + 3] = [x0, y0, x1, y1].
+   */
+  function roadChains(edges, tail, head, n, X, Y) {
+    const E = edges.length;
+    const deg = new Int32Array(n);
+    for (let k = 0; k < E; k++) { deg[tail[edges[k]]]++; deg[head[edges[k]]]++; }
+    const start = new Int32Array(n + 1);
+    for (let v = 0; v < n; v++) start[v + 1] = start[v] + deg[v];
+    const fill = start.slice(0, n);
+    const inc = new Int32Array(2 * E);   // incident edge positions (index into `edges`)
+    for (let k = 0; k < E; k++) { inc[fill[tail[edges[k]]]++] = k; inc[fill[head[edges[k]]]++] = k; }
+    const used = new Uint8Array(E);
+    const pts = [], offs = [0], bbox = [];
+    const walk = (v0, k0) => {
+      let v = v0, k = k0;
+      let x0 = X[v], y0 = Y[v], x1 = x0, y1 = y0;
+      pts.push(v);
+      for (;;) {
+        used[k] = 1;
+        const e = edges[k];
+        v = tail[e] === v ? head[e] : tail[e];
+        pts.push(v);
+        const x = X[v], y = Y[v];
+        if (x < x0) x0 = x; if (x > x1) x1 = x;
+        if (y < y0) y0 = y; if (y > y1) y1 = y;
+        if (deg[v] !== 2) break;
+        let next = -1;
+        for (let j = start[v]; j < start[v + 1]; j++) if (!used[inc[j]]) { next = inc[j]; break; }
+        if (next < 0) break;
+        k = next;
+      }
+      offs.push(pts.length);
+      bbox.push(x0, y0, x1, y1);
+    };
+    for (let v = 0; v < n; v++) {
+      if (deg[v] === 2 || !deg[v]) continue;
+      for (let j = start[v]; j < start[v + 1]; j++) if (!used[inc[j]]) walk(v, inc[j]);
+    }
+    for (let k = 0; k < E; k++) if (!used[k]) walk(tail[edges[k]], k);   // closed loops
+    return { pts: Int32Array.from(pts), offs: Int32Array.from(offs), bbox: Float64Array.from(bbox) };
+  }
 
   /** Expected wait [s] of a FIFO-safe WaitProfile at time of day `tod` (port of queueing.WaitProfile.__call__). */
   function waitAt(prof, tod) {
@@ -99,7 +149,13 @@
       }
       const order = CLASS_ORDER.filter((c) => groups.has(c));
       for (const c of groups.keys()) if (!order.includes(c)) order.unshift(c);
-      this.roadGroups = order.map((c) => ({ cls: c, edges: Int32Array.from(groups.get(c)) }));
+      this.roadGroups = order.map((c) => {
+        const edges = Int32Array.from(groups.get(c));
+        return { cls: c, edges, chains: roadChains(edges, this.tail, this.head, n, this.X, this.Y) };
+      });
+      // level of detail: on large networks (OpenStreetMap data) the minor
+      // classes are drawn only when zoomed in (map.js, MIN_PX_PER_KM)
+      this.lod = m > LOD_EDGES;
       let mean = 0;
       for (let e = 0; e < m; e++) mean += len[e];
       this.meanEdge = m ? mean / m : 1000;

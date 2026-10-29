@@ -390,7 +390,8 @@
         if (rows.length === n0) rows.push(['kv_tariff', I.t('tariff_flat')]);
       }
       U.setChildren(this.el.kv, rows.flatMap(([k, val, label]) => [U.el('dt', { text: label || I.t(k) }), U.el('dd', { text: val, title: val })]));
-      const disc = sc.meta && sc.meta.disclaimer;
+      const credit = sc.meta && sc.meta.attribution;
+      const disc = [sc.meta && sc.meta.disclaimer, credit && I.t('data_credit', { c: credit })].filter(Boolean).join(' ');
       this.el.disclaimer.hidden = !disc;
       this.el.disclaimer.textContent = disc || '';
     }

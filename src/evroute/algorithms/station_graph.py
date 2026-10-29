@@ -25,7 +25,8 @@ battery-feasible path** without charging from the node of ``a`` (departing with
 :func:`~evroute.algorithms.labels.fastest_feasible_tree` per meta node, which
 respects hills, regeneration, speed levels and the reserve at every node.  The
 path also fixes the arrival energy ``x_ab`` at ``b``.  An edge into the
-destination needs ``x_ab >= P.e_dest_min``.
+destination needs ``x_ab >= P.e_dest_min``; an edge into a station at the
+destination does not (charging there is how the requirement is met).
 
 *Weights are not static.*  The cost of arriving at station ``b`` depends on the
 arrival time (queueing delay ``W_b(t)``) and on the arrival energy
@@ -151,6 +152,15 @@ class _MetaSearch:
         #: driving-time lower bound to the destination (the A* potential)
         self.h, _, _ = dijkstra_traced(P.net, P.destination, time_weights(P), reverse=True)
         self.trees: dict[tuple[int, float], dict[int, tuple]] = {}
+        # A tree holds the destination only if it is reached with the arrival
+        # requirement; a station there may be reached with less (that is why it
+        # is used), so its arrival comes from a tree without the requirement.
+        # (Driving keeps the reserve, so with a requirement equal to the reserve
+        # only the start of a round trip can fall short.)
+        self.dest_station = P.is_station_node[P.destination] and (
+            P.e_dest_min > P.e_min or P.origin == P.destination
+        )
+        self.free_dest: dict[tuple[int, float], tuple | None] = {}
         self.tree_nodes = 0
         # counters of the Dijkstra runs
         self.settled = 0
@@ -170,6 +180,21 @@ class _MetaSearch:
             self.tree_nodes += len(tree)
             trace_label_tree(self.trace, tree, offset=t_offset)
         return tree
+
+    def station_record(
+        self, tree: dict[int, tuple], v: int, node: int, energy: float, t_offset: float
+    ) -> tuple | None:
+        """Arrival record of the station node ``v`` in ``tree``, the tree from ``(node, energy)``."""
+        rec = tree.get(v)
+        if rec is None and v == self.P.destination and self.dest_station:
+            key = (node, energy)
+            if key not in self.free_dest:
+                free = fastest_feasible_tree(self.P, node, energy, t_start=0.0, fastest_level_only=True)
+                self.tree_nodes += len(free)
+                trace_label_tree(self.trace, free, offset=t_offset)
+                self.free_dest[key] = free.get(v)
+            rec = self.free_dest[key]
+        return rec
 
     def shortest(self, cand: list[int]):
         """A* (Dijkstra with a consistent potential) on the meta graph over ``cand``.
@@ -220,7 +245,7 @@ class _MetaSearch:
                 v = stations[s].node
                 if u != _ORIGIN and v == node_u:  # a second stop at the same node is never useful
                     continue
-                rec = tree.get(v)
+                rec = self.station_record(tree, v, node_u, e_u, d)
                 if rec is None or h[v] == INF:
                     continue
                 arr = d + rec[0]

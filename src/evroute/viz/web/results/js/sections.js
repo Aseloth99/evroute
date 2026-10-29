@@ -910,6 +910,168 @@
     draw();
   }
 
+  /* ============================================================ real data */
+  function realData(sec, ctx) {
+    const d = sec.data;
+    if (!d || !d.trips.length || !d.networks.length) return empty(ctx.body);
+    const st = ctx.state;
+    const f = sec.facts || {};
+    const nets = d.networks;
+    const netColor = (k) => caseColor(Math.max(0, nets.findIndex((n) => n.key === k)));
+    const nt = (k) => I.tx((nets.find((n) => n.key === k) || { title: k }).title);
+    const ref = d.reference || 'cfp-astar';
+    const plan = (t, net, a) => (((t.nets[net] || {}).plans || {})[a]) || null;
+    const cur = (d.trips.find((t) => t.currency) || {}).currency;
+    const cats = d.trips.map((t) => ({ key: t.id, label: t.title }));
+    const tripOf = (k) => d.trips.find((t) => t.id === k);
+    const netLegend = (c) => RC.legend(c.legend, nets.map((n) => ({ key: n.key, label: nt(n.key), color: netColor(n.key), kind: 'rect' })));
+    const missing = (t, net) => {
+      const p = plan(t, net, ref);
+      if (!p) return I.t('rd_not_run');
+      return p.limit ? I.t('rd_limit') : `✕ ${I.t('infeasible')}`;
+    };
+
+    // key numbers
+    const rt = (f.runtime_s && (f.runtime_s.osm || f.runtime_s.hybrid)) || {};
+    const chg = (k) => (f.time_change_pct || {})[k];
+    ctx.body.appendChild(statChips([
+      ...nets.map((n) => [I.t('rd_feasible', { n: nt(n.key) }), `${I.num((f.feasible || {})[n.key] || 0, 0)}/${I.num(f.trips || 0, 0)}`,
+        ((f.feasible || {})[n.key] || 0) < (f.trips || 0) ? 'warn' : 'ok']),
+      finite(chg('osm')) ? [I.t('rd_time_change', { n: nt('osm') }), `${chg('osm') >= 0 ? '+' : '−'}${I.pct(Math.abs(chg('osm')), 1)}`, null] : null,
+      finite(rt['bls-astar']) ? [I.t('rd_runtime_median', { a: I.algo('bls-astar') }), `${I.num(rt['bls-astar'], 1)} ${I.t('unit_s')}`, null] : null,
+      finite(rt['cfp-astar']) ? [I.t('rd_runtime_median', { a: I.algo('cfp-astar') }), `${I.num(rt['cfp-astar'], 1)} ${I.t('unit_s')}`, null] : null,
+    ]));
+
+    // 1. trip time of the exact optimum on every data set
+    const c1 = card(`${I.t('rd_time')} · ${I.algo(ref)}`, { span: 'full' });
+    netLegend(c1);
+    const tipRows = (t, a) => nets.map((n) => {
+      const p = plan(t, n.key, a);
+      const ok = p && p.feasible;
+      return [netColor(n.key), nt(n.key), ok ? `${I.minutes(p.time_min)} · ${I.num(p.distance_km, 0)} km · ${I.num(p.stops, 0)} ${I.t('stops').toLowerCase()}` : missing(t, n.key), 'rect'];
+    });
+    RC.columns(c1.host, {
+      aria: I.t('rd_time'), categories: cats,
+      series: nets.map((n) => ({ key: n.key, label: nt(n.key), color: netColor(n.key) })),
+      value: (tk, nk) => {
+        const p = plan(tripOf(tk), nk, ref);
+        return p && p.feasible ? { v: p.time_min, tip: `${I.minutes(p.time_min)} · ${I.num(p.distance_km, 0)} km · ${I.num(p.stops, 0)} ${I.t('stops').toLowerCase()} · ${I.money(p.money, cur)}` } : null;
+      },
+      y: { label: `${I.t('trip_time')} [${I.t('unit_h')}:${I.t('unit_min')}]`, fmt: (v) => I.hm(v), time: true },
+    });
+    const gone = [];
+    for (const t of d.trips) for (const n of nets) { const p = plan(t, n.key, ref); if (!p || !p.feasible) gone.push(`${t.title} (${nt(n.key)}): ${missing(t, n.key)}`); }
+    c1.foot.hidden = false;
+    c1.foot.textContent = [gone.length ? `${I.t('rd_missing')}: ${gone.join('; ')}` : '', `${I.t('rd_credit')} ${d.credit || ''}`].filter(Boolean).join(' · ');
+
+    // 2. the plan in detail: stops, charging time and charging cost per data set
+    const c2 = card(I.t('rd_stops_charge'));
+    const c3 = card(I.t('money'));
+    ctx.body.appendChild(grid('', c1));
+    ctx.body.appendChild(grid('cols-2', c2, c3));
+    netLegend(c2);
+    RC.columns(c2.host, {
+      aria: I.t('rd_stops_charge'), categories: cats,
+      series: nets.map((n) => ({ key: n.key, label: nt(n.key), color: netColor(n.key) })),
+      value: (tk, nk) => {
+        const p = plan(tripOf(tk), nk, ref);
+        return p && p.feasible ? { v: p.charge_min, tip: `${I.minutes(p.charge_min)} · ${I.num(p.stops, 0)} ${I.t('stops').toLowerCase()} · ${I.t('queue')} ${I.minutes(p.queue_min)}` } : null;
+      },
+      y: { label: `${I.t('charge')} [${I.t('unit_h')}:${I.t('unit_min')}]`, fmt: (v) => I.hm(v), time: true },
+    });
+    netLegend(c3);
+    RC.columns(c3.host, {
+      aria: I.t('money'), categories: cats,
+      series: nets.map((n) => ({ key: n.key, label: nt(n.key), color: netColor(n.key) })),
+      value: (tk, nk) => {
+        const p = plan(tripOf(tk), nk, ref);
+        return p && p.feasible ? { v: p.money, tip: `${I.money(p.money, cur)} · ${I.num(p.charged_kwh, 1)} kWh` } : null;
+      },
+      y: { label: `${I.t('ax_money')} [${cur || ''}]` },
+    });
+
+    // 3. runtime (and labels) of the exact planners and of the heuristics
+    const exact = d.exact && d.exact.length ? d.exact : [ref];
+    const heur = d.heuristics || [];
+    const timed = [...exact, ...heur];
+    const budget = finite(d.budget_s) ? I.minutes(d.budget_s / 60) : null;
+    if (!timed.includes(st.algo)) st.algo = exact.includes('cfp-astar') ? 'cfp-astar' : exact[0];
+    const c4 = card(I.t('rd_runtime'), { span: 'full' });
+    const aseg = timed.length > 1 ? seg(I.t('algorithm'), timed.map((a) => ({ value: a, label: I.algo(a), color: algoColor(a) })), st.algo,
+      (v) => { st.algo = v; drawRuntime(); }) : null;
+    if (aseg) c4.el.querySelector('.cc-head').appendChild(aseg);
+    ctx.body.appendChild(grid('', c4));
+    netLegend(c4);
+    const runNote = (t, nk, p) => {
+      if (p.stopped) return ` · ${I.t('rd_stopped')}`;
+      if (p.over) return ` · ${I.t('rd_over_budget')}`;
+      return p.feasible ? '' : ` · ${exact.includes(st.algo) ? missing(t, nk) : I.t('rd_heur_failed')}`;
+    };
+    function drawRuntime() {
+      RC.columns(c4.host, {
+        aria: `${I.t('rd_runtime')} · ${I.algo(st.algo)}`, categories: cats,
+        series: nets.map((n) => ({ key: n.key, label: nt(n.key), color: netColor(n.key) })),
+        value: (tk, nk) => {
+          const t = tripOf(tk);
+          const p = plan(t, nk, st.algo);
+          if (!p || !finite(p.runtime_ms)) return null;
+          const s = p.runtime_ms / 1000;
+          const labels = finite(p.settled) ? ` · ${I.num(p.settled, 0)} ${I.t('labels')}` : '';
+          return { v: s, tip: `${p.stopped ? '≥ ' : ''}${s >= 60 ? I.minutes(s / 60) : `${I.num(s, 2)} ${I.t('unit_s')}`}${labels}${runNote(t, nk, p)}` };
+        },
+        y: { label: `${I.t('runtime')} [${I.t('unit_s')}]` },
+      });
+      c4.foot.textContent = [I.t('rd_runtime_foot'), heur.includes(st.algo) && budget ? I.t('rd_budget_foot', { b: budget }) : ''].filter(Boolean).join(' ');
+    }
+    c4.foot.hidden = false;
+    drawRuntime();
+
+    // 4. the heuristics' gap to the exact optimum on the selected data set
+    if (heur.length) {
+      if (!nets.some((n) => n.key === st.net)) st.net = nets.some((n) => n.key === 'osm') ? 'osm' : nets[0].key;
+      const c5 = card(I.t('rd_gap'), { span: 'full' });
+      const nseg = seg(I.t('rd_data'), nets.map((n) => ({ value: n.key, label: nt(n.key), color: netColor(n.key) })), st.net,
+        (v) => { st.net = v; drawGap(); });
+      c5.el.querySelector('.cc-head').appendChild(nseg);
+      ctx.body.appendChild(grid('', c5));
+      RC.legend(c5.legend, heur.map((a) => ({ key: a, label: I.algo(a), color: algoColor(a), kind: 'rect' })));
+      function drawGap() {
+        RC.columns(c5.host, {
+          aria: `${I.t('rd_gap')} · ${nt(st.net)}`, categories: cats,
+          series: heur.map((a) => ({ key: a, label: I.algo(a), color: algoColor(a) })),
+          value: (tk, a) => {
+            const p = plan(tripOf(tk), st.net, a);
+            if (!(p && p.feasible && finite(p.gap_pct))) return null;
+            const s = p.runtime_ms / 1000;
+            const took = s >= 60 ? I.minutes(s / 60) : `${I.num(s, 1)} ${I.t('unit_s')}`;
+            return { v: p.gap_pct, tip: `+${I.pct(p.gap_pct, 1)} · ${I.minutes(p.time_min)} · ${took}${p.over ? ` · ${I.t('rd_over_budget')}` : ''}` };
+          },
+          y: { label: I.t('rd_gap_ax') },
+        });
+        const bad = [];
+        const stopped = [];
+        for (const t of d.trips) {
+          for (const a of heur) {
+            const p = plan(t, st.net, a);
+            if (p && p.stopped) stopped.push(`${I.algo(a)} · ${t.title}`);
+            else if (p && !p.feasible) bad.push(`${I.algo(a)} · ${t.title}`);
+          }
+        }
+        c5.foot.hidden = !bad.length && !stopped.length;
+        c5.foot.textContent = [bad.length ? `${I.t('rd_heur_failed')}: ${bad.join('; ')}` : '',
+          stopped.length ? `${I.t('rd_stopped')}${budget ? ` (${budget})` : ''}: ${stopped.join('; ')}` : ''].filter(Boolean).join(' · ');
+      }
+      drawGap();
+    }
+    const viewer = d.trips.find((t) => t.viewer);
+    if (viewer) {
+      // the button stays short (it does not wrap); the trip and data set follow as text that can wrap on a phone
+      ctx.body.appendChild(U.el('p', { class: 'cc-foot' }, U.el('a', { class: 'btn-sm btn-link', href: viewer.viewer, target: '_blank', rel: 'noopener' },
+        U.svg('M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5'), I.t('open_viewer')), ' ',
+        U.el('span', { class: 'muted', text: `${viewer.title} · ${nt('osm')}` })));
+    }
+  }
+
   EVR.RS = {
     'case-studies': caseStudies,
     scalability,
@@ -922,6 +1084,7 @@
     'eco-speed': ecoSpeed,
     vehicles,
     tariffs,
+    'real-data': realData,
     helpers: { card, grid, seg, empty, algoColor, caseColor, tariffColor },
   };
 })(window.EVR = window.EVR || {});

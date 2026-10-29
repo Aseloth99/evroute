@@ -647,7 +647,7 @@ The suites found and fixed real bugs (`tests/fuzz_report.md` §5) - a Pareto
 front that kept a member 1 ulp faster but 6 EUR dearer, a lossy JSON round
 trip, a missed DC-then-AC double stop, an unsound 3-D dominance rule with
 time-dependent queues, a plan rebuilt from its stops that joined a queue
-1 ulp before a price change.  634 tests, 541 in the fast tier
+1 ulp before a price change.  711 tests, 608 in the fast tier
 (`pytest -m "not slow"`), run on Python 3.10-3.13 in CI:
 
 ```bash

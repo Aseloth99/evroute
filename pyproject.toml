@@ -5,12 +5,14 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "evroute"
-version = "1.0.0"
+version = "1.1.0"
 description = "Exact, battery-, queue- and degradation-aware route planning for electric vehicles with charging stations"
 readme = "README.md"
 requires-python = ">=3.10"
-license = "MIT"
-license-files = ["LICENSE"]
+# The code is MIT; the bundled real-data network (src/evroute/data/osm_turkey) is ODbL 1.0,
+# © OpenStreetMap contributors (its DATA_LICENSE.md).
+license = "MIT AND ODbL-1.0"
+license-files = ["LICENSE", "src/evroute/data/osm_turkey/DATA_LICENSE.md"]
 authors = [{ name = "Mustafa Açık" }]
 keywords = [
   "electric vehicles", "route planning", "charging stations", "shortest path",
@@ -46,7 +48,8 @@ evroute = "evroute.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-evroute = ["viz/web/*", "viz/web/**/*", "data/*"]
+# data/osm_turkey: the real-data network (ODbL 1.0, © OpenStreetMap contributors; see its README.md)
+evroute = ["viz/web/*", "viz/web/**/*", "data/*", "data/osm_turkey/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

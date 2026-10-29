@@ -112,6 +112,7 @@ __all__ = [
     "make_gallery",
     "draw_map",
     "map_extent",
+    "data_attribution",
     "soc_series",
 ]
 
@@ -1201,6 +1202,26 @@ def _scalebar(ctx: MapContext, corner: str, fontsize: float) -> None:
     ctx.occupied.add((min(p0[0], bb.x0) - 3, p0[1] - 3, max(p1[0], bb.x1) + 3, bb.y1 + 3))
 
 
+def data_attribution(scenario: Scenario) -> str | None:
+    """The credit a map of ``scenario`` must carry (``scenario.meta["attribution"]``,
+    e.g. "© OpenStreetMap contributors" for OpenStreetMap data), or ``None``."""
+    meta = scenario.meta if isinstance(scenario.meta, dict) else {}
+    credit = meta.get("attribution")
+    return str(credit) if credit else None
+
+
+def _attribution(ctx: MapContext, text: str, corner: str, fontsize: float) -> None:
+    """The data credit (ODbL: "© OpenStreetMap contributors") in a corner of the map."""
+    ax = ctx.ax
+    right = "right" in corner
+    upper = "upper" in corner
+    t = ax.text(0.995 if right else 0.005, 0.992 if upper else 0.008, text, transform=ax.transAxes,
+                ha="right" if right else "left", va="top" if upper else "bottom", fontsize=max(5.0, fontsize - 1.0),
+                color=style.INK_MUTED, zorder=21, path_effects=style.halo(2.0, "white", 0.9))
+    bb = t.get_window_extent(ax.figure.canvas.get_renderer())
+    ctx.occupied.add((bb.x0 - 2, bb.y0 - 2, bb.x1 + 2, bb.y1 + 2))
+
+
 _PLACE_RANK = {"city": 0, "town": 1, "pass": 2, "landmark": 3}
 
 
@@ -1351,9 +1372,17 @@ def draw_map(
             leg = ax.legend(handles, texts, loc="upper center", bbox_to_anchor=(0.5, -0.012), ncol=ncol,
                             frameon=False, fontsize=fs + 0.5, handlelength=2.0, columnspacing=1.4, scatterpoints=1)
         leg.set_zorder(20)
+    scalebar_corner = None
     if scalebar:
         free = [c for c in corners if c != legend_corner]
-        _scalebar(ctx, free[0], fs)
+        scalebar_corner = free[0]
+        _scalebar(ctx, scalebar_corner, fs)
+    credit = data_attribution(scenario)
+    if credit:
+        taken = (legend_corner, scalebar_corner)
+        corner = next((c for c in ("lower right", "lower left", "upper right", "upper left") if c not in taken),
+                      "lower right")
+        _attribution(ctx, credit, corner, fs)
 
     # ----------------------------------------------------------------- labels
     if labels:
@@ -2728,6 +2757,10 @@ def plot_search_space(
                          color=style.algorithm_color(p.algorithm) if p.algorithm != "pareto" else style.INK)
             ax.text(1.0, 1.0, f"{m:,} nodes ({frac:.0f} %) · {settled:,} labels", transform=ax.transAxes, ha="right",
                     va="bottom", fontsize=fs - 1.5, color=style.INK_MUTED)
+        credit = data_attribution(scenario)
+        if credit:
+            fig.text(1.0 - margin / w, 0.02 / fig_h, credit, ha="right", va="bottom", fontsize=max(5.0, fs - 2.0),
+                     color=style.INK_MUTED)
         cw = min(2.6, w * 0.45)
         cax = fig.add_axes(((w - cw) / 2 / w, (0.22) / fig_h, cw / w, 0.07 / fig_h))
         style.colorbar(None, cmap, 0.0, 1.0, cax=cax, orientation="horizontal", ticks=[0.0, 1.0],

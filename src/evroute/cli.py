@@ -7,6 +7,7 @@ Examples::
     evroute plan turkey-karaman-istanbul --from Konya --to Ankara --soc 0.35 -a cfp
     evroute plan turkey-karaman-istanbul --depart 14:00 --tariff 80 --objective cost
     evroute plan turkey-karaman-istanbul --peak 16-20 --peak-factor 1.2 --high-soc-factor 1.5
+    evroute plan turkey-osm-karaman-istanbul --stations hybrid --from Konya
     evroute compare turkey-antalya-ankara --temp -5
     evroute viz turkey-karaman-istanbul -o karaman-istanbul.html
     evroute viz corridor -o corridor.html --no-animate --lang en
@@ -17,9 +18,15 @@ Examples::
     evroute results results/ --lang en
 
 Commands that take a scenario accept a preset name or the path of a scenario
-``.json`` file; ``serve`` takes preset names only.  Bad input (an unknown
-name, an out-of-range value, an unreadable file) is reported as one
-``error: ...`` line on stderr with exit code 2.
+``.json`` file; ``serve`` takes preset names only.  ``--stations osm |
+synthetic | hybrid`` selects the charging stations of the real-data
+``turkey-osm-*`` presets (:mod:`evroute.generators.osm_turkey`).  On a
+network of more than 20 000 nodes ``--algorithms all`` (``compare``, ``viz``,
+``figures``) leaves out ``bls``, ``cfp`` and ``pareto``, which settle
+millions of labels there without the A* potential, and ``station-graph``,
+which takes minutes to hours there; name them to run them.
+Bad input (an unknown name, an out-of-range value, an unreadable file) is
+reported as one ``error: ...`` line on stderr with exit code 2.
 
 Charging tariff (:class:`~evroute.scenario.Tariff`): ``--tariff 80`` switches
 on the illustrative demonstration tariff
@@ -64,12 +71,20 @@ def _load_scenario(args: argparse.Namespace):
     else:
         from .generators.presets import PRESETS, get_scenario
 
+        build: dict[str, Any] = {}
+        stations = getattr(args, "stations", None)
+        if stations is not None:
+            if name in PRESETS and PRESETS[name].family != "turkey-osm":
+                raise UsageError(f"--stations applies to the turkey-osm presets only, not to {name!r}")
+            build["stations"] = stations
         try:
-            sc = get_scenario(name)
+            sc = get_scenario(name, **build)
         except KeyError as exc:
             if name in PRESETS:  # a bug in the preset builder, not a typo
                 raise
             raise UsageError(exc.args[0]) from None
+    if getattr(args, "stations", None) is not None and name.endswith(".json"):
+        raise UsageError("--stations applies to the turkey-osm presets only, not to a scenario file")
     sc = _apply_overrides(sc, args)
     try:
         sc.validate()
@@ -87,6 +102,14 @@ def _node(sc, value: str) -> int:
         try:
             return sc.network.node_by_name(value)
         except KeyError as exc:
+            if isinstance(sc.meta, dict) and sc.meta.get("generator") == "osm_turkey":
+                # every OSM place, also one that shares its node with a larger place
+                from .generators.osm_turkey import find_osm_place
+
+                try:
+                    return find_osm_place(value).node
+                except KeyError as exc2:
+                    raise UsageError(exc2.args[0]) from None
             raise UsageError(exc.args[0]) from None
 
 
@@ -213,11 +236,27 @@ def _algorithm(name: str) -> str:
     return name
 
 
-def _algorithms(spec: str | None) -> list[str]:
+#: Networks with more nodes than this leave the Dijkstra-order exact planners, the
+#: Pareto search and the station graph out of ``--algorithms all`` (the real-data
+#: network has 44 673).
+LARGE_NETWORK_NODES = 20_000
+#: The planners left out of ``--algorithms all`` on a large network: without the A*
+#: potential bls, cfp and pareto settle millions of labels there (minutes, or their
+#: label budget), and the station graph grows a label tree over the whole network for
+#: every station it expands (minutes, up to hours on a long trip).
+SLOW_ON_LARGE = ("bls", "cfp", "pareto", "station-graph")
+
+
+def _algorithms(spec: str | None, sc=None) -> list[str]:
     from .algorithms import available
 
     if not spec or spec == "all":
-        return available()
+        names = available()
+        if sc is not None and sc.network.num_nodes > LARGE_NETWORK_NODES:
+            names = [a for a in names if a not in SLOW_ON_LARGE]
+            print(f"note: {sc.network.num_nodes:,} nodes: {', '.join(SLOW_ON_LARGE)} left out of 'all' "
+                  "(name them with --algorithms to run them)", file=sys.stderr)
+        return names
     names = [_algorithm(a.strip()) for a in spec.split(",") if a.strip()]
     if not names:
         raise UsageError("no algorithm given")
@@ -347,7 +386,7 @@ def cmd_compare(args: argparse.Namespace) -> int:
 
     sc = _load_scenario(args)
     plans = []
-    for name in _algorithms(args.algorithms):
+    for name in _algorithms(args.algorithms, sc):
         try:
             plans.append(plan(sc, name))
         except Exception as exc:  # keep comparing the others
@@ -365,7 +404,7 @@ def cmd_viz(args: argparse.Namespace) -> int:
     from .viz.export import build_viewer_html, run_all
 
     sc = _load_scenario(args)
-    plans = run_all(sc, _algorithms(args.algorithms), trace=True)
+    plans = run_all(sc, _algorithms(args.algorithms, sc), trace=True)
     out = build_viewer_html(sc, plans, args.out, animate=not args.no_animate, lang=args.lang)
     print(f"wrote {out}  (open it in any browser; works offline)")
     return 0
@@ -387,11 +426,13 @@ def cmd_serve(args: argparse.Namespace) -> int:
 def _figures_off_screen(*, required: bool = True) -> None:
     """Commands that write figure files draw them off screen (the ``Agg``
     backend, unless ``MPLBACKEND`` names another); with ``required``,
-    a missing seaborn is reported as a usage error."""
+    a missing seaborn is reported as a usage error, otherwise as a note."""
     from .viz.style import has_seaborn
 
-    if required and not has_seaborn():
-        raise UsageError("figures need seaborn: pip install 'evroute[plot]'")
+    if not has_seaborn():
+        if required:
+            raise UsageError("figures need seaborn: pip install 'evroute[plot]'")
+        print("note: seaborn is not installed: figures skipped (pip install 'evroute[plot]')", file=sys.stderr)
     os.environ.setdefault("MPLBACKEND", "Agg")
 
 
@@ -410,7 +451,7 @@ def cmd_figures(args: argparse.Namespace) -> int:
 
     _figures_off_screen()
     sc = _load_scenario(args)
-    paths = case_study_figures(sc, Path(args.outdir), algorithms=_algorithms(args.algorithms))
+    paths = case_study_figures(sc, Path(args.outdir), algorithms=_algorithms(args.algorithms, sc))
     for p in paths:
         print(f"wrote {p}")
     return 0
@@ -473,6 +514,9 @@ def _scenario_options(p: argparse.ArgumentParser) -> None:
     p.add_argument("--no-queue", action="store_true", help="ignore charging queues")
     p.add_argument("--step", type=float, help="charging-target grid step (SoC fraction)")
     p.add_argument("--safety", type=float, help="consumption safety factor (>= 1)")
+    p.add_argument("--stations", choices=["osm", "synthetic", "hybrid"],
+                   help="turkey-osm presets: OSM charging stations, the synthetic case-study stations, or OSM "
+                        "stations plus synthetic DC gap-fillers")
     g = p.add_argument_group(
         "charging tariff",
         "Prices per kWh by state of charge and time of day; a factor multiplies the station price. "

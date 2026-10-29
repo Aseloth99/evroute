@@ -105,7 +105,8 @@
       el.algos.textContent = '';
       for (const a of p.algorithms || []) {
         const cb = U.el('input', { type: 'checkbox', value: a.name });
-        cb.checked = have.size ? have.has(a.name) : DEFAULT_ALGOS.includes(a.name);
+        // the server's defaults: without greedy and station graph on a large (real-data) network
+        cb.checked = have.size ? have.has(a.name) : (p.default_algorithms || DEFAULT_ALGOS).includes(a.name);
         el.algos.appendChild(U.el('label', { class: 'check', title: I.algoDescription(a), style: { '--algo': app.theme.dark ? a.color_dark : a.color } },
           cb, U.el('span', { text: a.short_title || a.title || a.name })));
       }

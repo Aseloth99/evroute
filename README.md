@@ -23,7 +23,7 @@ simplify the rest away:
 
 | Effect | In reality | EVRoute |
 |---|---|---|
-| Nonlinear charging | power drops sharply above ~50-80 % SoC | exact charging curves per vehicle × charger |
+| Nonlinear charging | power drops sharply above ~50-80 % state of charge (SoC) | exact charging curves per vehicle × charger |
 | Partial charging | stop at 54 %, not at 100 % | continuous amounts (CFP) or a fine grid (BLS) |
 | Queues | 20-40 min at busy service areas in the afternoon | Erlang-C queues with hourly demand |
 | Terrain and cold | descents refill the battery; −5 °C: smaller battery, slower charging | physics model with grade, wind and regeneration; cold-weather capacity and charging |
@@ -52,10 +52,13 @@ effects: [`docs/model.md`](docs/model.md#at-a-glance).
 - **See it** - an animated, offline web viewer (trip, race and search-replay
   modes, TR/EN, light/dark, mobile), a live planning server and an
   interactive experiment dashboard.
-- **Turkey case study** - 1 279 nodes, 146 roads, 10 mountain passes and 290
-  synthetic charging stations; plus synthetic networks of up to 40 000 nodes
-  and an OpenStreetMap loader.
-- **Reproducible** - eleven seeded experiments behind every table and
+- **Turkey case studies** - an approximate one (1 279 nodes, 146 roads, 10
+  mountain passes, 290 synthetic charging stations) and a
+  [real-data one](#real-data-case-study-openstreetmap): 44 673
+  OpenStreetMap nodes with SRTM elevations, 711 OSM charging stations and
+  operator list prices; plus synthetic networks of up to 40 000 nodes and an
+  OpenStreetMap loader.
+- **Reproducible** - twelve seeded experiments behind every table and
   figure, one command; a [gentle guide](docs/guide.md) to the algorithms.
 
 ## Screenshots
@@ -101,6 +104,7 @@ git clone https://github.com/Aseloth99/evroute.git
 cd evroute
 pip install -e .            # the planner: no dependencies at all
 pip install -e ".[plot]"    # optional: seaborn for static figures
+pip install -e ".[dev]"     # optional: + pytest, for the tests
 ```
 
 ### Command line
@@ -111,7 +115,7 @@ evroute plan turkey-karaman-istanbul                 # plan with BLS-A* (default
 evroute plan turkey-karaman-istanbul-tariff --objective cost      # 80 % rule + peak hours: waits for 20:00
 evroute viz turkey-karaman-istanbul -o karaman-istanbul.html --lang en   # animated viewer, works offline
 evroute serve turkey-karaman-istanbul --open          # live planning in the browser
-evroute experiments --quick -o results/               # all eleven experiments, smoke size (~1.5 min)
+evroute experiments --quick -o results/               # all twelve experiments, smoke size (~1.5 min)
 ```
 
 ```text
@@ -124,9 +128,10 @@ $ evroute plan turkey-karaman-istanbul
 arrival 16:06 | drive 7 h 19 min | charge 36 min | queue+setup 12 min | battery wear 0.0188 %SoH
 ```
 
-Every command and option (origin, destination, SoC, departure, temperature,
-vehicle, tariff, ...): [documentation](docs/index.md#command-line), or
-`evroute <command> -h`.
+Money is in Turkish lira (TRY), battery wear in percentage points of state
+of health (%SoH).  Every command and option (origin, destination, SoC,
+departure, temperature, vehicle, tariff, ...):
+[documentation](docs/index.md#command-line), or `evroute <command> -h`.
 
 ### Python
 
@@ -160,13 +165,35 @@ print(f"P(strand) = {mc.p_strand:.2%}   P(reserve breach) = {mc.p_reserve_breach
 P(strand) = 0.40%   P(reserve breach) = 51.9%
 ```
 
-The last line is the point of the robustness module: a plan that is optimal
-for the *expected* consumption arrives with barely more than the 10 % reserve
-(10.4 %), so half of all random worlds dip below it. Plan with
-`safety_factor` > 1 (`--safety`) to buy reliability with minutes - see
-[the robustness experiment](#experiments). Your own road network, vehicle
-and chargers, or OpenStreetMap data:
+(The Pareto search stops at its label budget, so the size of the front
+depends on floating-point rounding, and Python 3.12 changed how `sum()`
+rounds: Python 3.10 and 3.11 print 33.)  The last line is the point of the
+robustness module: a plan that is optimal for the *expected* consumption
+arrives with barely more than the 10 % reserve (10.4 %), so half of all
+random worlds dip below it. Plan with `safety_factor` > 1 (`--safety`) to
+buy reliability with minutes - see [the robustness experiment](#experiments).
+Your own road network, vehicle and chargers, or OpenStreetMap data:
 [documentation](docs/index.md#your-own-network-vehicle-and-chargers).
+
+## Requirements
+
+- **Python ≥ 3.10** (tested on 3.10-3.13) on Windows, macOS or Linux, and
+  **no runtime dependencies**: the planner, the viewer, the live server and
+  the bundled real-data network of Turkey (1.5 MB) use only the standard
+  library.  Plans on the real-data network need a few hundred MB of memory.
+- Optional: `.[plot]` adds seaborn ≥ 0.13 (with matplotlib, numpy and
+  pandas) for the static figures - without it `evroute experiments` writes
+  everything but the figures; `.[dev]` adds pytest for the test suite, which
+  lives in the repository, not in the installed package; `osmnx` downloads
+  other OpenStreetMap networks
+  ([documentation](docs/index.md#your-own-network-vehicle-and-chargers)).
+- For maintainers only: Node.js with Playwright regenerates the screenshots
+  and the GIF; rebuilding the real-data network needs `osmium`, `numpy`,
+  `scipy`, `shapely`, `openpyxl`, about 1 GB of disk and internet access
+  ([real data](docs/real-data.md#rebuilding-the-data)).
+
+[`requirements.txt`](requirements.txt) says the same for tools that look for
+one.
 
 ## Example: Karaman → İstanbul
 
@@ -174,7 +201,9 @@ and chargers, or OpenStreetMap data:
 Turkish C-SUV (85 kWh battery) leaving at 08:00 with 80 %, 10 % reserve on
 the way and on arrival, expected queues at every charger. Runtimes are the
 median of five runs of the planner alone on a 2.1 GHz Xeon core (Python
-3.13); the gap is measured against the continuous optimum of CFP:
+3.13); the gap is measured against the continuous optimum of CFP, and
+*labels settled* counts the partial routes a planner had to finalise, a
+measure of its search effort:
 
 | algorithm | trip time | gap | stops | charging cost [TRY] | arrival SoC | labels settled | runtime |
 |---|---:|---:|---:|---:|---:|---:|---:|
@@ -204,6 +233,44 @@ median of five runs of the planner alone on a 2.1 GHz Xeon core (Python
 > to compare algorithms, not to plan a real trip
 > ([data provenance](docs/index.md#turkey-case-study)).
 
+## Real-data case study (OpenStreetMap)
+
+The same trips also run on real data, bundled with the package: the
+OpenStreetMap road network of Turkey (44 673 nodes, 75 393 km of motorway,
+trunk and primary roads; OSM speed limits or the legal defaults) with SRTM
+elevations at every node, the 711 public charging stations mapped in OSM,
+and the list prices that ten operators publish. **Assumed** are the queues
+(national EPDK averages) and the values OSM does not have: 64 % of the
+station powers are defaults. Road distances between the 81 province centres
+deviate from the official KGM table by 2.52 % on average.
+
+```bash
+evroute plan turkey-osm-karaman-istanbul   # 9 h 14 min, 751.81 km, 2 stops, 999.92 TRY (BLS-A*, about 5 s)
+```
+
+- **OSM knows few chargers:** about 3.3 % of the AC and 1.9 % of the DC
+  sockets that EPDK counts (September 2026), and no DC station east of
+  38° E. The `hybrid` station set (`--stations hybrid`) adds flagged
+  synthetic DC gap-fillers wherever a main road is more than 75 km from a DC
+  charger.
+- **The exact planners stay exact and fast:** BLS-A\* and CFP-A\* find the
+  optimum of 5 of 6 trips with OSM stations (İzmir → Erzurum, without a DC
+  charger in the east, runs into the label limit) and of 6 of 6 with the
+  hybrid set; on 44 673 nodes the median runtime over the six trips with OSM
+  stations is 4.0 s and 9.9 s, and BLS-A\* stays within 0.4 % of CFP-A\*.
+  With OSM stations the optimum takes 7.0 % longer than on the approximate
+  network, almost all of it slower driving.
+- **The heuristics do not:** with OSM stations greedy is 153 % slower than
+  the optimum on average (6.4 % on the approximate network), charging for
+  hours at slow AC chargers, and the station graph needed up to 3 h 46 min
+  for one trip (hybrid set; the experiment now stops a heuristic after 10
+  minutes).
+
+> [!NOTE]
+> Data © OpenStreetMap contributors, ODbL 1.0; elevations SRTM (NASA/USGS).
+> Research data, not for navigation. The full write-up, with the March 2026
+> charging regulation: [`docs/real-data.md`](docs/real-data.md) ([Türkçe](docs/real-data.tr.md)).
+
 ## There is no single best route
 
 A trip costs three things - **time**, **money** and **battery wear** - and
@@ -211,7 +278,9 @@ they pull in different directions. Charging prices make the trade-off
 sharper; EVRoute models two common practices with a `Tariff`:
 
 - **The 80 % rule.** Above about 80 % SoC the charging power drops steeply,
-  so operators charge more for every kWh stored above `high_soc`.
+  so operators charge more for every kWh stored above `high_soc` (not at
+  Turkish public stations, where such tiers have been forbidden since March
+  2026: [real data](docs/real-data.md#prices-and-the-march-2026-regulation)).
 - **Peak hours.** At busy times of day a peak factor applies - on fixed
   clock hours, or whenever a station's queue model expects it to be busy.
 
@@ -265,9 +334,10 @@ and [`docs/algorithms.md`](docs/algorithms.md#at-a-glance) (overview and proofs)
 
 ## Experiments
 
-Eleven seeded experiments reproduce every table and figure of the
-accompanying paper. Each writes CSV, JSON, figures and LaTeX tables; the run
-ends with `results.html`, an interactive offline dashboard.
+Twelve seeded experiments reproduce every table and figure of the
+accompanying paper. Each writes CSV, JSON, figures (with the `plot` extra)
+and LaTeX tables; the run ends with `results.html`, an interactive offline
+dashboard.
 
 ```bash
 evroute experiments --quick -o results/            # smoke size: ~1.5 minutes
@@ -283,8 +353,9 @@ evroute gallery -o docs/img                        # the seaborn figures of this
 | `robustness` | İzmir → Erzurum: P(reserve breach) 56 % at safety factor 1.0, 9.7 % at 1.1 (+21 min), 0.4 % at 1.2 (+36 min) |
 | `tariffs` | the cost-optimal plan pays 76.73 TRY (7.6 %) less than the fastest for 6.3 min more |
 | `scalability` | synthetic countries of 40 000 nodes: BLS-A\* answers in 1.7 s and CFP-A\* in 2.5 s on average |
+| `real-data` | six trips on the approximate network and on OpenStreetMap data: with OSM stations the optimum takes 7.0 % longer on average, almost all of it slower driving; BLS-A\* answers in 4.0 s and CFP-A\* in 9.9 s (median) |
 
-All eleven findings, the outputs and the run times:
+All twelve findings, the outputs and the run times:
 [documentation](docs/index.md#experiments-and-figures).
 
 ## How correctness is verified
@@ -293,7 +364,7 @@ Every plan of every planner is replayed by an **independent evaluator**; a
 seeded **cross-validation suite** checks eleven invariants against brute
 force, analytic oracles, metamorphic relations and local search, also under
 random charging tariffs ([`tests/fuzz_report.md`](tests/fuzz_report.md)).
-634 tests, 541 in the fast tier, run on Python 3.10-3.13 in CI
+711 tests, 608 in the fast tier, run on Python 3.10-3.13 in CI
 ([details](docs/algorithms.md#8-how-correctness-is-verified)):
 
 ```bash
@@ -305,6 +376,9 @@ python -m pytest -m "not slow"   # fast tier, a few minutes
 - [Guide](docs/guide.md) ([Türkçe](docs/guide.tr.md)) - the algorithms step
   by step, for newcomers, and "which planner should I use?"
 - [Model](docs/model.md) - every equation, with the module that implements it
+- [Real-data case study](docs/real-data.md) ([Türkçe](docs/real-data.tr.md)) -
+  Turkey on OpenStreetMap: sources, build, validation, charging coverage,
+  prices and the 2026 regulation, results, limitations
 - [Algorithms & proofs](docs/algorithms.md) - correctness arguments and references
 - [Documentation index](docs/index.md) - command line, Python API, viewer,
   live server, experiments, scenarios and data, tariffs, FAQ, roadmap
@@ -321,10 +395,10 @@ If EVRoute helps your research, please cite it ([`CITATION.cff`](CITATION.cff)):
   author  = {Açık, Mustafa},
   title   = {{EVRoute}: exact, battery-, queue- and degradation-aware route planning
              for electric vehicles with charging stations},
-  version = {1.0.0},
+  version = {1.1.0},
   year    = {2026},
   url     = {https://github.com/Aseloth99/evroute},
-  license = {MIT}
+  license = {MIT (code), ODbL-1.0 (bundled real data)}
 }
 ```
 
@@ -333,6 +407,13 @@ If EVRoute helps your research, please cite it ([`CITATION.cff`](CITATION.cff)):
 [MIT](LICENSE) © 2026 Mustafa Açık, Karamanoğlu Mehmetbey University,
 Department of Computer Engineering.
 
+The real-data network of Turkey bundled in `src/evroute/data/osm_turkey/`
+is data, not code: road network, places and charging stations ©
+[OpenStreetMap contributors](https://www.openstreetmap.org/copyright),
+available under the [ODbL 1.0](https://opendatacommons.org/licenses/odbl/1-0/);
+elevations from SRTM (NASA/USGS, public domain). Details:
+[`DATA_LICENSE.md`](src/evroute/data/osm_turkey/DATA_LICENSE.md).
+
 ## Acknowledgements
 
 - The algorithms build on the work of Artmeier et al. (2010), Storandt &
@@ -340,9 +421,13 @@ Department of Computer Engineering.
   Dibbelt, Wagner & Zündorf (2020),
   Montoya et al. (2017), Martins (1984) and Mandow & Pérez de la Cruz
   (2010) - full references in [`docs/algorithms.md`](docs/algorithms.md#references).
-- Place coordinates and elevations of the Turkey case study were compiled
-  at gazetteer level from general geographic knowledge; no proprietary map
-  or charging-network data is included. The optional OSM loader uses
-  [OSMnx](https://github.com/gboeing/osmnx) and
-  [OpenStreetMap](https://www.openstreetmap.org/copyright) data (© OpenStreetMap
-  contributors, ODbL) when you choose to download it.
+- Place coordinates and elevations of the approximate Turkey case study
+  were compiled at gazetteer level from general geographic knowledge; no
+  proprietary map or charging-network data is included.
+- The real-data case study is built from
+  [OpenStreetMap](https://www.openstreetmap.org/copyright) (© OpenStreetMap
+  contributors, ODbL 1.0), SRTM elevations (NASA/USGS) from the AWS Terrain
+  Tiles, the KGM distance table, the EPDK charging statistics and the
+  operators' published prices ([sources](docs/real-data.md#sources)). The
+  optional OSM loader uses [OSMnx](https://github.com/gboeing/osmnx) and
+  OpenStreetMap data when you choose to download it.

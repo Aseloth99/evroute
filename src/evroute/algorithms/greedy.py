@@ -22,7 +22,9 @@ charging stop:
    are the rule, not the exception; they are broken like a driver would:
    **the station closest to the destination wins** (drive as far as the
    battery allows), then the shorter expected stop (wait + setup + charge to
-   the target).
+   the target).  A station at the destination counts as reachable also with
+   less energy than the arrival requirement ``P.e_dest_min``: topping up
+   there is how the requirement is met.
 3. Drive to the station along the fastest feasible path and charge to a
    fixed target SoC -- by default 80 % at DC chargers (the usual advice,
    because charging power falls steeply above it) and 100 % at AC
@@ -187,12 +189,29 @@ def run_greedy(
         run.message = msg
         return run
 
-    def make_tree(v: int, x: float, t: float) -> dict[int, tuple]:
-        tree = fastest_feasible_tree(P, v, x, t_start=t, min_arrival_energy=need, fastest_level_only=True)
+    def make_tree(v: int, x: float, t: float, *, arrival_need: dict[int, float] | None = need) -> dict[int, tuple]:
+        tree = fastest_feasible_tree(P, v, x, t_start=t, min_arrival_energy=arrival_need, fastest_level_only=True)
         run.trees += 1
         run.settled += len(tree)
         trace_label_tree(trace, tree)
         return tree
+
+    # A tree holds the destination only if it is reached with the arrival
+    # requirement; a station there may be reached with less (that is why it
+    # is used), so its arrival comes from a tree without the requirement.
+    # (Driving keeps the reserve, so with a requirement equal to the reserve
+    # only the start of a round trip can fall short.)
+    dest_station = P.is_station_node[dest] and (P.e_dest_min > P.e_min or P.origin == dest)
+    free_dest: dict[tuple[int, float, float], tuple | None] = {}
+
+    def station_record(tree: dict[int, tuple], s_node: int, v: int, x: float, t: float) -> tuple | None:
+        """Arrival record of the station node ``s_node`` from the state ``(v, x, t)`` of ``tree``."""
+        rec = tree.get(s_node)
+        if rec is None and s_node == dest and dest_station:
+            if (v, x, t) not in free_dest:
+                free_dest[(v, x, t)] = make_tree(v, x, t, arrival_need=None).get(dest)
+            rec = free_dest[(v, x, t)]
+        return rec
 
     def fastest_from(v: int, t: float) -> tuple[list[int], list[int]] | None:
         """Battery-unaware fastest path ``v -> destination`` (cached per node)."""
@@ -249,7 +268,7 @@ def run_greedy(
         for s2, st2 in enumerate(P.stations):
             if s2 == s or s2 in used or st2.node == v:
                 continue
-            if st2.node in tree2 and time_lb[st2.node] < INF:
+            if station_record(tree2, st2.node, v, y, t) is not None and time_lb[st2.node] < INF:
                 return True, tree2
         return False, tree2
 
@@ -280,7 +299,7 @@ def run_greedy(
         for s, st in enumerate(P.stations):
             if s in used or st.node == exclude_node:
                 continue
-            rec = tree.get(st.node)
+            rec = station_record(tree, st.node, node, energy, t_now)
             lbv = time_lb[st.node]
             if rec is None or lbv == INF:
                 continue

@@ -20,6 +20,11 @@ Every preset is a builder plus default arguments.  ``get_scenario(name,
   that replaces the scenario's charging tariff; a preset may set one in its
   defaults (``turkey-karaman-istanbul-tariff`` uses :data:`DEMO_TARIFF`).
 
+The ``turkey-osm-*`` presets (family ``"turkey-osm"``) run on the real
+OpenStreetMap network of :mod:`~evroute.generators.osm_turkey` (data ©
+OpenStreetMap contributors, ODbL) and take ``stations="osm" | "synthetic" |
+"hybrid"``.
+
 Networks are cached by the generators, so building a preset twice costs
 almost nothing; stations are fresh copies every time.  Register your own
 presets with :func:`register_scenario`; they then appear in the CLI,
@@ -35,6 +40,7 @@ from typing import Any, Callable
 
 from ..scenario import Scenario, Tariff
 from .basic import grid_scenario
+from .osm_turkey import osm_turkey_scenario
 from .synthetic import corridor_scenario, country_scenario, random_geometric_scenario, split_overrides
 from .turkey import turkey_scenario
 
@@ -51,6 +57,14 @@ __all__ = ["DEMO_TARIFF", "Preset", "PRESETS", "get_scenario", "list_scenarios",
 #: Used by ``--tariff 80`` on the command line, the
 #: ``turkey-karaman-istanbul-tariff`` preset, the live viewer's tariff
 #: switch and the ``tariffs`` experiment.
+#:
+#: The SoC tier is a modelling option, not the practice in Turkey: since the
+#: amendment of the Şarj Hizmeti Yönetmeliği (Resmî Gazete 23.03.2026,
+#: No. 33202) an operator charges one AC and one DC price at its public
+#: stations, without tiers by state of charge or charger power (discounts by
+#: location and time of day remain allowed, priced at the hour the session
+#: starts).  The real-data presets (``turkey-osm-*``) therefore keep the
+#: neutral ``Tariff()``.
 DEMO_TARIFF = Tariff(
     high_soc=0.8, high_soc_factor=1.3, peak_hours=((16.0, 20.0),), peak_factor=1.15, peak_high_soc_factor=2.0
 )
@@ -142,6 +156,9 @@ def _builder_params(fn: Callable[..., Any]) -> set[str]:
 
 
 PRESETS: dict[str, Preset] = {}
+
+#: Size of the real-data network of :mod:`evroute.generators.osm_turkey`.
+_OSM_NODES = 44673
 
 
 def register_scenario(
@@ -273,6 +290,7 @@ def _register_builtins() -> None:
         notes="Central Anatolia to the Cilician plain over the Taurus (Gülek); queues are moderate on this "
               "corridor, so queue awareness changes little here (compare turkey-istanbul-ankara-rush).",
     )
+    _register_osm_turkey()
     reg(
         "corridor",
         corridor_scenario,
@@ -323,6 +341,103 @@ def _register_builtins() -> None:
         "10 x 10 jittered grid with hills (basic test instance), low initial charge.",
         defaults={"rows": 10, "cols": 10, "seed": 1, "initial_soc": 0.3},
         family="grid", tags=("test",), approx_nodes=100,
+    )
+
+
+def _register_osm_turkey() -> None:
+    """The real-data presets: OpenStreetMap roads of Turkey (:mod:`evroute.generators.osm_turkey`).
+
+    Each takes ``stations="osm" | "synthetic" | "hybrid"`` as an override
+    (``evroute plan ... --stations hybrid``); the default tariff is neutral.
+    """
+    reg = register_scenario
+    osm = ("real-data", "osm", "TRY")
+    reg(
+        "turkey-osm-karaman-istanbul",
+        osm_turkey_scenario,
+        "Karaman -> İstanbul on OpenStreetMap roads with the OSM charging stations (real-data flagship).",
+        defaults={"origin": "Karaman", "destination": "İstanbul", "initial_soc": 0.8, "temperature_c": 18.0,
+                  "departure": "08:00", "stations": "osm"},
+        family="turkey-osm", tags=("case-study", "intercity", *osm), approx_nodes=_OSM_NODES,
+        notes="The flagship trip of turkey-karaman-istanbul on the real network: 44 673 OSM nodes with SRTM "
+              "elevations, 711 public OSM charging stations priced with the operators' list prices, queues from "
+              "national EPDK averages. Data © OpenStreetMap contributors (ODbL).",
+    )
+    reg(
+        "turkey-osm-karaman-istanbul-dc85",
+        osm_turkey_scenario,
+        "Karaman -> İstanbul on OSM roads, charging capped at 85 % (operators may end DC sessions there).",
+        defaults={"origin": "Karaman", "destination": "İstanbul", "initial_soc": 0.8, "temperature_c": 18.0,
+                  "departure": "08:00", "stations": "osm", "max_charge_soc": 0.85},
+        family="turkey-osm", tags=("case-study", "regulation", *osm), approx_nodes=_OSM_NODES,
+        notes="Since March 2026 an operator may end a DC session once the battery reaches 85 % (Şarj Hizmeti "
+              "Yönetmeliği, Resmî Gazete No. 33202). max_charge_soc=0.85 respects that at every stop (AC included, "
+              "a simplification). Data © OpenStreetMap contributors (ODbL).",
+    )
+    reg(
+        "turkey-osm-antalya-ankara",
+        osm_turkey_scenario,
+        "Antalya -> Ankara on OpenStreetMap roads over the Taurus, with the OSM charging stations.",
+        defaults={"origin": "Antalya", "destination": "Ankara", "initial_soc": 0.8, "temperature_c": 22.0,
+                  "departure": "09:00", "stations": "osm"},
+        family="turkey-osm", tags=("case-study", "intercity", "mountain", *osm), approx_nodes=_OSM_NODES,
+        notes="The climb from the Mediterranean to the plateau on SRTM elevations. Data © OpenStreetMap "
+              "contributors (ODbL).",
+    )
+    reg(
+        "turkey-osm-istanbul-ankara",
+        osm_turkey_scenario,
+        "İstanbul -> Ankara on OpenStreetMap roads leaving at 14:30, with the OSM charging stations.",
+        defaults={"origin": "İstanbul", "destination": "Ankara", "initial_soc": 0.55, "temperature_c": 20.0,
+                  "departure": "14:30", "stations": "osm"},
+        family="turkey-osm", tags=("case-study", "queues", *osm), approx_nodes=_OSM_NODES,
+        notes="The busiest corridor (O-4 / D-100) on the real network; queues follow the EPDK national averages, "
+              "which are much lighter than the calibrated afternoon queues of turkey-istanbul-ankara-rush. Data © "
+              "OpenStreetMap contributors (ODbL).",
+    )
+    reg(
+        "turkey-osm-ankara-adana",
+        osm_turkey_scenario,
+        "Ankara -> Adana on OpenStreetMap roads leaving at 15:00, with the OSM charging stations.",
+        defaults={"origin": "Ankara", "destination": "Adana", "initial_soc": 0.6, "temperature_c": 25.0,
+                  "departure": "15:00", "stations": "osm"},
+        family="turkey-osm", tags=("case-study", "intercity", *osm), approx_nodes=_OSM_NODES,
+        notes="Central Anatolia to the Cilician plain over the Taurus (Gülek) on the real network. Data © "
+              "OpenStreetMap contributors (ODbL).",
+    )
+    reg(
+        "turkey-osm-karaman-mersin",
+        osm_turkey_scenario,
+        "Karaman -> Mersin on OpenStreetMap roads: the Sertavul pass or the motorway via Pozantı.",
+        defaults={"origin": "Karaman", "destination": "Mersin", "initial_soc": 0.5, "temperature_c": 20.0,
+                  "departure": "10:00", "stations": "osm"},
+        family="turkey-osm", tags=("case-study", "regeneration", "mountain", *osm), approx_nodes=_OSM_NODES,
+        notes="The regeneration case of turkey-karaman-mersin on SRTM elevations. Data © OpenStreetMap "
+              "contributors (ODbL).",
+    )
+    reg(
+        "turkey-osm-izmir-erzurum",
+        osm_turkey_scenario,
+        "İzmir -> Erzurum on OpenStreetMap roads with OSM stations plus synthetic DC gap-fillers (hybrid).",
+        defaults={"origin": "İzmir", "destination": "Erzurum", "initial_soc": 0.9, "temperature_c": 12.0,
+                  "departure": "06:00", "stations": "hybrid"},
+        family="turkey-osm", tags=("case-study", "long", "mountain", "hybrid", *osm), approx_nodes=_OSM_NODES,
+        notes="OSM has no DC charger east of 38 E: with OSM stations alone the trip is feasible only over slow AC "
+              "stops (a greedy plan takes 46 h 34 min) and the exact planners run out of their label budgets; the "
+              "hybrid set adds synthetic DC gap-fillers (operator 'synthetic') wherever a main road is more than "
+              "75 km from a DC station. Data © OpenStreetMap contributors (ODbL).",
+    )
+    reg(
+        "turkey-osm-karaman-konya",
+        osm_turkey_scenario,
+        "Karaman -> Konya on OpenStreetMap roads at 30 % charge: no DC charger on the way, the plans detour to an AC "
+        "charger (~240 km).",
+        defaults={"origin": "Karaman", "destination": "Konya", "initial_soc": 0.3, "temperature_c": 18.0,
+                  "departure": "08:00", "stations": "osm"},
+        family="turkey-osm", tags=("test", "short", *osm), approx_nodes=_OSM_NODES,
+        notes="OSM has no DC charger between the two cities, so the plans detour to an AC charger. Small enough "
+              "for the Dijkstra-order planners and the cross-checks of the test-suite. Data © OpenStreetMap "
+              "contributors (ODbL).",
     )
 
 

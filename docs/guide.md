@@ -225,7 +225,9 @@ CFP with the torch of section 4: the same optimum with **16 times fewer
 labels** (347 instead of 5,665; 27 ms instead of 383 ms).  It scales: on
 synthetic countries of 40 000 nodes CFP-A\* answers in 2.5 s on average
 (BLS-A\*: 1.7 s), while Dijkstra-order CFP runs out of its label budget on 6
-of 8 trips (experiment `scalability`).
+of 8 trips (experiment `scalability`).  On the real OpenStreetMap network of
+Turkey (44 673 nodes) the median over six trips is 9.9 s for CFP-A\* and
+4.0 s for BLS-A\* ([real-data case study](real-data.md)).
 
 ## 7. Pareto: time, money and wear at once
 
@@ -330,6 +332,11 @@ practices (`Tariff`):
   the queue do not like it either.
 - **Peak hours.**  At busy times of day a peak factor applies - on fixed
   clock hours, or whenever a charger's queue model expects it to be busy.
+
+(In Turkey public stations have had one AC and one DC price per operator
+since March 2026, without tiers by state of charge, so the 80 % rule is an
+illustration there; prices by time of day remain allowed:
+[real-data case study](real-data.md#prices-and-the-march-2026-regulation).)
 
 The rule that makes this interesting: **the price of a session is fixed when
 the car joins the queue.**  A car that reaches a charger three minutes before

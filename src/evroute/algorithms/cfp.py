@@ -865,6 +865,13 @@ class _Envelope:
         Points of ``E`` that end up on a linear piece of ``B`` (where ``B`` is the
         maximum) are dropped, so that the envelope does not accumulate redundant
         points: its size stays proportional to the number of its kinks.
+
+        The merged range ``[t_feas, ...)`` is replaced by new points and by runs
+        of ``E``'s points that stay as they are (where ``E`` is above ``B``).
+        Those runs are not copied: they are recorded as ``(position, start,
+        end)`` and the new points are spliced around them in place, so an
+        insertion costs the points it changes, not the size of ``E`` (the
+        resulting lists are the same).
         """
         n = len(ts)
         if n == 1:
@@ -876,23 +883,34 @@ class _Envelope:
         bend = bs[n - 1]
         m = len(T)
         i0 = bisect_left(T, t0)
+        # the merged output: the new points ot/ov, with the kept runs T[a:b] of E
+        # inserted before new point number `pos` for every (pos, a, b) in `keep`
         ot: list[float] = []
         ov: list[float] = []
-        oc: list[int] = []  # piece of B a point lies inside (B the maximum there), else -1
+        keep: list[tuple[int, int, int]] = []
+        # last output point (time, value), the piece of B the last and the second-to-last
+        # output point lie inside (B the maximum there; -1 otherwise), and the output size
+        lt = lv = -INF
+        c1 = c2 = -1
+        cnt = 0
         if m and T[0] <= t0:
             if T[0] < t0:
-                ot.append(t0)
-                ov.append(self.left(t0))
-                oc.append(-1)
+                lt, lv = t0, self.left(t0)
+                ot.append(lt)
+                ov.append(lv)
+                c2, c1 = c1, -1
+                cnt += 1
             er = self.right(t0)
         else:
             er = -INF
         b0 = bs[0]
         top = er if er > b0 else b0
-        if not ov or top > ov[-1]:
-            ot.append(t0)
-            ov.append(top)
-            oc.append(-1)
+        if not cnt or top > lv:
+            lt, lv = t0, top
+            ot.append(lt)
+            ov.append(lv)
+            c2, c1 = c1, -1
+            cnt += 1
         # walk the union of E's points after t0 and B's breakpoints
         i = bisect_right(T, t0)  # next point of E
         k = 1  # next breakpoint of B
@@ -938,27 +956,36 @@ class _Envelope:
                     tc = pt + (p - pt) * d1 / (d1 - d2)
                     if pt < tc < p:
                         vc = pq + (bq - pq) * (tc - pt) / (p - pt)
-                        ot.append(tc)
-                        ov.append(vc if vc > ov[-1] else ov[-1])
-                        oc.append(-1)
+                        lt = tc
+                        if vc > lv:
+                            lv = vc
+                        ot.append(lt)
+                        ov.append(lv)
+                        c2, c1 = c1, -1
+                        cnt += 1
             lo = el if el > bq else bq
-            if lo < ov[-1]:
-                lo = ov[-1]
+            if lo < lv:
+                lo = lv
             hi = er_p if er_p > bq else bq
-            if lo > ov[-1] or ot[-1] != p:
+            if lo > lv or lt != p:
                 # a point strictly inside a piece of B, with B the maximum on both sides
                 src = k if (not on_break and el <= bq and er_p <= bq) else -1
-                if src >= 0 and len(oc) >= 2 and oc[-1] == src and oc[-2] == src:
-                    ot[-1] = p  # the previous point lies on the same segment
-                    ov[-1] = lo
+                if src >= 0 and cnt >= 2 and c1 == src and c2 == src:
+                    # the previous point lies on the same segment (a new point: c1 >= 0)
+                    ot[-1] = lt = p
+                    ov[-1] = lv = lo
                 else:
-                    ot.append(p)
-                    ov.append(lo)
-                    oc.append(src)
-            if hi > ov[-1]:
-                ot.append(p)
-                ov.append(hi)
-                oc.append(-1)
+                    lt, lv = p, lo
+                    ot.append(lt)
+                    ov.append(lv)
+                    c2, c1 = c1, src
+                    cnt += 1
+            if hi > lv:
+                lt, lv = p, hi
+                ot.append(lt)
+                ov.append(lv)
+                c2, c1 = c1, -1
+                cnt += 1
             pt, pe, pq = p, er_p, bq
             if p >= te and er_p >= bend:
                 # E is above B for good: keep the rest of E unchanged
@@ -974,17 +1001,66 @@ class _Envelope:
                 if T[i] >= tstar:
                     continue
                 j2 = bisect_left(T, tstar, i)
-                ot.extend(T[i:j2])
-                ov.extend(V[i:j2])
-                oc.extend([-1] * (j2 - i))
-                i = j2
+                t1 = ts[k - 1]
+                tk = ts[k]
+                dt = tk - t1
                 pt = T[j2 - 1]
                 pe = V[j2 - 1]
-                t1 = ts[k - 1]
-                dt = ts[k] - t1
                 pq = bs[k] if dt <= 0.0 else bs[k - 1] + (bs[k] - bs[k - 1]) * (pt - t1) / dt
-        T[i0:i] = ot
-        V[i0:i] = ov
+                # The run goes on over E's next points as long as the walk above would
+                # only take them over unchanged: a time p < ts[k] with E strictly above
+                # B, no crossing since the previous point, at most two points (a jump
+                # upwards); then B catches up with E(p) at the earliest at the next
+                # tstar.  (The same arithmetic as the walk, so the result is the same.)
+                if dt > 0.0:
+                    b1 = bs[k - 1]
+                    db = bs[k] - b1
+                    while j2 < m:
+                        p = T[j2]
+                        if p >= tk:
+                            break
+                        el = V[j2]
+                        bq = b1 + db * (p - t1) / dt
+                        if not el > bq or el < pe or pe < pq:
+                            break
+                        j3 = j2 + 1
+                        if j3 < m and T[j3] == p:
+                            j3 += 1
+                            if V[j3 - 1] <= el or (j3 < m and T[j3] == p):
+                                break
+                        er_p = V[j3 - 1]
+                        pt, pe, pq = p, er_p, bq
+                        j2 = j3
+                        if j3 == m:
+                            break
+                        tstar = tk if er_p >= bs[k] else t1 + dt * (er_p - b1) / db
+                        if T[j3] >= tstar:
+                            break
+                        j2 = bisect_left(T, tstar, j3)
+                        pt = T[j2 - 1]
+                        pe = V[j2 - 1]
+                        pq = b1 + db * (pt - t1) / dt
+                keep.append((len(ot), i, j2))  # E's points T[i:j2] stay as they are
+                lt, lv = T[j2 - 1], V[j2 - 1]
+                c2 = c1 if j2 - i == 1 else -1
+                c1 = -1
+                cnt += j2 - i
+                i = j2
+        if not keep:
+            T[i0:i] = ot
+            V[i0:i] = ov
+            return
+        # splice the new points around the kept runs, from the right (indices to the
+        # left of a splice stay valid)
+        end_old, end_new = i, len(ot)
+        for pos, a, b in reversed(keep):
+            if end_old != b or end_new != pos:
+                T[b:end_old] = ot[pos:end_new]
+                V[b:end_old] = ov[pos:end_new]
+            end_old, end_new = a, pos
+        if end_old != i0 or end_new:
+            T[i0:end_old] = ot[:end_new]
+            V[i0:end_old] = ov[:end_new]
 
 
 def _search(

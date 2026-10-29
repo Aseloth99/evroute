@@ -76,6 +76,7 @@ SECTION_IDS: tuple[str, ...] = (
     "eco-speed",
     "vehicles",
     "tariffs",
+    "real-data",
 )
 
 #: Algorithms in a fixed order (legends, tables); colours follow the entity.
@@ -461,6 +462,8 @@ class _Checks:
                               "en": "The cost-optimal plan's generalised cost is no higher than the time-optimal plan's"},
         "tariff-cost-money": {"tr": "Maliyet-optimal plan şarj ve batarya yıpranması için zaman-optimal plandan fazla ödemiyor",
                               "en": "The cost-optimal plan pays no more for charging and battery wear than the time-optimal plan"},
+        "more-stations-not-slower": {"tr": "Daha çok şarj istasyonu kesin optimumu uzatmıyor (hibrit küme OSM istasyonlarını içerir)",
+                                     "en": "More charging stations never make the exact optimum slower (the hybrid set contains the OSM stations)"},
         "tariff-front-extremes": {"tr": "Cephenin en hızlı planı zaman optimumu; tam bir cephede maliyet-optimal plandan yavaş ve pahalı olmayan bir plan var",
                                   "en": "The front's fastest plan is the time optimum; a complete front has a plan no slower and no dearer than the cost optimum"},
     }
@@ -1358,6 +1361,267 @@ def _tariff_checks(checks: _Checks, label: str, t: Mapping[str, Any] | None, c: 
                    f"{label}: member {bad} {None if bad is None else (front[bad]['time_min'], front[bad]['money'])} is dominated")
 
 
+#: The data sets of the ``real-data`` experiment in presentation order: key and title.
+REAL_NETWORKS: tuple[tuple[str, LangText], ...] = (
+    ("approx", {"tr": "Yaklaşık ağ, sentetik istasyonlar", "en": "Approximate network, synthetic stations"}),
+    ("osm", {"tr": "OSM ağı, OSM istasyonları", "en": "OSM network, OSM stations"}),
+    ("hybrid", {"tr": "OSM ağı, hibrit istasyonlar", "en": "OSM network, hybrid stations"}),
+)
+#: Credit of the OpenStreetMap data (ODbL 1.0).
+OSM_CREDIT = "© OpenStreetMap contributors"
+#: Status of a heuristic run that the experiment's time budget stopped
+#: (``evroute.experiments.runner.OVER_BUDGET``): no plan, ``runtime_ms`` is a lower bound.
+OVER_BUDGET = "not run: over the time budget"
+
+
+def _sec_real_data(exp: Mapping[str, Any], checks: _Checks, ctx: Mapping[str, Any]) -> dict[str, Any] | None:
+    """The same trips on the approximate network and on OpenStreetMap data (``real-data``).
+
+    A heuristic run on the OSM data sets that took longer than the
+    experiment's wall-clock budget (``heuristic_budget_s`` of
+    ``summary.json``) is flagged ``over``; one the budget stopped is also
+    ``stopped`` and has no plan, its runtime the time it had run (a lower
+    bound, counted as such in the runtime medians).
+    """
+    rows = _rows(exp)
+    if not rows:
+        return None
+    summary = exp.get("summary") if isinstance(exp.get("summary"), dict) else {}
+    ref_algo = str(summary.get("reference") or "cfp-astar")
+    budget_s = summary.get("heuristic_budget_s")
+    budget_s = float(budget_s) if _finite(budget_s) else None
+    trip_ids = list(dict.fromkeys(str(r.get("trip")) for r in rows if r.get("trip") is not None))
+    net_keys = [k for k, _ in REAL_NETWORKS if any(str(r.get("network")) == k for r in rows)]
+    net_keys += [k for k in dict.fromkeys(str(r.get("network")) for r in rows) if k not in net_keys]
+    titles = dict(REAL_NETWORKS)
+    fields = ("time_min", "drive_min", "queue_min", "charge_min", "distance_km", "stops", "money", "charged_kwh",
+              "runtime_ms", "settled", "gap_pct", "nodes", "edges", "stations", "dc_stations", "arrival_soc")
+    trips = []
+    for tid in trip_ids:
+        presets = ((summary.get("trips") or {}).get(tid) or {}).get("presets") or {}
+        meta = case_meta(str(presets.get("approx") or f"turkey-{tid}"))
+        nets: dict[str, Any] = {}
+        for net in net_keys:
+            sel = [r for r in rows if str(r.get("trip")) == tid and str(r.get("network")) == net]
+            if not sel:
+                continue
+            plans = {}
+            for r in sel:
+                a = str(r.get("algorithm"))
+                d = {f: _num(r, f) for f in fields}
+                stopped = str(r.get("status") or "").strip() == OVER_BUDGET
+                d.update(feasible=_feasible(r) and not stopped, limit=_limit(r), stopped=stopped,
+                         over=stopped or (budget_s is not None and net != "approx" and a in HEURISTIC_ALGOS
+                                          and _finite(d["runtime_ms"]) and d["runtime_ms"] > 1000.0 * budget_s))
+                if not d["feasible"]:
+                    d["time_min"] = None
+                plans[a] = d
+            any_row = sel[0]
+            nets[net] = {"plans": plans, "stations": _num(any_row, "stations"), "dc_stations": _num(any_row, "dc_stations"),
+                         "nodes": _num(any_row, "nodes")}
+            ref = plans.get(ref_algo)
+            if ref and ref["feasible"]:
+                for a, d in plans.items():
+                    if d["feasible"] and d["time_min"] is not None:
+                        checks.add("cfp-lower-bound", _leq(ref["time_min"], d["time_min"]), "real-data",
+                                   f"{tid} ({net}): CFP-A* {ref['time_min']} > {a} {d['time_min']} min")
+        o, h = (nets.get("osm") or {}).get("plans", {}).get(ref_algo), (nets.get("hybrid") or {}).get("plans", {}).get(ref_algo)
+        if o and h and o["feasible"] and not o["limit"] and not h["limit"]:
+            ok = h["feasible"] and _leq(h["time_min"], o["time_min"])
+            checks.add("more-stations-not-slower", ok, "real-data",
+                       f"{tid}: hybrid {h['time_min']} > OSM {o['time_min']} min")
+        viewer = None
+        vp = Path(exp["dir"]) / tid / "viewer.html"
+        if vp.exists() and ctx.get("out_dir") is not None:
+            viewer = os.path.relpath(vp, ctx["out_dir"]).replace(os.sep, "/")
+        trips.append({"id": tid, "title": meta["title"], "subtitle": meta["subtitle"], "currency": meta["currency"],
+                      "nets": nets, "viewer": viewer})
+
+    def ref_of(t: Mapping[str, Any], net: str) -> dict[str, Any] | None:
+        p = ((t["nets"].get(net) or {}).get("plans") or {}).get(ref_algo)
+        return p if p and p["feasible"] else None
+
+    def rel(net: str, key: str) -> float | None:
+        """Mean relative change of ``key`` of the exact optimum on ``net`` against the approximate network [%]."""
+        vals = []
+        for t in trips:
+            a, b = ref_of(t, "approx"), ref_of(t, net)
+            if a and b and _finite(a.get(key)) and _finite(b.get(key)) and a[key]:
+                vals.append(100.0 * (b[key] / a[key] - 1.0))
+        return _mean(vals)
+
+    def runtime(net: str, algo: str, q: float = 0.5) -> float | None:
+        """Quantile ``q`` of the runtimes of ``algo`` on ``net`` over the trips [s] (median by default)."""
+        v = sorted(x for t in trips for x in [((t["nets"].get(net) or {}).get("plans") or {}).get(algo, {}).get("runtime_ms")]
+                   if _finite(x))
+        return _quantile(v, q) / 1000.0 if v else None
+
+    def mean_gap(net: str, algo: str) -> float | None:
+        return _mean(((t["nets"].get(net) or {}).get("plans") or {}).get(algo, {}).get("gap_pct") for t in trips)
+
+    def delta(net: str, value: Callable[[Mapping[str, Any]], Any]) -> float | None:
+        """Mean change of ``value`` of the exact optimum on ``net`` against the approximate network."""
+        vals = []
+        for t in trips:
+            a, b = ref_of(t, "approx"), ref_of(t, net)
+            if a and b and _finite(value(a)) and _finite(value(b)):
+                vals.append(value(b) - value(a))
+        return _mean(vals)
+
+    def stop_min(p: Mapping[str, Any]) -> float | None:
+        """Time not spent driving: charging, queues and set-up [min]."""
+        return p["time_min"] - p["drive_min"] if _finite(p.get("time_min")) and _finite(p.get("drive_min")) else None
+
+    facts: dict[str, Any] = {"trips": len(trips), "reference": ref_algo, "feasible": {}, "infeasible_trips": {},
+                             "time_change_pct": {}, "distance_change_pct": {}, "money_change_pct": {},
+                             "stops_change": {}, "drive_change_min": {}, "stop_time_change_min": {}, "runtime_s": {},
+                             "heuristic_runtime_s": {}, "heuristic_runtime_max_s": {}, "mean_gap_pct": {},
+                             "heuristic_budget_s": budget_s, "heuristic_runs": {}, "over_budget": {}, "stopped": {}}
+    heur = [a for a in HEURISTIC_ALGOS if any(a in (t["nets"].get(n) or {}).get("plans", {}) for t in trips for n in net_keys)]
+    for net in net_keys:
+        ok = [t for t in trips if ref_of(t, net)]
+        facts["feasible"][net] = len(ok)
+        facts["infeasible_trips"][net] = [t["title"] for t in trips if net in t["nets"] and not ref_of(t, net)]
+        facts["runtime_s"][net] = {a: runtime(net, a) for a in ("bls-astar", "cfp-astar")}
+        facts["heuristic_runtime_s"][net] = {a: runtime(net, a) for a in heur}
+        facts["heuristic_runtime_max_s"][net] = {a: runtime(net, a, 1.0) for a in heur}
+        facts["mean_gap_pct"][net] = {a: mean_gap(net, a) for a in heur}
+        runs = {a: [p for t in trips for p in [((t["nets"].get(net) or {}).get("plans") or {}).get(a)] if p] for a in heur}
+        facts["heuristic_runs"][net] = {a: len(v) for a, v in runs.items()}
+        facts["over_budget"][net] = {a: sum(1 for p in v if p["over"]) for a, v in runs.items()}
+        facts["stopped"][net] = {a: sum(1 for p in v if p["stopped"]) for a, v in runs.items()}
+        if net != "approx":
+            facts["time_change_pct"][net] = rel(net, "time_min")
+            facts["distance_change_pct"][net] = rel(net, "distance_km")
+            facts["money_change_pct"][net] = rel(net, "money")
+            facts["stops_change"][net] = delta(net, lambda p: p.get("stops"))
+            facts["drive_change_min"][net] = delta(net, lambda p: p.get("drive_min"))
+            facts["stop_time_change_min"][net] = delta(net, stop_min)
+
+    def finding(lang: str) -> str:
+        tr = lang == "tr"
+        n = len(trips)
+
+        def signed(x: float) -> str:
+            return ("+" if x >= 0 else "−") + fmt_pct(abs(x), 1, lang)
+
+        sents = []
+        nets_ = [k for k in ("osm", "hybrid") if k in net_keys]
+        feas = []
+        for net in nets_:
+            k = facts["feasible"].get(net, 0)
+            bad = facts["infeasible_trips"].get(net) or []
+            if tr:
+                feas.append(f"{'OSM istasyonlarıyla' if net == 'osm' else 'hibrit istasyonlarla'} {k}/{n} yolculukta"
+                            + (f" ({', '.join(bad)} hariç)" if bad else ""))
+            else:
+                feas.append(f"for {k} of {n} trips {'with the OSM stations' if net == 'osm' else 'with the hybrid set'}"
+                            + (f" (not {', '.join(bad)})" if bad else ""))
+        if feas:
+            sents.append(("OpenStreetMap yollarında kesin planlayıcılar " + " ve ".join(feas) + " rota buluyor") if tr
+                         else ("On OpenStreetMap roads the exact planners find a route " + " and ".join(feas)))
+        def signed_min(x: float) -> str:
+            return ("+" if x >= 0 else "") + fmt_minutes(x, lang)
+
+        chg = []
+        for net in nets_:
+            dt, dd = facts["time_change_pct"].get(net), facts["distance_change_pct"].get(net)
+            if _finite(dt) and _finite(dd):
+                label = ("OSM istasyonlarıyla" if net == "osm" else "hibrit kümeyle") if tr else ("with the OSM stations" if net == "osm" else "with the hybrid set")
+                dv, ds = facts["drive_change_min"].get(net), facts["stop_time_change_min"].get(net)
+                if _finite(dv) and _finite(ds):
+                    split = (f" (ortalama sürüş {signed_min(dv)}, duraklar {signed_min(ds)})" if tr
+                             else f" (driving {signed_min(dv)}, stops {signed_min(ds)} on average)")
+                else:
+                    split = ""
+                chg.append((label, signed(dt), signed(dd), split))
+        if chg:
+            if tr:
+                sents.append("Yaklaşık ağa göre kesin optimumun süresi ve mesafesi: "
+                             + "; ".join(f"{a} {b} süre, {c} mesafe{s}" for a, b, c, s in chg))
+            else:
+                sents.append("Against the approximate network the exact optimum takes "
+                             + "; ".join(f"{b} time and {c} distance {a}{s}" for a, b, c, s in chg))
+        rt = facts["runtime_s"].get("osm") or facts["runtime_s"].get("hybrid") or {}
+        ra = facts["runtime_s"].get("approx") or {}
+        if _finite(rt.get("bls-astar")) and _finite(rt.get("cfp-astar")):
+            both = _finite(ra.get("bls-astar")) and _finite(ra.get("cfp-astar"))
+            if tr:
+                sents.append(f"44 673 düğümde kesin planlama medyan {fmt_num(rt['bls-astar'], 1, lang)} sn (BLS-A*) ve "
+                             f"{fmt_num(rt['cfp-astar'], 1, lang)} sn (CFP-A*) sürüyor"
+                             + (f"; yaklaşık ağda {fmt_num(1000 * ra['bls-astar'], 0, lang)} ms ve "
+                                f"{fmt_num(1000 * ra['cfp-astar'], 0, lang)} ms" if both else ""))
+            else:
+                sents.append(f"Exact planning on 44,673 nodes takes a median of {fmt_num(rt['bls-astar'], 1, lang)} s (BLS-A*) and "
+                             f"{fmt_num(rt['cfp-astar'], 1, lang)} s (CFP-A*)"
+                             + (f", against {fmt_num(1000 * ra['bls-astar'], 0, lang)} ms and {fmt_num(1000 * ra['cfp-astar'], 0, lang)} ms "
+                                f"on the approximate network" if both else ""))
+        gaps = []
+        for a in heur:
+            g0, g1 = (facts["mean_gap_pct"].get("approx") or {}).get(a), (facts["mean_gap_pct"].get("osm") or {}).get(a)
+            if _finite(g0) and _finite(g1):
+                gaps.append(f"{algo_title(a, lang)} {fmt_pct(g0, 1, lang)} → {fmt_pct(g1, 1, lang)}")
+        if gaps:
+            sents.append(("Sezgisellerin optimuma ortalama farkı (yaklaşık ağ → OSM): " if tr
+                          else "The heuristics' mean gap to the optimum (approximate network → OSM): ") + ", ".join(gaps))
+        hr = facts["heuristic_runtime_s"].get("osm") or {}
+        hmax = facts["heuristic_runtime_max_s"].get("osm") or {}
+
+        def took(a: str) -> str:
+            s = f"{algo_title(a, lang)} {fmt_minutes(hr[a] / 60.0, lang)}"
+            m = hmax.get(a)
+            if _finite(m) and m > 2.0 * hr[a]:  # a long tail: say how long the slowest trip took
+                s += f" ({'en çok' if tr else 'up to'} {fmt_minutes(m / 60.0, lang)})"
+            return s
+
+        times = [took(a) for a in heur if _finite(hr.get(a))]
+        if times:
+            listed = ", ".join(times[:-1]) + (" ve " if tr else " and ") + times[-1] if len(times) > 1 else times[0]
+            ref_rt = rt.get(ref_algo)
+            if _finite(ref_rt):
+                tail = (f"; {algo_title(ref_algo, lang)} için {fmt_minutes(ref_rt / 60.0, lang)}" if tr
+                        else f", against {fmt_minutes(ref_rt / 60.0, lang)} for {algo_title(ref_algo, lang)}")
+            else:
+                tail = ""
+            sents.append(("OSM ağında sezgisellerin medyan çalışma süresi " if tr
+                          else "On the OSM network the heuristics take a median of ") + listed + tail)
+        if budget_s is not None:
+            over_parts = []
+            for a in heur:
+                n_runs = sum((facts["heuristic_runs"].get(k) or {}).get(a, 0) for k in nets_)
+                n_over = sum((facts["over_budget"].get(k) or {}).get(a, 0) for k in nets_)
+                if not n_over:
+                    continue
+                n_stop = sum((facts["stopped"].get(k) or {}).get(a, 0) for k in nets_)
+                slow = max(((p["runtime_ms"], t["title"], k) for t in trips for k in nets_
+                            for p in [((t["nets"].get(k) or {}).get("plans") or {}).get(a)] if p and p["over"]),
+                           key=lambda x: x[0])
+                where = ("OSM istasyonları" if slow[2] == "osm" else "hibrit küme") if tr else ("OSM stations" if slow[2] == "osm" else "hybrid set")
+                if tr:
+                    s = (f"{algo_title(a, lang)} {n_over}/{n_runs} çalıştırmada (en yavaşı {fmt_minutes(slow[0] / 60000.0, lang)}, "
+                         f"{slow[1]}, {where}" + (f"; {n_stop} çalıştırma sınırda durduruldu" if n_stop else "") + ")")
+                else:
+                    s = (f"{algo_title(a, lang)} in {n_over} of {n_runs} runs (the slowest {fmt_minutes(slow[0] / 60000.0, lang)}, "
+                         f"{slow[1]} with the {where}" + (f"; {n_stop} stopped at the budget" if n_stop else "") + ")")
+                if a == "station-graph":
+                    s += ("; her genişlettiği istasyon için tüm ağı kaplayan bir etiket ağacı kuruyor, bu ölçekte pratik değil" if tr
+                          else ": it grows a label tree over the whole network for every station it expands, "
+                               "which makes this simple baseline impractical at this scale")
+                over_parts.append(s)
+            if over_parts:
+                b = fmt_minutes(budget_s / 60.0, lang)
+                sents.append((f"OSM veri kümelerinde çalıştırma başına {b} süre sınırını aşan sezgisel: " if tr
+                              else f"The time budget of {b} per heuristic run on the OSM data sets is exceeded by ")
+                             + "; ".join(over_parts))
+        return " ".join(x + "." for x in sents)
+
+    data = {"networks": [{"key": k, "title": titles.get(k, {"tr": k, "en": k})} for k in net_keys],
+            "trips": trips, "reference": ref_algo, "heuristics": heur, "exact": [a for a in ("bls-astar", "cfp-astar")
+                                                                                  if any(a in (t["nets"].get(n) or {}).get("plans", {}) for t in trips for n in net_keys)],
+            "credit": OSM_CREDIT, "budget_s": budget_s}
+    return {"data": data, "finding": _both(finding), "facts": facts}
+
+
 _ANALYZERS: dict[str, Callable[[Mapping[str, Any], _Checks, Mapping[str, Any]], dict[str, Any] | None]] = {
     "case-studies": _sec_case_studies,
     "scalability": _sec_scalability,
@@ -1370,6 +1634,7 @@ _ANALYZERS: dict[str, Callable[[Mapping[str, Any], _Checks, Mapping[str, Any]], 
     "eco-speed": _sec_eco,
     "vehicles": _sec_vehicles,
     "tariffs": _sec_tariffs,
+    "real-data": _sec_real_data,
 }
 
 SECTION_TEXT: dict[str, dict[str, LangText]] = {
@@ -1427,6 +1692,11 @@ SECTION_TEXT: dict[str, dict[str, LangText]] = {
         "title": {"tr": "Şarj tarifeleri: %80 kuralı ve puant saatleri", "en": "Charging tariffs: the 80 % rule and peak hours"},
         "meaning": {"tr": "Örnek (sentetik) tarifelerle aynı yolculuk farklı kalkış saatlerinde: %80 doluluğun üzerindeki kWh daha pahalı, akşam puantında her kWh daha pahalı. Zaman-optimal plan fiyata bakmaz ve hiç beklemez; maliyet-optimal plan zaman değeri, ücret ve yıpranmanın toplamını en aza indirir ve gerekirse ucuz fiyat dönemine kadar istasyonda bekler; Pareto cephesi süre ile ücret arasındaki bütün kesin takasları gösterir. Tüm aramalar %5 SoC şarj ızgarasında kesindir; etiket bütçesinde kesilen bir cephe eksik olarak işaretlenir.",
                     "en": "The same trip at different departure times under illustrative (synthetic) tariffs: kWh above 80 % state of charge cost more, and every kWh costs more in the evening peak. The time-optimal plan ignores prices and never waits; the cost-optimal plan minimises the value of time plus money plus wear and may wait at a station for the cheaper period; the Pareto front shows every exact trade-off between time and money. All searches are exact on a 5 % SoC charging grid; a front stopped by its label budget is marked incomplete."},
+    },
+    "real-data": {
+        "title": {"tr": "Gerçek veri: OpenStreetMap yol ağı ve şarj istasyonları", "en": "Real data: OpenStreetMap roads and charging stations"},
+        "meaning": {"tr": "Aynı yolculuklar üç veri kümesinde: vaka çalışmasının yaklaşık ağı ve sentetik istasyonları; OpenStreetMap yolları (44 673 düğüm, SRTM yükseklikleri) ve OSM'deki halka açık şarj istasyonları; aynı ağ ve OSM istasyonlarına doğuda DC boşluklarını kapatan işaretli sentetik istasyonlar eklenmiş hibrit küme. Fiyatlar operatör liste fiyatları ya da varsayılanlar, kuyruklar EPDK ulusal ortalamalarından varsayımlar; OSM şarj kapsamı eksiktir. Veri: © OpenStreetMap contributors (ODbL).",
+                    "en": "The same trips on three data sets: the approximate network of the case study with its synthetic stations; OpenStreetMap roads (44,673 nodes, SRTM elevations) with the public charging stations mapped in OSM; and the same network with a hybrid set that adds flagged synthetic DC gap-fillers where OSM has no fast charger. Prices are operator list prices or defaults, queues are assumptions from EPDK national averages, and OSM's charging coverage is incomplete. Data © OpenStreetMap contributors (ODbL)."},
     },
 }
 

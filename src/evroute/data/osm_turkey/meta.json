@@ -1,0 +1,915 @@
+{
+ "name": "EVRoute Turkey real-data network",
+ "build_utc": "2026-10-28T16:52:29Z",
+ "build_script": "build_osm_turkey.py",
+ "sources": {
+  "osm": {
+   "pbf_url": "https://download.openstreetmap.fr/extracts/europe/turkey.osm.pbf",
+   "pbf_bytes": 720481405,
+   "pbf_md5": "b03e7851f3312d6f5b552985c10e31db",
+   "md5_checked": true,
+   "osm_timestamp": "2026-10-27T02:09:23Z",
+   "osm_sequence": "7346288",
+   "downloaded_utc": "2026-10-27T20:17:16Z",
+   "kgm_url": "https://www.kgm.gov.tr/SiteCollectionDocuments/KGMdocuments/Root/Uzakliklar/ilmesafe.xlsx",
+   "licence": "ODbL 1.0, © OpenStreetMap contributors",
+   "licence_url": "https://www.openstreetmap.org/copyright"
+  },
+  "srtm": {
+   "url_template": "https://s3.amazonaws.com/elevation-tiles-prod/skadi/{lat_dir}/{name}.hgt.gz",
+   "product": "SRTM 1 arc-second (skadi HGT tiles, AWS terrain tiles)",
+   "licence": "public domain (NASA/USGS)",
+   "partial_void_points": 0,
+   "void_pixels_in_tiles": 114976147,
+   "tiles": 111
+  },
+  "kgm_distances": {
+   "url": "https://www.kgm.gov.tr/SiteCollectionDocuments/KGMdocuments/Root/Uzakliklar/ilmesafe.xlsx",
+   "use": "validation only",
+   "table_date": "2026-03-03 00:00:00"
+  }
+ },
+ "parameters": {
+  "classes": [
+   "motorway",
+   "motorway_link",
+   "trunk",
+   "trunk_link",
+   "primary",
+   "primary_link"
+  ],
+  "max_edge_m": 5000.0,
+  "prominence_m": 20.0,
+  "densify_m": 200.0,
+  "snap_max_m": 3000.0,
+  "speed_defaults_kmh": {
+   "urban": 50.0,
+   "rural_single": 90.0,
+   "rural_dual_carriageway": 110.0,
+   "motorway": 120.0,
+   "link": 50.0,
+   "roundabout": 30.0
+  },
+  "urban_proxy": "junctions with ('residential', 'unclassified', 'tertiary', 'tertiary_link', 'living_street') within 500 m >= threshold",
+  "station_defaults_kw": {
+   "AC": 22.0,
+   "DC": 120.0,
+   "Tesla": 250.0
+  },
+  "ac_dc_threshold_kw": 22.0
+ },
+ "graph": {
+  "nodes": 44673,
+  "edges": 70886,
+  "directed_km_by_class": {
+   "motorway": 6510.7,
+   "motorway_link": 1836.7,
+   "primary": 26490.6,
+   "primary_link": 525.3,
+   "secondary": 495.0,
+   "secondary_link": 2.7,
+   "trunk": 46339.9,
+   "trunk_link": 2232.2
+  },
+  "road_km_by_class": {
+   "motorway": 6510.6,
+   "motorway_link": 1825.4,
+   "primary": 18261.0,
+   "primary_link": 509.4,
+   "secondary": 263.4,
+   "secondary_link": 2.7,
+   "trunk": 45883.4,
+   "trunk_link": 2137.2
+  },
+  "road_km_total": 75393.3,
+  "edge_length_m": {
+   "min": 25.0,
+   "median": 517.7,
+   "mean": 1191.1,
+   "max": 5006.9
+  },
+  "elevation_m": {
+   "min": -3.4,
+   "max": 3075.9
+  },
+  "speed_kmh_length_weighted": 91.2,
+  "share_km_tagged_note": "see raw_stats.default_rule_check"
+ },
+ "contraction": {
+  "chains": 95633,
+  "isolated_cycles": 2,
+  "splits_extrema": 9447,
+  "splits_length": 3708,
+  "edges_lengthened_to_3d_chord": 29320,
+  "junctions_on_bridge_or_tunnel": 383
+ },
+ "scc": {
+  "components": 6832,
+  "kept_nodes": 72457,
+  "dropped_nodes": 6940,
+  "kept_edges": 108307,
+  "dropped_edges": 7635,
+  "dropped_km_by_class_directed": {
+   "motorway": 4.3,
+   "motorway_link": 332.5,
+   "primary": 444.6,
+   "primary_link": 209.2,
+   "trunk": 434.5,
+   "trunk_link": 520.1
+  },
+  "largest_dropped_components": [
+   {
+    "nodes": 20,
+    "lat": 40.6166,
+    "lon": 27.6314
+   },
+   {
+    "nodes": 8,
+    "lat": 38.4796,
+    "lon": 28.1395
+   },
+   {
+    "nodes": 8,
+    "lat": 37.8349,
+    "lon": 27.8219
+   },
+   {
+    "nodes": 7,
+    "lat": 36.9916,
+    "lon": 35.3279
+   },
+   {
+    "nodes": 5,
+    "lat": 37.1657,
+    "lon": 37.3583
+   },
+   {
+    "nodes": 4,
+    "lat": 38.3706,
+    "lon": 38.3694
+   },
+   {
+    "nodes": 3,
+    "lat": 38.3416,
+    "lon": 38.3694
+   },
+   {
+    "nodes": 3,
+    "lat": 38.7337,
+    "lon": 27.5611
+   },
+   {
+    "nodes": 3,
+    "lat": 37.041,
+    "lon": 35.1707
+   },
+   {
+    "nodes": 3,
+    "lat": 39.9418,
+    "lon": 32.6954
+   }
+  ]
+ },
+ "consolidation": {
+  "radius_m": 30.0,
+  "nodes_before": 72457,
+  "nodes_after": 53577,
+  "edges_before": 108307,
+  "edges_after": 82078,
+  "internal_edges_removed": 24353,
+  "internal_km_removed_directed": 535.1,
+  "merges_refused_by_radius": 452,
+  "largest_cluster": 13
+ },
+ "recontraction": {
+  "nodes_removed": 8904,
+  "nodes_after": 44673,
+  "edges_after": 70886
+ },
+ "grade_clip": {
+  "max_grade": 0.15,
+  "steep_edges_before": 1350,
+  "steep_edges_after": 5,
+  "nodes_adjusted": 911,
+  "max_shift_m": 165.1,
+  "largest_shifts_m_lat_lon_osm": [
+   [
+    165.1,
+    40.8338,
+    41.67369,
+    9234023573
+   ],
+   [
+    107.5,
+    41.20139,
+    42.00764,
+    11653334853
+   ],
+   [
+    97.8,
+    37.64099,
+    30.72665,
+    2593920266
+   ],
+   [
+    85.4,
+    41.16328,
+    41.87683,
+    6395619758
+   ],
+   [
+    79.5,
+    37.63771,
+    30.72841,
+    6758044183
+   ]
+  ],
+  "nodes_shifted_over_50m": 17,
+  "median_shift_m_of_adjusted": 5.1,
+  "lengthened_to_3d_chord": {
+   "edges": 14694,
+   "km_added": 135.74,
+   "max_relative_increase": 1.5187
+  }
+ },
+ "raw_stats": {
+  "dropped_ways": {
+   "segments outside Turkey/unlocated": 31468,
+   "access/area": 287,
+   "reversible": 2
+  },
+  "duplicate_segments": 0,
+  "secondary_bridging": {
+   "rounds": [
+    {
+     "fragments": 14,
+     "bridged": 10,
+     "not_bridged": 4,
+     "secondary_km_added": 41.7
+    },
+    {
+     "fragments": 4,
+     "bridged": 0,
+     "not_bridged": 4,
+     "secondary_km_added": 0.0
+    },
+    {
+     "fragments": 4,
+     "bridged": 0,
+     "not_bridged": 4,
+     "secondary_km_added": 0.0
+    }
+   ],
+   "secondary_km_total": 263.5,
+   "secondary_segments": 1200,
+   "detours": {
+    "pairs_fixed": 24,
+    "secondary_km_added": 221.8,
+    "pairs_from_to_kmBefore_kmWithSecondary_kmSecondaryAdded": [
+     [
+      "Hakkâri",
+      "Ağrı",
+      null,
+      406.9,
+      126.9
+     ],
+     [
+      "Hakkâri",
+      "Batman",
+      null,
+      435.0,
+      0.0
+     ],
+     [
+      "Hakkâri",
+      "Muş",
+      null,
+      358.0,
+      0.0
+     ],
+     [
+      "Erzurum",
+      "Kars",
+      null,
+      206.8,
+      1.2
+     ],
+     [
+      "Erzurum",
+      "Erzincan",
+      null,
+      188.9,
+      0.7
+     ],
+     [
+      "Erzurum",
+      "Trabzon",
+      null,
+      283.7,
+      1.2
+     ],
+     [
+      "Erzurum",
+      "Giresun",
+      null,
+      362.7,
+      0.2
+     ],
+     [
+      "Erzurum",
+      "Rize",
+      null,
+      247.9,
+      0.5
+     ],
+     [
+      "Antalya",
+      "Uşak",
+      null,
+      293.8,
+      0.7
+     ],
+     [
+      "Manisa",
+      "Yalova",
+      null,
+      402.5,
+      84.5
+     ],
+     [
+      "Denizli",
+      "Uşak",
+      null,
+      153.9,
+      1.0
+     ],
+     [
+      "Kütahya",
+      "Yalova",
+      null,
+      299.2,
+      0.0
+     ],
+     [
+      "Diyarbakır",
+      "Erzurum",
+      null,
+      316.3,
+      0.1
+     ],
+     [
+      "Diyarbakır",
+      "Malatya",
+      null,
+      252.5,
+      0.6
+     ],
+     [
+      "Diyarbakır",
+      "Erzincan",
+      null,
+      478.8,
+      0.0
+     ],
+     [
+      "Diyarbakır",
+      "Bayburt",
+      null,
+      437.1,
+      0.0
+     ],
+     [
+      "Elâzığ",
+      "Erzurum",
+      null,
+      318.8,
+      0.1
+     ],
+     [
+      "Artvin",
+      "Bayburt",
+      307.6,
+      249.0,
+      0.5
+     ],
+     [
+      "Giresun",
+      "Erzurum",
+      420.0,
+      360.2,
+      0.2
+     ],
+     [
+      "Çorum",
+      "Nevşehir",
+      null,
+      314.4,
+      0.0
+     ],
+     [
+      "Sinop",
+      "Yozgat",
+      null,
+      369.9,
+      0.7
+     ],
+     [
+      "Sinop",
+      "Çorum",
+      null,
+      262.1,
+      0.4
+     ],
+     [
+      "Sinop",
+      "Çankırı",
+      null,
+      280.0,
+      1.4
+     ],
+     [
+      "Rize",
+      "Bayburt",
+      259.8,
+      136.4,
+      0.7
+     ]
+    ],
+    "rule": "crow <= 300 km; secondary weighted x4; main-only path unreachable or > 1.15 x and > 15 km longer than the gap-closed path"
+   }
+  },
+  "urban_threshold": 5,
+  "urban_calibration_thr_tpr_tnr_balacc": [
+   [
+    1,
+    0.903,
+    0.426,
+    0.664
+   ],
+   [
+    2,
+    0.846,
+    0.591,
+    0.719
+   ],
+   [
+    3,
+    0.778,
+    0.728,
+    0.753
+   ],
+   [
+    4,
+    0.721,
+    0.791,
+    0.756
+   ],
+   [
+    5,
+    0.661,
+    0.853,
+    0.757
+   ],
+   [
+    6,
+    0.603,
+    0.887,
+    0.745
+   ],
+   [
+    7,
+    0.554,
+    0.911,
+    0.733
+   ],
+   [
+    8,
+    0.511,
+    0.929,
+    0.72
+   ],
+   [
+    9,
+    0.467,
+    0.942,
+    0.704
+   ],
+   [
+    10,
+    0.426,
+    0.951,
+    0.689
+   ],
+   [
+    11,
+    0.389,
+    0.959,
+    0.674
+   ],
+   [
+    12,
+    0.351,
+    0.966,
+    0.658
+   ],
+   [
+    13,
+    0.316,
+    0.971,
+    0.644
+   ],
+   [
+    14,
+    0.286,
+    0.975,
+    0.631
+   ],
+   [
+    15,
+    0.257,
+    0.979,
+    0.618
+   ],
+   [
+    16,
+    0.231,
+    0.981,
+    0.606
+   ],
+   [
+    17,
+    0.206,
+    0.984,
+    0.595
+   ],
+   [
+    18,
+    0.183,
+    0.986,
+    0.584
+   ],
+   [
+    19,
+    0.163,
+    0.988,
+    0.576
+   ],
+   [
+    20,
+    0.146,
+    0.99,
+    0.568
+   ],
+   [
+    21,
+    0.13,
+    0.991,
+    0.561
+   ],
+   [
+    22,
+    0.116,
+    0.993,
+    0.554
+   ],
+   [
+    23,
+    0.102,
+    0.994,
+    0.548
+   ],
+   [
+    24,
+    0.089,
+    0.995,
+    0.542
+   ],
+   [
+    25,
+    0.077,
+    0.996,
+    0.536
+   ],
+   [
+    26,
+    0.068,
+    0.996,
+    0.532
+   ],
+   [
+    27,
+    0.06,
+    0.997,
+    0.529
+   ],
+   [
+    28,
+    0.054,
+    0.998,
+    0.526
+   ],
+   [
+    29,
+    0.049,
+    0.998,
+    0.523
+   ],
+   [
+    30,
+    0.042,
+    0.998,
+    0.52
+   ]
+  ],
+  "ramp_default_kmh": {
+   "motorway_link": 50.0,
+   "trunk_link": 50.0,
+   "primary_link": 30.0,
+   "secondary_link": 50.0
+  },
+  "default_rule_check": {
+   "motorway": {
+    "tagged_km": 6174.5,
+    "untagged_km": 338.8,
+    "default_mae_kmh": 14.0,
+    "default_bias_kmh": -11.6
+   },
+   "motorway_link": {
+    "tagged_km": 727.9,
+    "untagged_km": 1455.5,
+    "default_mae_kmh": 20.3,
+    "default_bias_kmh": -17.1
+   },
+   "trunk": {
+    "tagged_km": 19248.3,
+    "untagged_km": 27146.0,
+    "default_mae_kmh": 12.3,
+    "default_bias_kmh": 0.6
+   },
+   "trunk_link": {
+    "tagged_km": 676.4,
+    "untagged_km": 2433.9,
+    "default_mae_kmh": 8.4,
+    "default_bias_kmh": 0.8
+   },
+   "primary": {
+    "tagged_km": 5289.0,
+    "untagged_km": 12420.1,
+    "default_mae_kmh": 11.9,
+    "default_bias_kmh": 4.1
+   },
+   "primary_link": {
+    "tagged_km": 183.0,
+    "untagged_km": 646.9,
+    "default_mae_kmh": 10.7,
+    "default_bias_kmh": -10.5
+   },
+   "secondary": {
+    "tagged_km": 52.8,
+    "untagged_km": 208.3,
+    "default_mae_kmh": 8.5,
+    "default_bias_kmh": -2.2
+   }
+  }
+ },
+ "stations": {
+  "osm_objects": 773,
+  "osm_nodes": 739,
+  "osm_ways": 34,
+  "osm_relations": 0,
+  "outside_turkey": 26,
+  "access_tags": {
+   "(none)": 629,
+   "customers": 9,
+   "yes": 89,
+   "private": 13,
+   "permit": 1,
+   "permissive": 6
+  },
+  "dropped_private": 14,
+  "snap_distance_m_percentiles": {
+   "10": 74.8,
+   "25": 168.4,
+   "50": 399.9,
+   "75": 841.2,
+   "90": 1538.9,
+   "95": 2056.0,
+   "99": 7792.1,
+   "100": 40002.0
+  },
+  "snap_bins": {
+   "<100m": 101,
+   "100-500m": 324,
+   "0.5-1km": 164,
+   "1-2km": 106,
+   "2-3km": 16,
+   ">3km": 22
+  },
+  "dropped_far": 22,
+  "kept": 711
+ },
+ "official_charging_statistics": {
+  "source": "EPDK, Şarj Hizmeti Piyasası Aylık İstatistikleri - Eylül 2026 (published 16.10.2026)",
+  "url": "https://www.epdk.gov.tr/Detay/Icerik/3-0-222/enerji-donusumusarj-hizmeti-piyasasi--istatistik",
+  "month": "2026-09",
+  "scope": "sockets with commercial charging service under the Şarj Hizmeti Yönetmeliği (public and non-public)",
+  "sockets_total": 48971,
+  "sockets_ac": 27664,
+  "sockets_dc": 21307,
+  "sockets_by_power_2026Q3": {
+   "1-11kW": 6717,
+   "12-22kW": 20781,
+   "23-50kW": 920,
+   "51-150kW": 10320,
+   "151kW+": 10277
+  },
+  "installed_mw": 3875,
+  "evs_registered": 491492,
+  "energy_mwh_month": 83253,
+  "sessions_month": 3152733,
+  "dc_share_of_energy_pct": 82.44,
+  "hourly_energy_mwh_00_23": [
+   1890,
+   1305,
+   955,
+   789,
+   725,
+   788,
+   1045,
+   1575,
+   2633,
+   3855,
+   4314,
+   4565,
+   5118,
+   5355,
+   5384,
+   5490,
+   5590,
+   5730,
+   5607,
+   5286,
+   4919,
+   4263,
+   3413,
+   2657
+  ],
+  "note": "EPDK publishes socket counts, not site counts; no station coordinates are published as open data (the Şarj@TR app and the licence register lisans.epdk.gov.tr show stations, the register with addresses only)"
+ },
+ "osm_coverage_vs_epdk": {
+  "osm_stations_kept": 711,
+  "osm_plugs_ac": 909,
+  "osm_plugs_dc": 405,
+  "share_of_epdk_ac_sockets_pct": 3.3,
+  "share_of_epdk_dc_sockets_pct": 1.9,
+  "note": "OSM plug counts default to 1 where untagged, so they are lower bounds; EPDK counts sockets of all commercial stations"
+ },
+ "places": {
+  "places": 1005,
+  "province_centres": 81,
+  "city": 82,
+  "town": 923,
+  "snap_m_percentiles": {
+   "50": 1026.1,
+   "90": 18102.2,
+   "99": 33771.5,
+   "100": 53885.7
+  },
+  "province_centre_snap_m_max": 2239.5,
+  "province_centres_farthest": [
+   [
+    2239.5,
+    "Muş"
+   ],
+   [
+    1850.4,
+    "Bitlis"
+   ],
+   [
+    1712.2,
+    "Diyarbakır"
+   ],
+   [
+    1606.3,
+    "Kars"
+   ],
+   [
+    1539.2,
+    "Edirne"
+   ]
+  ]
+ },
+ "validation": {
+  "kgm_table_date": "2026-03-03 00:00:00",
+  "pairs": 3240,
+  "mean_rel_error_pct": -0.82,
+  "mean_abs_rel_error_pct": 2.52,
+  "median_abs_rel_error_pct": 1.45,
+  "p90_abs_rel_error_pct": 5.12,
+  "max_abs_rel_error_pct": 110.67,
+  "share_within_5pct": 0.895,
+  "share_within_10pct": 0.972,
+  "no_toll_pairs_finite": 2932,
+  "no_toll_mean_rel_error_pct": -0.17,
+  "no_toll_mean_abs_rel_error_pct": 2.23,
+  "worst_pairs_pct_name_name_kgm_graph": [
+   [
+    110.7,
+    "Elâzığ",
+    "Tunceli",
+    140.0,
+    294.9
+   ],
+   [
+    104.3,
+    "Kocaeli",
+    "Yalova",
+    65.0,
+    132.8
+   ],
+   [
+    93.6,
+    "Bingöl",
+    "Tunceli",
+    145.0,
+    280.8
+   ],
+   [
+    81.2,
+    "Hakkâri",
+    "Şırnak",
+    191.0,
+    346.0
+   ],
+   [
+    69.4,
+    "Sakarya",
+    "Yalova",
+    103.0,
+    174.5
+   ],
+   [
+    53.1,
+    "Malatya",
+    "Tunceli",
+    233.0,
+    356.8
+   ],
+   [
+    49.9,
+    "Muş",
+    "Tunceli",
+    254.0,
+    380.8
+   ],
+   [
+    49.0,
+    "Diyarbakır",
+    "Tunceli",
+    280.0,
+    417.2
+   ],
+   [
+    45.8,
+    "Bursa",
+    "Yalova",
+    69.0,
+    100.6
+   ],
+   [
+    45.5,
+    "Tunceli",
+    "Batman",
+    340.0,
+    494.8
+   ]
+  ]
+ },
+ "licences": {
+  "database": "ODbL 1.0 (https://opendatacommons.org/licenses/odbl/1-0/) - derived from OpenStreetMap",
+  "attribution": "© OpenStreetMap contributors, available under the Open Database License (https://www.openstreetmap.org/copyright)",
+  "elevation": "SRTM 1 arc-second, NASA/USGS, public domain (via AWS Terrain Tiles)",
+  "prices": "facts with source URL and date (prices.json); no licence claimed",
+  "code": "build_osm_turkey.py: MIT (EVRoute)",
+  "details": "DATA_LICENSE.md"
+ },
+ "rules": {
+  "speed_sources": [
+   "Karayolları Trafik Yönetmeliği Art. 100 (cars: 50 built-up / 90 two-lane rural / 110 dual carriageway / 120 motorway; signs may raise by up to 20 km/h)",
+   "OSM wiki Default speed limits, TR row (urban 50, rural 90, dual carriageway 110, motorway 120): https://wiki.openstreetmap.org/wiki/Default_speed_limits"
+  ],
+  "station_kind": "DC if any DC socket type (type2_combo, type1_combo, chademo, gb_dc, tesla_supercharger*, ccs*); else AC if any AC socket type unless a station-level power > 22 kW (or an AC socket > 43 kW) is tagged; without socket tags: DC if a tagged power > 22 kW or name/brand says supercharger/DC/hızlı/HPC/fast, else AC",
+  "station_power": "max socket:*:output of the station's kind; else charging_station:output/maxpower/capacity misused as kW; else voltage x amperage (sqrt(3) for >= 380 V AC; DC only if >= 25 kW); else defaults AC 22, DC 120, Tesla 250 kW",
+  "station_plugs": "capacity (if a count <= 20), else the sum of socket:* counts, else 1",
+  "station_access": "dropped: access=private/no, motorcar=no, disused=yes; kept and recorded: yes/customers/permissive/permit/none"
+ },
+ "files": {
+  "nodes.csv.gz": "id,lat,lon,elevation_m,osm_id",
+  "edges.csv.gz": "u,v,length_m,speed_kmh,road_class,ref,toll (directed)",
+  "stations.csv.gz": "see header",
+  "places.csv.gz": "see header",
+  "validation.csv": "graph vs KGM distances",
+  "prices.json": "operator price list (hand-curated)",
+  "DATA_LICENSE.md": "licences and attribution"
+ }
+}

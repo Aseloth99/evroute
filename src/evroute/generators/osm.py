@@ -58,6 +58,7 @@ from .synthetic import GridIndex, _restrict_to_lscc, parse_clock, split_override
 
 __all__ = [
     "HIGHWAY_CLASS",
+    "OSM_ATTRIBUTION",
     "from_networkx",
     "load_osm",
     "nearest_node",
@@ -65,6 +66,9 @@ __all__ = [
     "scenario_from_osm",
     "stations_from_csv",
 ]
+
+#: The credit every map made from OpenStreetMap data must carry (ODbL 1.0).
+OSM_ATTRIBUTION = "© OpenStreetMap contributors"
 
 #: OSM ``highway`` tag -> EVRoute road class.
 HIGHWAY_CLASS: dict[str, str] = {
@@ -499,13 +503,17 @@ def scenario_from_osm(
     departure: str | float = "09:00",
     currency: str = "EUR",
     name: str = "osm",
+    attribution: str | None = OSM_ATTRIBUTION,
     **overrides: Any,
 ) -> Scenario:
     """Assemble a :class:`Scenario` from real data.
 
     ``origin``/``destination`` are ``(lat, lon)`` pairs (snapped to the
     nearest node) or node ids.  Further keyword arguments are
-    :class:`Conditions` or :class:`Preferences` fields.
+    :class:`Conditions` or :class:`Preferences` fields.  ``attribution`` is
+    the data credit that maps of the scenario show (``meta["attribution"]``;
+    the ODbL requires "© OpenStreetMap contributors" on maps made from
+    OpenStreetMap data); pass ``None`` for a network that is not from OSM.
     """
     snap = None
 
@@ -529,5 +537,5 @@ def scenario_from_osm(
         conditions=Conditions(**{"temperature_c": temperature_c, **cond}),
         preferences=Preferences(**pref),
         currency=currency,
-        meta={"generator": "osm"},
+        meta={"generator": "osm", **({"attribution": attribution} if attribution else {})},
     )

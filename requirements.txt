@@ -1,0 +1,17 @@
+# EVRoute has no runtime dependencies: the planner, the viewer, the live
+# server and the bundled real-data network of Turkey use only the Python
+# standard library (Python >= 3.10, Windows, macOS or Linux).  This file is
+# therefore empty on purpose; `pip install -r requirements.txt` installs
+# nothing.  The dependencies live in pyproject.toml:
+#
+#   pip install -e .              # the planner (no dependencies)
+#   pip install -e ".[plot]"      # + seaborn >= 0.13, for the static figures
+#   pip install -e ".[dev]"       # + pytest (and seaborn), for the test suite
+#
+# Optional, installed by hand:
+#
+#   pip install osmnx                                  # download other OpenStreetMap networks
+#   pip install osmium numpy scipy shapely openpyxl    # rebuild the real-data network (tools/build_osm_turkey.py)
+#
+# Node.js with Playwright is needed only to regenerate the screenshots and
+# the GIF of the README.

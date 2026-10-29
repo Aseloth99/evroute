@@ -22,6 +22,12 @@
   const I = EVR.i18n;
 
   const ROAD_WIDTH = { motorway: 3.4, trunk: 2.6, primary: 1.9, secondary: 1.6, urban: 1.3, residential: 0.9, link: 1.2 };
+  /** Level of detail (large networks only, model.lod): a class is drawn from this zoom on [px per km]. */
+  const MIN_PX_PER_KM = { link: 8, residential: 6, urban: 3, secondary: 1.5 };
+  /** Below this zoom a large network is stroked without round caps and casings [px per km]. */
+  const COARSE_PX_PER_KM = 2;
+  /** Road vertices closer than this to the previous drawn one are skipped [px]. */
+  const SUBPIXEL = 0.75;
 
   class MapView {
     constructor(app, canvas) {
@@ -135,7 +141,9 @@
       const anim = this.app.anim && this.app.anim.enabled;
       const hud = anim && this.app.anim.mode !== 'search';
       const narrow = this.w < 560;
-      const base = { l: 28, r: 64, t: 58, b: anim ? (narrow ? 120 : 112) : 34 };   // t: room for the pins
+      const meta = (this.model && this.model.scenario && this.model.scenario.meta) || {};
+      const credit = meta.attribution ? 16 : 0;   // the data credit line above the playbar
+      const base = { l: 28, r: 64, t: 58, b: (anim ? (narrow ? 120 : 112) : 34) + credit };   // t: room for the pins
       if (!hud) return base;
       const hudEl = document.getElementById('hud');
       const hw = (hudEl && hudEl.offsetWidth) || 252, hh = (hudEl && hudEl.offsetHeight) || 150;
@@ -337,8 +345,11 @@
       const lc = this._layer(labelCanvas, vp);
       const panels = this.split ? [] : this.overlayBoxes();
       const boxes = panels.concat([this._drawScale(lc, T, panels)]);
+      const credit = this._placeAttribution(lc, T, panels);
+      if (credit) boxes.push(credit.box);
       this._drawPins(lc, T);
       if (L.labels) this._drawLabels(lc, T, boxes);
+      if (credit) this._drawAttribution(lc, credit);
     }
 
     /**
@@ -370,33 +381,50 @@
 
     _drawRoads(ctx, T) {
       const m = this.model, th = this.app.theme;
-      const X = m.X, Y = m.Y, tail = m.tail, head = m.head;
+      const X = m.X, Y = m.Y;
       const s = T.s, ox = T.ox, oy = T.oy;
       const z = this.zoomFactor();
       const pad = 20, w = T.w + pad, h = T.h + pad;
-      ctx.lineCap = 'round';
-      ctx.lineJoin = 'round';
+      const pxPerKm = s * 1000;
+      // a large network seen from afar: thin lines without round ends and casings
+      // (but the motorways'), which cost most of the stroking time
+      const coarse = m.lod && pxPerKm < COARSE_PX_PER_KM;
+      ctx.lineCap = coarse ? 'butt' : 'round';
+      ctx.lineJoin = coarse ? 'bevel' : 'round';
       const fills = {
         motorway: th.roadMotorway, trunk: th.roadTrunk, primary: th.roadPrimary,
       };
       for (const g of m.roadGroups) {
+        if (m.lod && pxPerKm < (MIN_PX_PER_KM[g.cls] || 0)) continue;
         const width = (ROAD_WIDTH[g.cls] || 1.4) * z;
         const path = new Path2D();
-        const E = g.edges;
-        for (let k = 0; k < E.length; k++) {
-          const e = E[k];
-          const ax = ox + X[tail[e]] * s, ay = oy - Y[tail[e]] * s;
-          const bx = ox + X[head[e]] * s, by = oy - Y[head[e]] * s;
-          if ((ax < -pad && bx < -pad) || (ax > w && bx > w) || (ay < -pad && by < -pad) || (ay > h && by > h)) continue;
-          path.moveTo(ax, ay);
-          path.lineTo(bx, by);
+        // one polyline per chain; vertices closer than SUBPIXEL to the last drawn
+        // one are skipped (the chain's ends always count)
+        const P = g.chains.pts, O = g.chains.offs, B = g.chains.bbox;
+        for (let c = 0, nc = O.length - 1; c < nc; c++) {
+          const cx0 = ox + B[4 * c] * s, cx1 = ox + B[4 * c + 2] * s, cy0 = oy - B[4 * c + 3] * s, cy1 = oy - B[4 * c + 1] * s;
+          if (cx1 < -pad || cx0 > w || cy1 < -pad || cy0 > h) continue;
+          // a chain smaller than a pixel lies under the line ends of its neighbours
+          if (m.lod && cx1 - cx0 < SUBPIXEL && cy1 - cy0 < SUBPIXEL) continue;
+          const end = O[c + 1] - 1;
+          let v = P[O[c]];
+          let px = ox + X[v] * s, py = oy - Y[v] * s;
+          path.moveTo(px, py);
+          for (let i = O[c] + 1; i <= end; i++) {
+            v = P[i];
+            const x = ox + X[v] * s, y = oy - Y[v] * s;
+            if (i < end && Math.abs(x - px) + Math.abs(y - py) < SUBPIXEL) continue;
+            path.lineTo(x, y);
+            px = x; py = y;
+          }
         }
-        g._path = path;
-        ctx.strokeStyle = th.roadCasing;
-        ctx.globalAlpha = th.dark ? 0.9 : 0.85;
-        ctx.lineWidth = width + (g.cls === 'motorway' ? 2.2 : 1.6);
-        ctx.stroke(path);
-        ctx.globalAlpha = 1;
+        if (!coarse || g.cls === 'motorway') {
+          ctx.strokeStyle = th.roadCasing;
+          ctx.globalAlpha = th.dark ? 0.9 : 0.85;
+          ctx.lineWidth = width + (g.cls === 'motorway' ? 2.2 : 1.6);
+          ctx.stroke(path);
+          ctx.globalAlpha = 1;
+        }
         ctx.strokeStyle = fills[g.cls] || th.roadMinor;
         ctx.lineWidth = width;
         ctx.stroke(path);
@@ -655,6 +683,41 @@
       ctx.fillText(label, x + px / 2, y - 3);
       ctx.restore();
       return [x - 4, y - 18, x + px + 4, y + 3];
+    }
+
+    /**
+     * The data credit of the scenario (``scenario.meta.attribution``, e.g.
+     * "© OpenStreetMap contributors" -- required by the ODbL for maps made
+     * from OpenStreetMap data): bottom-right, above the floating panels.
+     * Returns {text, x, y, box} (box: the screen box labels must avoid), or
+     * null without a credit; _drawAttribution draws it on top of the layer.
+     */
+    _placeAttribution(ctx, T, panels) {
+      const meta = (this.model.scenario && this.model.scenario.meta) || {};
+      const text = meta.attribution;
+      if (!text) return null;
+      ctx.save();
+      ctx.font = `500 10.5px ${this.app.theme.font}`;
+      const tw = ctx.measureText(text).width;
+      ctx.restore();
+      const x = T.w - 10;
+      let y = T.h - 6;
+      for (const b of panels || []) if (b[0] < x + 4 && b[2] > x - tw - 4 && b[3] > y - 16) y = Math.min(y, b[1] - 3);
+      return { text, x, y, w: tw, box: [x - tw - 6, y - 15, x + 6, y + 3] };
+    }
+
+    _drawAttribution(ctx, a) {
+      const th = this.app.theme;
+      ctx.save();
+      ctx.font = `500 10.5px ${th.font}`;
+      ctx.fillStyle = th.labelHalo;
+      U.roundRect(ctx, a.x - a.w - 5, a.y - 14, a.w + 10, 16, 5);
+      ctx.fill();
+      ctx.textAlign = 'right';
+      ctx.textBaseline = 'bottom';
+      ctx.fillStyle = th.labelMinor;
+      ctx.fillText(a.text, a.x, a.y);
+      ctx.restore();
     }
 
     _drawHover(ctx, T) {

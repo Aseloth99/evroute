@@ -71,6 +71,7 @@ class ChargingFunction:
         self.s_breaks = so
         self.capacity = self.e_breaks[-1]
         self.max_power_kw = max(self.power_kw)
+        self._last = k - 1  # index of the last bin
 
     # ----------------------------------------------------------- core maps
     def _bin(self, e: float) -> int:
@@ -79,9 +80,18 @@ class ChargingFunction:
 
     def time_at(self, e: float) -> float:
         """``F(e)``: seconds to charge from empty to ``e``."""
-        e = min(max(e, 0.0), self.capacity)
-        i = self._bin(e)
-        return self.t_breaks[i] + (e - self.e_breaks[i]) / self.power_kw[i] * SECONDS_PER_HOUR
+        # (the clamps of _bin inlined: this is the hottest call of CFP)
+        if e < 0.0:
+            e = 0.0
+        elif e > self.capacity:
+            e = self.capacity
+        eb = self.e_breaks
+        i = bisect_right(eb, e) - 1
+        if i < 0:
+            i = 0
+        elif i >= self._last:
+            i = self._last
+        return self.t_breaks[i] + (e - eb[i]) / self.power_kw[i] * SECONDS_PER_HOUR
 
     def energy_at(self, t: float) -> float:
         """``F^{-1}(t)``: energy after charging ``t`` seconds from empty."""

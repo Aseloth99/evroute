@@ -152,6 +152,8 @@ class LowerBounds:
 
     def __init__(self, prepared: PreparedScenario, target: int | None = None) -> None:
         P = prepared
+        if P.vot_per_s < 0 or P.w_money < 0 or P.w_deg < 0:  # Scenario.validate rejects them first
+            raise ValueError("lower bounds require non-negative cost weights")  # Dijkstra would not terminate
         self.prepared = P
         self.target = P.destination if target is None else target
         net = P.net

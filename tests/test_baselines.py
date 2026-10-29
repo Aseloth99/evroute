@@ -793,6 +793,32 @@ def test_start_below_reserve_with_a_charger_at_the_origin(name):
         assert plan.total_time_s >= get_planner("cfp").plan(P).total_time_s - 1e-6
 
 
+@pytest.mark.parametrize("name", ["greedy", "station-graph"])
+def test_a_charger_at_the_destination_meets_the_arrival_requirement(name):
+    """The only charger is at the destination, reached with less than ``min_arrival_soc``: the
+    heuristics used to see no reachable station (their trees need the requirement there)."""
+    sc = _line_scenario(n=3, spacing=60000.0, soc=0.9, stations=((2, "DC", 100.0),))
+    P = sc.with_preferences(min_arrival_soc=0.6).prepare()
+    assert P.e_dest_min > P.e_min
+    plan = get_planner(name).plan(P)
+    assert plan.feasible, plan.message
+    assert [s.position for s in plan.stops] == [len(plan.edges)] and plan.arrival_soc >= 0.6 - 1e-9
+    _replay_independently(P, plan)
+    if HAVE_CFP:
+        assert plan.total_time_s >= get_planner("cfp").plan(P).total_time_s - 1e-6
+
+
+@pytest.mark.parametrize("name", ["greedy", "station-graph"])
+def test_round_trip_charging_at_the_origin(name):
+    """Origin == destination, started below the arrival requirement, with a charger there."""
+    sc = _line_scenario(n=3, soc=0.05, stations=((0, "DC", 100.0),)).with_query(destination=0)
+    P = sc.prepare()
+    plan = get_planner(name).plan(P)
+    assert plan.feasible, plan.message
+    assert plan.edges == [] and [s.position for s in plan.stops] == [0]
+    _replay_independently(P, plan)
+
+
 @pytest.mark.parametrize("name", ["greedy", "station-graph", "genetic"])
 def test_infeasible_instances_return_infeasible_plans(name):
     sc = grid_scenario(8, 8, seed=3, initial_soc=0.25, n_stations=0, time_dependent_waits=False)

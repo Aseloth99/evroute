@@ -26,7 +26,8 @@ jobs:
         run: python -m evroute.experiments.runner --quick -o results-ci case-studies optimality-gap
 
   # The tests run against the source tree; this job checks what users install:
-  # the wheel must carry the web viewer, the results dashboard and the data files.
+  # the wheel must carry the web viewer, the results dashboard and the data files
+  # (also the real-data network of src/evroute/data/osm_turkey).
   package:
     runs-on: ubuntu-latest
     steps:
@@ -44,6 +45,7 @@ jobs:
           "$RUNNER_TEMP/venv/bin/pip" install dist/*.whl
           cd "$RUNNER_TEMP"
           venv/bin/evroute plan turkey-karaman-istanbul
+          venv/bin/evroute plan turkey-osm-karaman-mersin
           venv/bin/evroute viz turkey-karaman-istanbul -o viewer.html
           venv/bin/evroute experiments --quick -o r vehicles
           test -s r/results.html

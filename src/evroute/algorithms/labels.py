@@ -270,6 +270,7 @@ import math
 import time
 from bisect import bisect_left, bisect_right
 from collections.abc import Mapping, Sequence
+from itertools import compress
 from typing import Any
 
 from ..evaluate import evaluate, infeasible_plan
@@ -292,6 +293,7 @@ __all__ = [
     "POTENTIALS",
     "TARGET_MODES",
     "AStarPotential",
+    "FeasibleTree",
     "LabelAStarPlanner",
     "LabelSettingPlanner",
     "best_rate_per_kwh",
@@ -1421,12 +1423,14 @@ def fastest_feasible_tree(
     targets: str = "grid+breaks",
     max_labels: int = 5_000_000,
     fastest_level_only: bool = False,
-) -> dict[int, tuple]:
+) -> FeasibleTree:
     """Earliest battery-feasible arrival at every node reachable from ``source``.
 
     Runs the time-ordered label setting of this module from ``source`` with
     energy ``e_start`` (labels ``(t, e)``, dominance ``t <= t'`` and
-    ``e >= e'``) and returns ``{node: (t, energy, edges, levels)}``: ``t`` is
+    ``e >= e'``) and returns the mapping ``{node: (t, energy, edges, levels)}``
+    (a read-only :class:`FeasibleTree` whose routes are built on first
+    access): ``t`` is
     the earliest arrival trip time (``t_start`` plus travel), ``energy`` the
     largest arrival energy among the arrivals at that time and
     ``edges``/``levels`` the route (all speed levels of ``P.edge_options``
@@ -1481,9 +1485,8 @@ def fastest_feasible_tree(
         fastest_level_only=fastest_level_only,
     )
     need = min_arrival_energy or {}
-    out: dict[int, tuple] = {}
+    best: dict[int, int] = {}
     SE, SI = res.stair_e, res.stair_i
-    energy, primary = res.energy, res.primary
     for v in range(P.net.num_nodes):
         Ev = SE[v]
         if not Ev:
@@ -1491,13 +1494,86 @@ def fastest_feasible_tree(
         j = bisect_left(Ev, need[v] - EPS) if v in need else 0
         if j >= len(Ev):
             continue
-        best = SI[v][j]
-        edges, levels, charges = res.reconstruct(best)
-        if allow_charging:
-            out[v] = (primary[best], energy[best], edges, levels, charges)
-        else:
-            out[v] = (primary[best], energy[best], edges, levels)
-    return out
+        best[v] = SI[v][j]
+    _keep_route_labels(res, best)
+    return FeasibleTree(res, best, allow_charging)
+
+
+def _keep_route_labels(res: _LabelSearch, best: dict[int, int]) -> None:
+    """Shrink the label store of ``res`` to the routes of the labels in ``best`` (in place).
+
+    The routes are rebuilt from ``parent``, ``how``, ``energy`` and the times
+    alone, and only the labels on the parent chains of the ``best`` labels
+    are needed -- a tree with at most one label per node and route step,
+    usually a small fraction of the millions of settled labels of a search
+    over a large network.  They are renumbered in their order (a parent is
+    settled before its children, so the order is kept); ``best`` is updated
+    to the new numbers and everything else is freed.
+    """
+    parent = res.parent
+    keep = bytearray(len(parent))
+    for i in best.values():
+        while i >= 0 and not keep[i]:
+            keep[i] = 1
+            i = parent[i]
+    old = list(compress(range(len(parent)), keep))
+    new_id = {i: k for k, i in enumerate(old)}
+    res.parent = [new_id[parent[i]] if parent[i] >= 0 else parent[i] for i in old]
+    res.how = [res.how[i] for i in old]
+    res.energy = [res.energy[i] for i in old]
+    res.primary = [res.primary[i] for i in old]
+    res.secondary = [res.secondary[i] for i in old]
+    for v, i in best.items():
+        best[v] = new_id[i]
+    res.final = new_id.get(res.final, -1)
+    res.stair_p = res.stair_e = res.stair_i = res.node = []  # type: ignore[assignment]
+    res.stair3 = None
+
+
+class FeasibleTree(Mapping):
+    """Result of :func:`fastest_feasible_tree`: a read-only mapping ``{node: (t,
+    energy, edges, levels[, charges])}`` in increasing node order.
+
+    A route is rebuilt from the settled labels the first time its node is
+    looked up (and then kept), so a tree over a large network costs only the
+    routes that are actually used; :meth:`arrival` gives ``(t, energy)``
+    without building the route.
+    """
+
+    __slots__ = ("_best", "_cache", "_charging", "_res")
+
+    def __init__(self, res: _LabelSearch, best: dict[int, int], allow_charging: bool) -> None:
+        self._res = res
+        self._best = best
+        self._charging = allow_charging
+        self._cache: dict[int, tuple] = {}
+
+    def __getitem__(self, v: int) -> tuple:
+        rec = self._cache.get(v)
+        if rec is None:
+            i = self._best[v]
+            res = self._res
+            edges, levels, charges = res.reconstruct(i)
+            if self._charging:
+                rec = (res.primary[i], res.energy[i], edges, levels, charges)
+            else:
+                rec = (res.primary[i], res.energy[i], edges, levels)
+            self._cache[v] = rec
+        return rec
+
+    def __contains__(self, v: object) -> bool:
+        return v in self._best
+
+    def __iter__(self):
+        return iter(self._best)
+
+    def __len__(self) -> int:
+        return len(self._best)
+
+    def arrival(self, v: int) -> tuple[float, float]:
+        """``(t, energy)`` of the record of ``v`` (``KeyError`` if ``v`` is not in the tree)."""
+        i = self._best[v]
+        return self._res.primary[i], self._res.energy[i]
 
 
 def single_level_options(P: PreparedScenario, rate: float = 0.0) -> list[tuple[tuple[int, float, float, float], ...]]:
@@ -1708,7 +1784,7 @@ def _infeasibility_reason(P: PreparedScenario, res: _LabelSearch, pot: AStarPote
     o, d = P.origin, P.destination
     if res.status == "limit":
         return (
-            f"label limit reached (max_labels={max_labels:,}, {len(res.node):,} labels created) "
+            f"label limit reached (max_labels={max_labels:,}, {res.created:,} labels created) "
             "before the destination was settled; increase max_labels or use a coarser "
             "charge_step_soc / targets='grid'"
         )
