@@ -10,8 +10,10 @@ These tests check, in CPython, that
   it -- returns exactly what ``evroute plan`` returns for the request the
   page sends, also when the page asks one algorithm at a time.
 
-The browser half (Pyodide in Chromium, the same plans as the command line) is
-checked with Playwright outside the unit tests.
+The browser half -- Pyodide in Chromium plans the same routes as the command
+line -- is :func:`test_live_page_in_chromium_matches_the_cli`, which needs
+Node.js with Playwright and access to the CDN and runs only when
+``EVROUTE_BROWSER_TESTS=1`` is set.
 """
 
 from __future__ import annotations
@@ -22,11 +24,16 @@ import hashlib
 import importlib.util
 import io
 import json
+import math
+import os
 import re
 import shutil
 import subprocess
+import threading
 import zipfile
+from functools import partial
 from html.parser import HTMLParser
+from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import pytest
@@ -140,6 +147,25 @@ def _links(path: Path) -> _Links:
     return p
 
 
+class _Nesting(HTMLParser):
+    """Records every <a> opened while another <a> is open (invalid HTML: browsers split the link)."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.open = 0
+        self.nested: list[str] = []
+
+    def handle_starttag(self, tag, attrs):
+        if tag == "a":
+            if self.open:
+                self.nested.append(dict(attrs).get("href", ""))
+            self.open += 1
+
+    def handle_endtag(self, tag):
+        if tag == "a" and self.open:
+            self.open -= 1
+
+
 # ------------------------------------------------------------------ the generator
 def test_site_files(site):
     out, manifest = site
@@ -184,10 +210,12 @@ def test_landing_page_links(site):
         assert rel in hrefs, rel
         assert (out / rel).exists()
     repo = bs.REPO
+    notes = f"docs/release-notes-v{evroute.__version__}.md"
     for doc in ("#readme", "/blob/main/README.tr.md", "/blob/main/docs/guide.md", "/blob/main/docs/guide.tr.md",
                 "/blob/main/docs/real-data.md", "/blob/main/docs/real-data.tr.md", "/blob/main/docs/model.md",
-                "/blob/main/docs/algorithms.md", "/releases", "/blob/main/CITATION.cff"):
+                "/blob/main/docs/algorithms.md", "/blob/main/" + notes, "/blob/main/CITATION.cff"):
         assert repo + doc in hrefs, doc
+    assert (ROOT / notes).is_file()  # the release notes of this version (until it is a GitHub release)
     for doc in ("guide.md", "guide.tr.md", "real-data.md", "real-data.tr.md", "model.md", "algorithms.md"):
         assert (ROOT / "docs" / doc).is_file()
     # both languages (<html lang> is the extra "en"), the citation and the download size
@@ -198,6 +226,15 @@ def test_landing_page_links(site):
     assert bs.mb(manifest["live"]["download_bytes"], "en") in html and bs.mb(manifest["live"]["download_bytes"], "tr") in html
 
 
+def test_no_link_inside_a_link(site):
+    """A link inside a link is invalid HTML: browsers end the outer one there and the card falls apart."""
+    out, _ = site
+    for page in ("index.html", "examples/index.html"):
+        p = _Nesting()
+        p.feed((out / page).read_text(encoding="utf-8"))
+        assert p.nested == [] and p.open == 0, (page, p.nested)
+
+
 def test_examples_page_and_osm_credit(site):
     out, _ = site
     page = _links(out / "examples" / "index.html")
@@ -205,6 +242,11 @@ def test_examples_page_and_osm_credit(site):
         assert name in [v for _, _, v in page.links]
     ex = (out / "examples" / "index.html").read_text(encoding="utf-8")
     assert "ODbL 1.0" in ex and "© OpenStreetMap" in ex
+    assert "https://opendatacommons.org/licenses/odbl/1-0/" in [v for _, _, v in page.links]
+    # the viewer pages of the site lead back to it and start in the visitor's language
+    for name in ("karaman-istanbul.html", "tariff.html", "osm-karaman-istanbul.html"):
+        p = _payload((out / "examples" / name).read_text(encoding="utf-8"))
+        assert p["site"] == {"home": "../", "repo": bs.REPO} and p["lang_auto"] is True
     osm = _payload((out / "examples" / "osm-karaman-istanbul.html").read_text(encoding="utf-8"))
     meta = osm["scenario"]["meta"]
     assert meta["attribution"] == "© OpenStreetMap contributors"  # drawn on the map and in the scenario card
@@ -222,8 +264,19 @@ def test_live_page_config(site, live_payload):
     assert (out / "live" / cfg["wheel"]).is_file() and cfg["script"].startswith("worker.js?v=")
     svc = cfg["service"]
     assert svc["options"] == bs.WEB_OPTIONS and svc["exclude_families"] == ["turkey-osm"]
-    assert cfg["time_budget_s"] == bs.TIME_BUDGET_S > 0
-    assert cfg["download_bytes"] == sum(t for t, _ in bs.PYODIDE_FILES.values()) + manifest["wheel"]["bytes"]
+    assert cfg["time_budget_s"] == bs.TIME_BUDGET_S > cfg["time_limit_s"] == bs.WEB_TIME_LIMIT_S > 0
+    for algo in ("bls", "bls-astar", "cfp", "cfp-astar", "pareto"):  # they stop by themselves before the kill
+        assert svc["options"][algo]["time_limit_s"] == bs.WEB_TIME_LIMIT_S
+    wheel = manifest["wheel"]["bytes"]
+    assert cfg["download_bytes"] == sum(f[0] for f in bs.PYODIDE_FILES.values()) + wheel
+    # the loading screen's steps add up to the download the lead text announces
+    assert sum(cfg["transfer"].values()) == cfg["download_bytes"]
+    assert cfg["sizes"]["download"] == sum(bs.PYODIDE_FILES[f][1] for f in bs._DOWNLOAD_PHASE)
+    assert set(bs._DOWNLOAD_PHASE) | set(bs._INSTALL_PHASE) == set(bs.PYODIDE_FILES)
+    # every CDN file is checked against its digest
+    assert cfg["integrity"] == {k: f[2] for k, f in bs.PYODIDE_FILES.items()}
+    assert all(re.fullmatch(r"[0-9a-f]{64}", h) for h in cfg["integrity"].values())
+    assert p["site"] == {"home": "../", "repo": bs.REPO} and p["lang_auto"] is True
     # only synthetic presets: never the real-data network
     offered = manifest["live"]["presets"]
     assert bs.DEFAULT_SCENARIO in offered and "corridor" in offered and "country-small" in offered
@@ -249,7 +302,11 @@ def test_live_app_has_no_external_url_but_pyodide(site):
             assert url in allowed_text or url == bs.REPO, (rel, url)
     worker = (out / "live" / "worker.js").read_text(encoding="utf-8")
     assert not _URL.findall(worker)  # the worker gets the CDN URL from the page
-    assert "importScripts(`${cfg.pyodide}pyodide.js`)" in worker
+    # it loads the CDN scripts only after checking their digests, and refuses any other CDN file
+    for script in ("pyodide.js", "pyodide.asm.js"):
+        assert f"importVerified(`${{cfg.pyodide}}{script}`)" in worker
+    assert "importScripts(local)" in worker and worker.count("importScripts(") == 1
+    assert "refusing an unexpected file from the CDN" in worker and "subtle.digest('SHA-256'" in worker
     for tag, attr, value in _links(out / "live" / "index.html").links:  # nothing loaded by markup either
         assert value.startswith(("data:", "#")), (tag, attr, value)
 
@@ -268,6 +325,32 @@ def test_site_javascript_parses(site, tmp_path):
     for f in files:
         res = subprocess.run(["node", "--check", str(f)], check=False, capture_output=True, text=True, timeout=60)
         assert res.returncode == 0, f"{f.name}: {res.stderr}"
+
+
+def _rewrite_wheel(src: Path, dest: Path, date_time: tuple[int, ...]) -> Path:
+    """The same wheel with other time stamps, modes and member order (as another build would write it)."""
+    dest.mkdir()
+    out = dest / src.name
+    with zipfile.ZipFile(src) as zin, zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as zout:
+        for info in reversed(zin.infolist()):
+            new = zipfile.ZipInfo(info.filename, date_time=date_time)
+            new.external_attr = 0o100664 << 16
+            zout.writestr(new, zin.read(info.filename), compress_type=zipfile.ZIP_DEFLATED, compresslevel=1)
+    return out
+
+
+def test_web_wheel_is_reproducible(tmp_path):
+    """Two builds of the same sources give the same web wheel, so a deploy keeps its URL (no stale page)."""
+    w1 = _make_wheel(tmp_path)
+    w2 = _rewrite_wheel(w1, tmp_path / "other", (2031, 7, 4, 13, 37, 2))
+    a, b = bs.web_wheel(w1), bs.web_wheel(w2)
+    assert a == b and bs.short_hash(a) == bs.short_hash(b)
+    bs.check_wheel(a)
+    with zipfile.ZipFile(io.BytesIO(a)) as z:
+        names = z.namelist()
+        assert {i.date_time for i in z.infolist()} == {bs._ZIP_EPOCH}
+    assert names[-1].endswith(".dist-info/RECORD")
+    assert names[:-1] == sorted(names[:-1], key=lambda n: (".dist-info/" in n, n))  # package first, then dist-info
 
 
 def test_build_refuses_a_foreign_folder(tmp_path):
@@ -356,6 +439,68 @@ def test_worker_api_returns_what_the_cli_returns(preset, algos, tmp_path, capsys
         assert web["summary"]["total_time"] in cli["_line"] and web["feasible"]
 
 
+class _QuietHandler(SimpleHTTPRequestHandler):
+    def log_message(self, *args):  # pragma: no cover - quiet
+        pass
+
+
+def _close(a, b, rel: float = 1e-9) -> bool:
+    """``a == b``, numbers within a relative tolerance: Pyodide's maths library (sin, atan2,
+    log10, ...) may round the last digit differently from glibc's."""
+    if isinstance(a, bool) or isinstance(b, bool):
+        return a == b
+    if isinstance(a, (int, float)) and isinstance(b, (int, float)):
+        return math.isclose(a, b, rel_tol=rel, abs_tol=1e-9)
+    if isinstance(a, list) and isinstance(b, list):
+        return len(a) == len(b) and all(_close(x, y, rel) for x, y in zip(a, b))
+    return a == b
+
+
+@pytest.mark.slow
+@pytest.mark.skipif(os.environ.get("EVROUTE_BROWSER_TESTS") != "1" or shutil.which("node") is None,
+                    reason="set EVROUTE_BROWSER_TESTS=1 (needs Node.js with Playwright and the Pyodide CDN)")
+def test_live_page_in_chromium_matches_the_cli(site, tmp_path, capsys):
+    """The live page in Chromium (EVRoute under Pyodide, driven like a visitor) plans the routes
+    `evroute plan` plans: the same route and stops, the same trip time on screen, numbers equal
+    up to the last digits; no console error, no host but the site and the CDN."""
+    out, _ = site
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), partial(_QuietHandler, directory=str(out)))
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    host = f"127.0.0.1:{httpd.server_address[1]}"
+    cases = [{"scenario": "turkey-karaman-istanbul", "algorithms": ["bls-astar", "cfp-astar"]},
+             {"scenario": "corridor", "algorithms": ["greedy", "station-graph", "bls"]}]
+    try:
+        res = subprocess.run(["node", str(ROOT / "tests" / "browser" / "live_parity.js"), f"http://{host}/live/?lang=en",
+                              json.dumps(cases)], capture_output=True, text=True, timeout=1200, cwd=tmp_path)
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+    assert res.returncode == 0, res.stderr[-3000:]
+    data = json.loads(res.stdout)
+    assert data["console_errors"] == [] and set(data["hosts"]) <= {host, "cdn.jsdelivr.net"}
+    assert len(data["cases"]) == len(cases)
+    for case in data["cases"]:
+        assert case["error"] is None and sorted(r["algorithm"] for r in case["results"]) == sorted(case["algorithms"])
+        lines = {}
+        for web in case["results"]:
+            a = web["algorithm"]
+            cli = _cli_plan(case["scenario"], a, tmp_path, capsys)
+            lines[a] = cli["_line"]
+            for k in ("feasible", "nodes", "edges", "levels"):  # the route: exactly
+                assert web[k] == cli[k], (case["scenario"], a, k)
+            for k in _PLAN_FIELDS:
+                assert _close(web[k], cli[k]), (case["scenario"], a, k, web[k], cli[k])
+            assert len(web["stops"]) == len(cli["stops"])
+            for ws, cs in zip(web["stops"], cli["stops"]):
+                assert (ws["station"], ws["position"]) == (cs["station"], cs["position"])
+                for k in _STOP_FIELDS:
+                    assert _close(ws[k], cs[k]), (case["scenario"], a, k)
+            assert web["summary"]["total_time"] in cli["_line"]
+        # the trip time the page shows for the selected route is the one the command line prints
+        shown = case["summary"]
+        assert shown["text"] and shown["text"] in lines[shown["algorithm"]], (shown, lines)
+
+
 def test_one_algorithm_per_request_equals_one_request():
     """The page plans one algorithm per request (progress, time budget); the merged answer
     equals one request with all of them (as `evroute serve` answers it)."""
@@ -398,6 +543,16 @@ def test_web_defaults_on_the_largest_preset():
     assert web == list(LARGE_NETWORK_ALGORITHMS)
     assert _service().scenario_payload("country-small")["default_algorithms"] == list(DEFAULT_ALGORITHMS)
     assert PlanningService("country-medium").scenario_payload(None)["default_algorithms"] == list(DEFAULT_ALGORITHMS)
+
+
+def test_an_answer_that_is_not_json_is_an_internal_error(monkeypatch):
+    """A Python answer the JSON encoder rejects (NaN) is a 500, as the server sends it -- not a dead worker."""
+    import evroute.server as server
+
+    svc = PlanningService("grid-small", robustness_runs=0)
+    monkeypatch.setattr(server, "api_call", lambda *a, **k: (200, {"x": float("nan")}))
+    status, text = api_call_json(svc, "health")
+    assert status == 500 and type(status) is int and json.loads(text) == {"error": "internal error"}
 
 
 def test_api_call_status_codes():

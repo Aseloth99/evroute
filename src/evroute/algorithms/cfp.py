@@ -380,7 +380,8 @@ Implementation notes
   pushed labels -- if it is hit the best plan found so far, if any (also the
   one of the single-level search), is returned with ``stats.extra["status"]
   == "limit"`` and a message saying so; otherwise an infeasible plan whose
-  message says that the limit was hit), ``eps`` (1e-9),
+  message says that the limit was hit), ``time_limit_s`` (default none; the
+  same safeguard in seconds, status ``"time_limit"``), ``eps`` (1e-9),
   ``exact_switching`` (default ``True``), and for ``"cfp-astar"`` ``potential``
   (``"tight"`` default, or ``"basic"``).
 
@@ -431,6 +432,8 @@ INF = math.inf
 EPS = 1e-9
 #: ``how`` code of the root label.
 _ROOT = -1
+#: Pops between two looks at the clock when a search has a deadline (option ``time_limit_s``).
+_DEADLINE_EVERY = 256
 
 __all__ = [
     "CFPAStarPlanner",
@@ -660,7 +663,7 @@ class _Outcome:
     best: float  #: trip time of the incumbent (``inf`` if none)
     best_rec: tuple | None  #: its label record ``(t0, Fb, s, parent, how, switch_time)``
     records: list[tuple]  #: settled labels, indexed by label id
-    status: str  #: ``"optimal"``, ``"limit"`` or ``"exhausted"``
+    status: str  #: ``"optimal"``, ``"limit"``, ``"time_limit"`` or ``"exhausted"``
     settled: int
     generated: int
     pushes: int
@@ -1080,6 +1083,7 @@ def _search(
     stop: float = 0.0,
     inv_r: float = 0.0,
     order_by_potential: bool = True,
+    deadline: float | None = None,
 ) -> _Outcome:
     """The CFP label-setting search (see the module docs).
 
@@ -1094,6 +1098,9 @@ def _search(
     potential only serves as a lower bound in the tests against
     ``upper_bound`` and the incumbent.  ``options`` replaces
     ``P.edge_options``; ``upper_bound`` is the trip time of some feasible route.
+    ``deadline`` (a :func:`time.perf_counter` value; ``None``: none) stops the
+    search with status ``"time_limit"`` once it has passed (checked every
+    :data:`_DEADLINE_EVERY` pops).
 
     *Performance devices that do not change the result:*
 
@@ -1229,6 +1236,8 @@ def _search(
     best = INF
     best_rec: tuple | None = None
     status = "exhausted"
+    tick = _DEADLINE_EVERY if deadline is not None else -1
+    clock = time.perf_counter
 
     # ---------------------------------------------------------- root label
     if hb[origin] < INF:
@@ -1252,6 +1261,13 @@ def _search(
         if pushes > max_labels:
             status = "limit"
             break
+        if tick > 0:  # the optional time limit (never without a deadline)
+            tick -= 1
+            if tick == 0:
+                if clock() > deadline:  # type: ignore[operator]
+                    status = "time_limit"
+                    break
+                tick = _DEADLINE_EVERY
         key, _, v, s, t0, Fb, b, inn, cost, out, par, how, sw = pop(heap)
         if key >= best:
             status = "optimal"  # every other key is at least as large
@@ -1536,6 +1552,11 @@ class CFPPlanner(Planner):
         ``stats.extra["status"] == "limit"`` and a note in ``plan.message``;
         optimality is then not proven.  If no route is known, the plan is
         infeasible and its message says that the label limit was hit.
+    ``time_limit_s``
+        optional safeguard on the running time in seconds (default: none),
+        handled like ``max_labels`` with ``stats.extra["status"] ==
+        "time_limit"``.  The in-browser planner of the web site uses it; the
+        result then depends on the machine.
     ``eps``
         tolerance of the dominance test and of feasibility comparisons
         (default 1e-9 kWh / s).
@@ -1564,7 +1585,7 @@ class CFPPlanner(Planner):
     """
 
     name = "cfp"
-    OPTIONS = ("eps", "exact_switching", "max_labels")
+    OPTIONS = ("eps", "exact_switching", "max_labels", "time_limit_s")
     title = "CFP (charging function propagation)"
     exact = "exact"
     objectives = ("time",)
@@ -1603,6 +1624,8 @@ class CFPPlanner(Planner):
         tr = SearchTrace() if trace else None
 
         t0 = time.perf_counter()
+        deadline = self._deadline(t0)
+        time_limit_s = self.options.get("time_limit_s")
         hb, el, rate, need, pot_name, es, stop, inv_r = self._potential_full(P)
         t1 = time.perf_counter()
         ub = INF
@@ -1628,6 +1651,7 @@ class CFPPlanner(Planner):
                 es=es,
                 stop=stop,
                 inv_r=inv_r,
+                deadline=deadline,
             )
             ub = pre.best
             if el is None and ub < INF:
@@ -1653,6 +1677,7 @@ class CFPPlanner(Planner):
             stop=bound[4],
             inv_r=bound[5],
             order_by_potential=order,
+            deadline=deadline,
         )
         t2 = time.perf_counter()
         proven = res.status == "optimal" and (exact_switching or _textbook_is_exact(P))
@@ -1686,12 +1711,15 @@ class CFPPlanner(Planner):
         )
         best, records, rec = res.best, res.records, res.best_rec
         from_pre = False
-        if rec is None and res.status == "limit" and pre is not None and pre.best_rec is not None:
-            # the full search ran out of labels: the single-level route is the best one known
+        stopped = res.status in ("limit", "time_limit")
+        if rec is None and stopped and pre is not None and pre.best_rec is not None:
+            # the full search ran out of labels (or time): the single-level route is the best one known
             best, records, rec = pre.best, pre.records, pre.best_rec
             from_pre = True
         if rec is None:
-            return infeasible_plan(P, self.name, _infeasibility_reason(P, res, hb, max_labels), stats, tr)
+            return infeasible_plan(
+                P, self.name, _infeasibility_reason(P, res, hb, max_labels, time_limit_s), stats, tr
+            )
         edges, levels, charges = _reconstruct(P, records, rec, best)
         plan = evaluate(
             P,
@@ -1705,12 +1733,17 @@ class CFPPlanner(Planner):
         if P.objective != "time":
             # the plan is time-optimal, not cost-optimal: claim only what was measured
             plan.internal_objective = plan.objective_value
-        if res.status == "limit":
+        if stopped:
+            what = (
+                f"label limit reached (max_labels={max_labels:,}, {res.pushes:,} labels pushed)"
+                if res.status == "limit"
+                else f"time limit reached (time_limit_s={time_limit_s:g}, {res.pushes:,} labels pushed)"
+            )
             plan.message = (
-                f"label limit reached (max_labels={max_labels:,}, {res.pushes:,} labels pushed) before the "
-                "search was complete; best route found so far"
+                f"{what} before the search was complete; best route found so far"
                 + (" (by the search restricted to one speed level per edge)" if from_pre else "")
-                + ", optimality not proven; increase max_labels"
+                + ", optimality not proven"
+                + ("; increase max_labels" if res.status == "limit" else "")
             )
         return plan
 
@@ -1739,7 +1772,7 @@ class CFPAStarPlanner(CFPPlanner):
     """
 
     name = "cfp-astar"
-    OPTIONS = ("eps", "exact_switching", "max_labels", "potential")
+    OPTIONS = ("eps", "exact_switching", "max_labels", "potential", "time_limit_s")
     title = "CFP-A*"
     description = (
         "CFP with an A* key: earliest feasible time plus a consistent lower bound "
@@ -1784,8 +1817,15 @@ def _textbook_is_exact(P: PreparedScenario) -> bool:
     return True
 
 
-def _infeasibility_reason(P: PreparedScenario, res: _Outcome, hb: Sequence[float], max_labels: int) -> str:
+def _infeasibility_reason(
+    P: PreparedScenario, res: _Outcome, hb: Sequence[float], max_labels: int, time_limit_s: float | None = None
+) -> str:
     o, d = P.origin, P.destination
+    if res.status == "time_limit":
+        return (
+            f"time limit reached (time_limit_s={time_limit_s:g}, {res.pushes:,} labels pushed) before "
+            "any route to the destination was found -- this does not mean that no route exists"
+        )
     if res.status == "limit":
         return (
             f"label limit reached (max_labels={max_labels:,}, {res.pushes:,} labels pushed) before "

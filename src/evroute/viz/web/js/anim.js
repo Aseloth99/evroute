@@ -352,7 +352,18 @@
     _updateHud() {
       const app = this.app, el = this.el;
       const sel = app.selectedRoute();
-      if (!sel || !sel._ok) { el.status.textContent = I.t('no_route'); el.status.className = 'hud-status stranded'; return; }
+      if (!sel || !sel._ok) {
+        if (!sel) {   // nothing planned (live mode): no values of an earlier trip
+          el.clock.textContent = '--:--';
+          el.elapsed.textContent = '';
+          el.soc.textContent = '--';
+          el.fill.style.width = '0%';
+          for (const o of [el.dist, el.speedOut, el.elev]) o.textContent = '–';
+        }
+        el.status.textContent = I.t(!sel && app.live ? 'not_planned' : 'no_route');
+        el.status.className = 'hud-status stranded';
+        return;
+      }
       const st = M.stateAt(app.model, sel, Math.min(this.t, sel._tl.tEnd));
       el.clock.textContent = I.clock(app.model.departure + Math.min(this.t, sel._tl.tEnd));
       el.elapsed.textContent = `${I.hm(Math.min(this.t, sel._tl.tEnd), true)} / ${I.hm(sel._tl.tEnd)} · ${I.km(sel._tl.dEnd, 0)}`;

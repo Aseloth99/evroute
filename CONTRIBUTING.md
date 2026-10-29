@@ -15,7 +15,11 @@ python -m pytest -m "not slow"     # fast tier, a few minutes
 The slow cross-validation tier (`python -m pytest -m slow tests/test_crossval.py
 tests/test_crossval_tariffs.py`) throws thousands of random instances, with
 and without charging tariffs, at every planner; run it before you touch an
-algorithm.
+algorithm.  Before you change the web site's live planner (`site/`,
+`live.js`, `server.py`), also run
+`EVROUTE_BROWSER_TESTS=1 python -m pytest -m slow tests/test_site.py`: it plans
+in Chromium under Pyodide and compares with `evroute plan` (needs Node.js with
+Playwright and access to cdn.jsdelivr.net).
 
 ## Ground rules
 

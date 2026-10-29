@@ -13,13 +13,36 @@
   const M = EVR.model;
 
   /**
-   * A result its label budget stopped: an exact planner that ran into
-   * max_labels (stats.extra.status "limit": no route, or a route whose
-   * optimality is not proven) or a Pareto front that may be incomplete.
+   * A result a safeguard stopped: an exact planner that ran into max_labels
+   * or time_limit_s (stats.extra.status "limit" / "time_limit": no route, or
+   * a route whose optimality is not proven) or a Pareto front that may be
+   * incomplete.
    */
   function budgetStopped(r) {
     const ex = (r && r.stats && r.stats.extra) || {};
-    return ex.status === 'limit' || r.complete === false;
+    return ex.status === 'limit' || ex.status === 'time_limit' || r.complete === false;
+  }
+
+  /** "label budget reached" / "time limit reached" for a stopped result. */
+  function stoppedText(r) {
+    const ex = (r && r.stats && r.stats.extra) || {};
+    return I.t(ex.status === 'time_limit' ? 'time_limit_hit' : 'label_limit');
+  }
+
+  /** "Not planned yet" in live mode before the first answer, else "no feasible route". */
+  function noRouteText(app) {
+    return app.live && !app.model.results.length ? I.t('not_planned') : I.t('no_route');
+  }
+
+  /**
+   * A text of the scenario data (meta[key], in English) in the current
+   * language: the translation of a preset's known text, else the text itself.
+   */
+  function metaText(sc, key) {
+    const text = sc.meta && sc.meta[key];
+    if (!text) return text;
+    const k = `meta_${key}_${sc.meta.generator}`;
+    return I.STR.en[k] === text ? I.t(k) : text;
   }
 
   function guaranteeBadge(r) {
@@ -27,7 +50,7 @@
     const wrap = U.el('span', { class: 'badges' });
     wrap.appendChild(U.el('span', { class: `badge badge-${g}`, title: I.t(`g_${g}_title`), text: I.t(`g_${g}`) }));
     if (r.complete === false) wrap.appendChild(U.el('span', { class: 'badge badge-partial', title: I.t('partial_front'), text: I.t('g_partial') }));
-    else if (budgetStopped(r)) wrap.appendChild(U.el('span', { class: 'badge badge-partial', title: I.t('label_limit'), text: I.t('g_incomplete') }));
+    else if (budgetStopped(r)) wrap.appendChild(U.el('span', { class: 'badge badge-partial', title: stoppedText(r), text: I.t('g_incomplete') }));
     return wrap;
   }
 
@@ -157,7 +180,7 @@
         vis,
         U.el('div', { class: 'algo-text' },
           U.el('div', { class: 'algo-name' }, U.el('span', { text: r.title }), guaranteeBadge(r)),
-          U.el('div', { class: 'algo-meta', text: r.feasible ? meta : budgetStopped(r) ? `⚠ ${I.t('label_limit')}` : `✕ ${r._strand ? I.t('stranded_at', { km: I.km(r._strand.dist, 0) }) : I.t('infeasible')}` })),
+          U.el('div', { class: 'algo-meta', text: r.feasible ? meta : budgetStopped(r) ? `⚠ ${stoppedText(r)}` : `✕ ${r._strand ? I.t('stranded_at', { km: I.km(r._strand.dist, 0) }) : I.t('infeasible')}` })),
         U.el('div', { class: 'algo-time', text: r.feasible ? I.hm(r.total_time_s) : '—' }));
         li.addEventListener('click', () => app.select(ri, -1));
         li.addEventListener('keydown', (ev) => {
@@ -177,7 +200,7 @@
     renderSummary() {
       const app = this.app, el = this.el.summary;
       const r = app.selectedRoute();
-      if (!r) { U.setChildren(el, U.el('p', { class: 'muted', text: I.t('no_route') })); return; }
+      if (!r) { U.setChildren(el, U.el('p', { class: 'muted', text: noRouteText(app) })); return; }
       const cur = app.model.currency;
       const best = app.bestFeasibleTime();
       const kids = [];
@@ -250,7 +273,7 @@
       const stops = r && r._ok ? r._stops : [];
       this.el.stopsCount.textContent = stops.length ? I.stops(stops.length) : '';
       if (!stops.length) {
-        U.setChildren(this.el.stops, U.el('li', { class: 'stops-empty', text: r && r.feasible ? I.t('no_stops') : I.t('no_route') }));
+        U.setChildren(this.el.stops, U.el('li', { class: 'stops-empty', text: r && r.feasible ? I.t('no_stops') : r ? I.t('no_route') : noRouteText(app) }));
         return;
       }
       const cur = app.model.currency;
@@ -403,8 +426,8 @@
       }
       U.setChildren(this.el.kv, rows.flatMap(([k, val, label]) => [U.el('dt', { text: label || I.t(k) }), U.el('dd', { text: val, title: val })]));
       const credit = sc.meta && sc.meta.attribution;
-      const licence = sc.meta && sc.meta.licence;   // e.g. "ODbL 1.0 (data), MIT (code)" (OpenStreetMap data)
-      const disc = [sc.meta && sc.meta.disclaimer, credit && I.t('data_credit', { c: credit }),
+      const licence = metaText(sc, 'licence');   // e.g. "ODbL 1.0 (data), MIT (code)" (OpenStreetMap data)
+      const disc = [metaText(sc, 'disclaimer'), credit && I.t('data_credit', { c: credit }),
         licence && I.t('data_licence', { l: licence })].filter(Boolean).join(' ');
       this.el.disclaimer.hidden = !disc;
       this.el.disclaimer.textContent = disc || '';
@@ -469,5 +492,5 @@
     ];
   }
 
-  EVR.panels = { Panels, guaranteeBadge, budgetStopped, tariffText, tariffFactors };
+  EVR.panels = { Panels, guaranteeBadge, budgetStopped, stoppedText, tariffText, tariffFactors };
 })(window.EVR = window.EVR || {});

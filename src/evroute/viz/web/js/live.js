@@ -5,9 +5,9 @@
  * planner and replaces the results in place.
  *
  * The planner is reached through a *transport* with one interface,
- * request(endpoint, args) and plan(body, onProgress), answering with the
- * JSON of evroute.server.api_call (endpoints health, scenarios, scenario,
- * plan):
+ * request(endpoint, args) and plan(body, onProgress, onPartial), answering
+ * with the JSON of evroute.server.api_call (endpoints health, scenarios,
+ * scenario, plan):
  *
  *   HttpTransport    `evroute serve` / `python -m evroute.server`: fetch()
  *                    to api/<endpoint> on the local server.
@@ -16,9 +16,11 @@
  *                    payload carries a "worker" block, written by
  *                    tools/build_site.py).  The worker calls the same Python
  *                    functions as the server.  A plan is requested one
- *                    algorithm at a time, so the page can show progress and
- *                    enforce the web's time budget per planner: a planner
- *                    that runs over it is stopped by restarting the worker.
+ *                    algorithm at a time -- the fast exact planners first --
+ *                    so the page can show progress and the results so far,
+ *                    let the visitor stop the run, and enforce the web's time
+ *                    budget per planner: a planner that runs over it is
+ *                    stopped by restarting the worker.
  */
 (function (EVR) {
   'use strict';
@@ -27,11 +29,18 @@
   const I = EVR.i18n;
 
   const DEFAULT_ALGOS = ['greedy', 'station-graph', 'bls-astar', 'cfp-astar'];
+  /** Order in which the in-browser planner runs the ticked planners: usually fastest first. */
+  const RUN_ORDER = ['naive', 'greedy', 'cfp-astar', 'bls-astar', 'station-graph', 'genetic', 'cfp', 'bls', 'pareto'];
+
+  function runOrder(algos) {
+    const rank = (a) => { const i = RUN_ORDER.indexOf(a); return i < 0 ? RUN_ORDER.length : i; };
+    return algos.map((a, i) => [rank(a), i, a]).sort((x, y) => x[0] - y[0] || x[1] - y[1]).map((x) => x[2]);
+  }
 
   /* ------------------------------------------------------------ transports */
   /** The local planning server (evroute serve): one HTTP request per call. */
   class HttpTransport {
-    constructor() { this.kind = 'http'; }
+    constructor() { this.kind = 'http'; this.canCancel = false; }
 
     start() { return Promise.resolve(); }
 
@@ -50,17 +59,20 @@
     }
 
     plan(body) { return this.request('plan', body); }
+
+    cancel() { /* the server plans in one request */ }
   }
 
   /**
    * EVRoute in the browser: a Web Worker that loads Pyodide and the evroute
    * wheel and answers the same API calls (see site/worker.js).  `cfg` is
-   * the payload's "worker" block: script, pyodide (index URL), wheel,
-   * service (PlanningService options), time_budget_s, download_bytes, ...
+   * the payload's "worker" block: script, pyodide (index URL), integrity,
+   * wheel, service (PlanningService options), time_budget_s, download_bytes, ...
    */
   class WorkerTransport {
     constructor(cfg) {
       this.kind = 'worker';
+      this.canCancel = true;
       this.cfg = cfg;
       this.worker = null;
       this.ready = null;
@@ -68,6 +80,10 @@
       this.pending = new Map();
       this.onBoot = null;        // progress of the first start: {phase, loaded, total} | {phase: 'ready', ...}
       this.started = false;      // a worker has been ready once (later starts are restarts)
+      this.prepare = null;       // the preset a (re)started worker gets ready first
+      this.running = false;      // a plan() is under way
+      this.cancelled = false;    // ... and the visitor stopped it
+      this._booting = null;      // {reject} of the start under way
     }
 
     start() {
@@ -81,13 +97,18 @@
       return new Promise((resolve, reject) => {
         const w = new Worker(this.cfg.script);
         this.worker = w;
+        this._booting = { reject };
         const boot = (m) => { if (this.onBoot) this.onBoot(m, this.started); };
         w.onmessage = (ev) => {
           const m = ev.data || {};
           if (m.type === 'progress') boot(m);
-          else if (m.type === 'ready') { boot(Object.assign({ phase: 'ready' }, m)); this.started = true; resolve(m); }
-          else if (m.type === 'failed') reject(new Error(m.message || 'worker failed'));
-          else if (m.type === 'reply') {
+          else if (m.type === 'ready') { this._booting = null; boot(Object.assign({ phase: 'ready' }, m)); this.started = true; resolve(m); }
+          else if (m.type === 'failed') {
+            const err = new Error(m.message || 'worker failed');
+            err.reason = m.reason;
+            this._booting = null;
+            reject(err);
+          } else if (m.type === 'reply') {
             const done = this.pending.get(m.id);
             if (done) { this.pending.delete(m.id); done.reply(m); }
           }
@@ -95,26 +116,39 @@
         w.onerror = (ev) => {
           ev.preventDefault();
           const err = new Error(ev.message || 'worker error');
+          this._booting = null;
           reject(err);
           this._kill(err);
         };
-        w.postMessage({ type: 'init', config: this.cfg });
+        w.postMessage({ type: 'init', config: this.cfg, prepare: this.prepare });
       });
     }
 
-    /** Terminate the worker; pending calls fail with `err`. */
+    /** Terminate the worker; pending calls (and a start under way) fail with `err`. */
     _kill(err) {
       if (this.worker) this.worker.terminate();
       this.worker = null;
       this.ready = null;
+      const e = err || new Error('worker stopped');
+      if (this._booting) { const b = this._booting; this._booting = null; b.reject(e); }
       const calls = Array.from(this.pending.values());
       this.pending.clear();
-      for (const c of calls) c.fail(err || new Error('worker stopped'));
+      for (const c of calls) c.fail(e);
+    }
+
+    /** Stop the plan under way (the worker is restarted for the next one). */
+    cancel() {
+      if (!this.running || this.cancelled) return;
+      this.cancelled = true;
+      const err = new Error('stopped');
+      err.cancelled = true;
+      this._kill(err);
     }
 
     async request(endpoint, args, timeoutMs) {
       await this.start();
       const w = this.worker;
+      if (!w) { const err = new Error('stopped'); err.cancelled = true; throw err; }
       return new Promise((resolve, reject) => {
         const id = ++this.seq;
         let timer = null;
@@ -141,52 +175,74 @@
     }
 
     /**
-     * Plan one algorithm per request, in the order given (registry order),
-     * and merge the answers: the same results as one request with all of
-     * them.  `onProgress({algorithm, index, total, restarting})`.
+     * Plan one algorithm per request, in RUN_ORDER, and merge the answers in
+     * the order asked for: the same results as one request with all of them.
+     * onProgress({algorithm, index, total, restarting}); onPartial(answer so
+     * far) after each planner but the last.  Planners that did not answer
+     * are listed in "errors" with `budget` 'time' (over the time budget),
+     * 'cancelled' (stopped by the visitor) or 'skipped' (not run after a
+     * stop); without any answer the result has no "scenario".
      */
-    async plan(body, onProgress) {
+    async plan(body, onProgress, onPartial) {
       const algos = body.algorithms || [];
+      const order = runOrder(algos);
       const budgetMs = 1000 * (+this.cfg.time_budget_s || 0);
       const t0 = performance.now();
       let first = null;
-      const results = [], errors = [];
-      for (let i = 0; i < algos.length; i++) {
-        const a = algos[i];
-        if (onProgress) onProgress({ algorithm: a, index: i, total: algos.length });
-        let data;
-        try {
-          data = await this.request('plan', Object.assign({}, body, { algorithms: [a] }), budgetMs);
-        } catch (err) {
-          if (!err.timeout) throw err;
-          errors.push({ algorithm: a, message: I.t('budget_time_stop', { s: I.num(this.cfg.time_budget_s, 0) }), budget: 'time' });
-          if (i + 1 < algos.length) {
-            if (onProgress) onProgress({ algorithm: a, index: i, total: algos.length, restarting: true });
-            await this.start();   // a fresh worker (Pyodide comes from the browser cache now)
+      const got = new Map();
+      const errors = [];
+      const merged = () => Object.assign({}, first || {}, {
+        results: algos.flatMap((a) => got.get(a) || []),
+        errors: errors.slice().sort((x, y) => algos.indexOf(x.algorithm) - algos.indexOf(y.algorithm)),
+      });
+      this.running = true;
+      this.cancelled = false;
+      try {
+        for (let i = 0; i < order.length; i++) {
+          const a = order[i];
+          if (this.cancelled) { errors.push({ algorithm: a, message: I.t('budget_skipped'), budget: 'skipped' }); continue; }
+          if (onProgress) onProgress({ algorithm: a, index: i, total: order.length });
+          let data;
+          try {
+            data = await this.request('plan', Object.assign({}, body, { algorithms: [a] }), budgetMs);
+          } catch (err) {
+            if (err.cancelled) { errors.push({ algorithm: a, message: I.t('budget_cancelled'), budget: 'cancelled' }); continue; }
+            if (!err.timeout) throw err;
+            errors.push({ algorithm: a, message: I.t('budget_time_stop', { s: I.num(this.cfg.time_budget_s, 0) }), budget: 'time' });
+            if (i + 1 < order.length && !this.cancelled) {
+              if (onProgress) onProgress({ algorithm: a, index: i, total: order.length, restarting: true });
+              try {
+                await this.start();   // a fresh worker (Pyodide comes from the browser cache now)
+              } catch (e) {
+                if (!e.cancelled) throw e;
+              }
+            }
+            continue;
           }
-          continue;
+          if (!first) first = data;
+          got.set(a, data.results || []);
+          errors.push(...(data.errors || []));
+          if (onPartial && i + 1 < order.length && !this.cancelled) onPartial(merged());
         }
-        if (!first) first = data;
-        results.push(...(data.results || []));
-        errors.push(...(data.errors || []));
+      } finally {
+        if (this.cancelled) this.start().catch(() => {});   // get the next run's worker ready now
+        this.running = false;
+        this.cancelled = false;
       }
-      if (!first) {
-        const err = new Error(I.t('budget_all_stopped', { s: I.num(this.cfg.time_budget_s, 0) }));
-        err.errors = errors;
-        throw err;
-      }
-      return Object.assign(first, { results, errors, elapsed_ms: Math.round(performance.now() - t0) });
+      return Object.assign(merged(), { elapsed_ms: Math.round(performance.now() - t0) });
     }
   }
 
   /**
-   * Commands that repeat a live request locally without the web budgets:
+   * Commands that repeat a live request locally without the web limits:
    * `evroute viz` with the same planners and viewer options for `vizAlgos`
    * (node ids; the place names follow as a comment), and for a Pareto front
-   * stopped by its label budget -- the budget `evroute viz` uses as well --
-   * the trip saved with `evroute export-scenario` and planned in Python with
-   * ten times the labels.  The value of time has no command-line option:
-   * with the cost objective a comment line names it.
+   * stopped by a limit -- `evroute viz` keeps a budget of 1 million labels --
+   * the trip saved with `evroute export-scenario` and planned in Python: with
+   * ten times the labels, or, when not a single route was found, on a
+   * coarser SoC grid (the exact front can be out of reach on a long trip).
+   * The value of time has no command-line option: with the cost objective a
+   * comment line names it.
    */
   function cliCommand(body, vizAlgos, pareto, model) {
     const pc = (x) => String(Math.round(x * 100) / 100);
@@ -205,10 +261,18 @@
     const lines = [];
     if (vizAlgos.length) lines.push(`evroute viz ${body.scenario} --algorithms ${vizAlgos.join(',')} ${opts.join(' ')} -o evroute.html   ${trip}`);
     if (pareto) {
-      const crit = (pareto.criteria || ['time', 'money']).map((c) => `'${c}'`).join(', ');
-      const n = Math.max(10 * (pareto.max_labels || 1000000), 1000000);
+      const o = pareto.options || {};
+      const crit = (o.criteria || ['time', 'money']).map((c) => `'${c}'`).join(', ');
+      const report = "print(len(f.alternatives), 'routes, complete:', f.stats.extra['complete'])";
       lines.push(`evroute export-scenario ${body.scenario} ${opts.join(' ')} -o trip.json   ${trip}`);
-      lines.push(`python -c "from evroute import Scenario, plan; f = plan(Scenario.load('trip.json'), 'pareto', criteria=(${crit}), max_labels=${n}); print(len(f.alternatives), 'routes, complete:', f.stats.extra['complete'])"`);
+      if (pareto.empty) {
+        lines.push('# no Pareto route within the limits: the exact front may be out of reach on this trip;');
+        lines.push('# a coarser SoC grid (charge_step_soc=0.1) gives an approximate one');
+        lines.push(`python -c "from evroute import Scenario, plan; f = plan(Scenario.load('trip.json').with_preferences(charge_step_soc=0.1), 'pareto', criteria=(${crit}), max_labels=3000000); ${report}"`);
+      } else {
+        const n = Math.max(10 * (o.max_labels || 1000000), 1000000);
+        lines.push(`python -c "from evroute import Scenario, plan; f = plan(Scenario.load('trip.json'), 'pareto', criteria=(${crit}), max_labels=${n}); ${report}"`);
+      }
     }
     if (body.objective === 'cost') lines.push(`# value_of_time_per_h = ${body.value_of_time_per_h} (Python: scenario.with_preferences(value_of_time_per_h=...))`);
     return lines.join('\n');
@@ -222,20 +286,28 @@
       this.busy = false;
       const cfg = app.payload.worker || null;
       this.transport = cfg ? new WorkerTransport(cfg) : new HttpTransport();
-      this.boot = { phase: null, loaded: {}, total: {}, error: null };
+      this.boot = { phase: null, loaded: {}, total: {}, error: null, reason: null };
       this.note = null;
+      this.running = null;   // the algorithms of the run under way (their checkboxes stay ticked)
+      this.held = null;      // the request of a run without any answer: the controls keep showing it
       this.el = {
         card: U.$('#live-card'), scenario: U.$('#in-scenario'), fieldScenario: U.$('#field-scenario'),
         origin: U.$('#in-origin'), destination: U.$('#in-destination'), swap: U.$('#btn-swap'), pickSeg: U.$('#pick-seg'),
         vehicle: U.$('#in-vehicle'), soc: U.$('#in-soc'), temp: U.$('#in-temp'), reserve: U.$('#in-reserve'), arrive: U.$('#in-arrive'),
         objective: U.$('#in-objective'), depart: U.$('#in-depart'), vot: U.$('#in-vot'), votUnit: U.$('#vot-unit'),
         eco: U.$('#in-eco'), queue: U.$('#in-queue'), tariff: U.$('#in-tariff'), fieldTariff: U.$('#field-tariff'), algos: U.$('#algo-picks'), plan: U.$('#btn-plan'), error: U.$('#plan-error'),
-        noteBox: U.$('#plan-note'),
+        noteBox: U.$('#plan-note'), stop: U.$('#btn-stop'), planOwn: U.$('#plan-own'), pickHint: U.$('#pick-hint'),
         outSoc: U.$('#out-soc'), outTemp: U.$('#out-temp'), outReserve: U.$('#out-reserve'), outArrive: U.$('#out-arrive'),
         busyText: U.$('#map-busy-text'), bootBox: U.$('#boot'),
       };
       this.el.card.hidden = false;
+      if (this.el.planOwn) this.el.planOwn.hidden = false;   // phones: a shortcut from the map to the form
+      try {
+        // no Shift key on a touch screen: the A/B switch chooses
+        if (this.el.pickHint && window.matchMedia('(pointer: coarse)').matches) this.el.pickHint.dataset.i18n = 'pick_hint_touch';
+      } catch (e) { /* no matchMedia */ }
       if (this.transport.kind === 'worker') {
+        this.transport.prepare = app.payload.scenario_preset || null;
         this.transport.onBoot = (m, restart) => this._onBoot(m, restart);
         this._showBoot(true);
       }
@@ -271,8 +343,18 @@
         if (ev.key === 'Enter' && ev.target.tagName !== 'BUTTON' && ev.target.tagName !== 'SELECT') { ev.preventDefault(); this.plan(); }
       });
       el.scenario.addEventListener('change', () => this.switchScenario(el.scenario.value));
+      if (el.stop) el.stop.addEventListener('click', () => this.transport.cancel());
       const retry = U.$('#boot-retry');
-      if (retry) retry.addEventListener('click', () => { this.boot.error = null; this._renderBoot(); this._loadScenarioList(); this.plan(); });
+      if (retry) {
+        retry.addEventListener('click', () => {
+          if (this.boot.reason === 'stale') { window.location.reload(); return; }
+          this.boot.error = null;
+          this.boot.reason = null;
+          this._renderBoot();
+          this._loadScenarioList();
+          this.plan();
+        });
+      }
     }
 
     setPick(which) {
@@ -280,12 +362,37 @@
       for (const b of this.el.pickSeg.querySelectorAll('button')) b.setAttribute('aria-pressed', String(b.dataset.pick === which));
     }
 
-    /** Fill every control from the current payload. */
+    /** The trip parameters of the current payload, shaped like a plan request. */
+    _scenarioValues() {
+      const sc = this.app.model.scenario || {};
+      const prefs = sc.preferences || {};
+      const q = this.app.currentQuery();
+      return {
+        vehicle: (sc.vehicle || {}).key || '',
+        initial_soc: q.initial_soc ?? 0.8,
+        temperature_c: (sc.conditions || {}).temperature_c ?? 20,
+        reserve_soc: prefs.reserve_soc ?? 0.1,
+        min_arrival_soc: prefs.min_arrival_soc ?? 0.1,
+        objective: prefs.objective || 'time',
+        departure_s: q.departure_s || 0,
+        value_of_time_per_h: prefs.value_of_time_per_h ?? 15,
+        speed_factors: prefs.speed_factors || [1],
+        queue_aware: prefs.queue_aware !== false,
+        tariff_on: !!sc.tariff,
+      };
+    }
+
+    /** The trip parameters the controls show now (before fill() rebuilds them). */
+    _controlValues() {
+      const r = this.request();
+      return Object.assign(r, { vehicle: r.vehicle || '', tariff_on: this.el.tariff.checked });
+    }
+
+    /** Fill every control from the current payload (or from a request no planner answered). */
     fill() {
       const app = this.app, el = this.el, p = app.payload;
-      const sc = app.model.scenario || {};
-      const prefs = sc.preferences || {};
-      const q = app.currentQuery();
+      // during a run (results so far shown) the controls keep what the visitor may be editing
+      const v = this.running ? this._controlValues() : this.held ? Object.assign({}, this.held, { tariff_on: this.held.tariff !== 'flat' }) : this._scenarioValues();
       // places: settlements first by importance, then the rest
       const places = app.model.places.filter((x) => x.kind === 'city' || x.kind === 'town');
       const list = (places.length ? places : app.model.places).slice().sort((a, b) => a.name.localeCompare(b.name, I.lang === 'tr' ? 'tr' : 'en'));
@@ -295,35 +402,35 @@
       }
       this._syncOD();
       el.vehicle.textContent = '';
-      for (const v of p.vehicles || []) el.vehicle.appendChild(U.el('option', { value: v.key, text: `${v.name}` }));
-      el.vehicle.value = (sc.vehicle || {}).key || '';
-      el.soc.value = Math.round((q.initial_soc ?? 0.8) * 100);
-      el.temp.value = Math.round((sc.conditions || {}).temperature_c ?? 20);
-      el.reserve.value = Math.round((prefs.reserve_soc ?? 0.1) * 100);
-      el.arrive.value = Math.round((prefs.min_arrival_soc ?? 0.1) * 100);
-      el.objective.value = prefs.objective || 'time';
-      el.depart.value = I.clock(q.departure_s || 0, false);
-      el.vot.value = prefs.value_of_time_per_h ?? 15;
+      for (const veh of p.vehicles || []) el.vehicle.appendChild(U.el('option', { value: veh.key, text: `${veh.name}` }));
+      el.vehicle.value = v.vehicle || '';
+      el.soc.value = Math.round(v.initial_soc * 100);
+      el.temp.value = Math.round(v.temperature_c);
+      el.reserve.value = Math.round(v.reserve_soc * 100);
+      el.arrive.value = Math.round(v.min_arrival_soc * 100);
+      el.objective.value = v.objective;
+      el.depart.value = I.clock(v.departure_s, false);
+      el.vot.value = v.value_of_time_per_h;
       el.votUnit.textContent = `(${app.model.currency}${I.t('per_hour')})`;
-      el.eco.checked = (prefs.speed_factors || [1]).length > 1;
-      el.queue.checked = prefs.queue_aware !== false;
+      el.eco.checked = (v.speed_factors || [1]).length > 1;
+      el.queue.checked = v.queue_aware !== false;
       // charging-tariff switch: the server's demonstration tariff (or the preset's own tariff)
       const demo = p.demo_tariff || null;
       const base = (p.scenario || {}).tariff || null;
       el.fieldTariff.hidden = !(demo || base);
-      el.tariff.checked = !!sc.tariff;
+      el.tariff.checked = v.tariff_on;
       el.fieldTariff.title = `${EVR.panels.tariffText(base || demo)} · ${I.t('tariff_illustrative')}`;
       for (const inp of [el.soc, el.temp, el.reserve, el.arrive]) inp._upd();
-      // algorithm checkboxes
-      const have = new Set(app.model.results.map((r) => r.algorithm));
-      for (const e of this.note ? this.note.stopped : []) have.add(e);
+      // algorithm checkboxes: those of the run under way, else those of the results shown
+      const have = new Set(this.running || app.model.results.map((r) => r.algorithm));
+      if (!this.running) for (const e of this.note ? this.note.stopped : []) have.add(e);
       el.algos.textContent = '';
       for (const a of p.algorithms || []) {
         const cb = U.el('input', { type: 'checkbox', value: a.name });
         // the server's defaults: without greedy and station graph on a large (real-data) network
         cb.checked = have.size ? have.has(a.name) : (p.default_algorithms || DEFAULT_ALGOS).includes(a.name);
         el.algos.appendChild(U.el('label', { class: 'check', title: I.algoDescription(a), style: { '--algo': app.theme.dark ? a.color_dark : a.color } },
-          cb, U.el('span', { text: a.short_title || a.title || a.name })));
+          cb, U.el('span', { text: I.algoTitle(a.name, a.short_title || a.title) })));
       }
       this._renderNote();
       this._renderBoot();
@@ -398,6 +505,12 @@
       // while the in-browser planner loads, the boot card stands in for the spinner
       U.$('#map-busy').hidden = !on || this._bootVisible();
       if (this.el.busyText) this.el.busyText.textContent = text || I.t('planning');
+      if (this.el.stop) this.el.stop.hidden = !on || !this.transport.canCancel || !this.transport.running;
+    }
+
+    _errorText(err) {
+      if (err && err.reason === 'stale') return I.t('boot_stale');
+      return I.t('err_generic', { m: (err && err.message) || String(err) });
     }
 
     async plan() {
@@ -407,48 +520,70 @@
       if (!body.algorithms.length) { this.showError(I.t('err_no_algo')); return; }
       this.showError(null);
       this.setBusy(true);
-      const titles = new Map((this.app.payload.algorithms || []).map((a) => [a.name, a.short_title || a.title || a.name]));
+      const titles = new Map((this.app.payload.algorithms || []).map((a) => [a.name, I.algoTitle(a.name, a.short_title || a.title)]));
       try {
         await this.transport.start();
+        this.running = body.algorithms.slice();
         const t0 = performance.now();
+        let shown = 0;
         const data = await this.transport.plan(body, (p) => {
           const a = titles.get(p.algorithm) || p.algorithm;
           this.setBusy(true, p.restarting ? I.t('restarting', { a }) : I.t('planning_algo', { a, i: p.index + 1, n: p.total }));
+        }, (partial) => {
+          // a long run shows its results so far (a quick one only its final answer)
+          const now = performance.now();
+          if (now - t0 < 1500 || now - shown < 1500 || !partial.scenario) return;
+          shown = now;
+          this.note = null;
+          this.held = null;
+          this.app.applyPlanResponse(partial);
         });
+        this.running = null;
         this.note = this._budgetNote(body, data);
-        this.app.applyPlanResponse(data);
+        if (data.scenario) {
+          this.held = null;
+          this.app.applyPlanResponse(data);
+        } else {
+          this.held = body;          // no planner answered: no results, the controls keep this trip
+          this.app.clearResults();
+        }
         this.fill();
-        const errs = (data.errors || []).filter((e) => !e.budget).map((e) => `${e.algorithm}: ${e.message}`);
+        const errs = (data.errors || []).filter((e) => !e.budget).map((e) => `${titles.get(e.algorithm) || e.algorithm}: ${e.message}`);
         this.showError(errs.length ? errs.join(' · ') : null);
-        this.app.toast(I.t('toast_planned', { n: data.results.length, ms: I.num(performance.now() - t0, 0) }));
+        if (data.results.length) this.app.toast(I.t('toast_planned', { n: data.results.length, ms: I.num(performance.now() - t0, 0) }));
       } catch (err) {
+        this.running = null;
         if (this.transport.kind === 'worker' && !this.transport.started) this._bootFailed(err);
-        else this.showError(I.t('err_generic', { m: err.message || String(err) }));
+        else this.showError(this._errorText(err));
       } finally {
+        this.running = null;
         this.setBusy(false);
       }
     }
 
     /* ------------------------------------------------ budgets (web site) */
-    /** Which planners a web budget stopped, and the command that runs them locally. */
+    /** Which planners a web limit (or the visitor) stopped, and the command that runs them locally. */
     _budgetNote(body, data) {
       if (this.transport.kind !== 'worker') return null;
       const items = [];
       for (const r of data.results || []) {
-        if (EVR.panels.budgetStopped(r)) items.push({ algorithm: r.algorithm, labels: (r.options || {}).max_labels || null });
+        if (!EVR.panels.budgetStopped(r)) continue;
+        const status = ((r.stats || {}).extra || {}).status;
+        items.push(status === 'time_limit' ? { algorithm: r.algorithm, kind: 'time_limit' }
+          : { algorithm: r.algorithm, kind: 'labels', labels: (r.options || {}).max_labels || null });
       }
       for (const e of data.errors || []) {
-        if (e.budget === 'time') items.push({ algorithm: e.algorithm, time: true });
+        if (e.budget) items.push({ algorithm: e.algorithm, kind: e.budget });
       }
       if (!items.length) return null;
       const order = (this.app.payload.algorithms || []).map((a) => a.name);
       items.sort((a, b) => order.indexOf(a.algorithm) - order.indexOf(b.algorithm));
       const stopped = items.map((x) => x.algorithm);
-      // a Pareto front cut by its label budget: `evroute viz` has the same budget, so the Python API it is
+      // a Pareto front cut by a limit: `evroute viz` has a label budget as well, so the Python API it is
       const front = (data.results || []).find((r) => r.algorithm === 'pareto' && EVR.panels.budgetStopped(r));
       const viz = stopped.filter((a) => !(front && a === 'pareto'));
-      return { stopped, items, install: this.transport.cfg.install || '',
-        cmd: cliCommand(body, viz, front ? front.options || {} : null, this.app.model) };
+      const pareto = front ? { options: front.options || {}, empty: !front.feasible } : null;
+      return { stopped, items, install: this.transport.cfg.install || '', cmd: cliCommand(body, viz, pareto, this.app.model) };
     }
 
     _renderNote() {
@@ -457,14 +592,42 @@
       const n = this.note;
       box.hidden = !n;
       if (!n) { box.textContent = ''; return; }
-      const title = (a) => ((this.app.payload.algorithms || []).find((x) => x.name === a) || {}).short_title || a;
-      const what = (x) => (x.time ? I.t('budget_time_stop', { s: I.num(this.transport.cfg.time_budget_s, 0) })
-        : x.labels ? I.t('budget_labels', { n: I.num(x.labels, 0) }) : I.t('g_incomplete'));
+      const info = (a) => (this.app.payload.algorithms || []).find((x) => x.name === a) || {};
+      const title = (a) => I.algoTitle(a, info(a).short_title || a);
+      const cfg = this.transport.cfg || {};
+      const what = (x) => {
+        if (x.kind === 'time') return I.t('budget_time_stop', { s: I.num(cfg.time_budget_s, 0) });
+        if (x.kind === 'time_limit') return I.t('budget_time_limit', { s: I.num(cfg.time_limit_s, 0) });
+        if (x.kind === 'cancelled') return I.t('budget_cancelled');
+        if (x.kind === 'skipped') return I.t('budget_skipped');
+        return x.labels ? I.t('budget_labels', { n: I.num(x.labels, 0) }) : I.t('g_incomplete');
+      };
       const code = [n.install, n.cmd].filter(Boolean).join('\n');
+      const copy = U.el('button', { type: 'button', class: 'btn-copy', text: I.t('copy') });
+      copy.addEventListener('click', () => {
+        const done = () => { copy.textContent = I.t('copied'); setTimeout(() => { copy.textContent = I.t('copy'); }, 1600); };
+        try {
+          navigator.clipboard.writeText(code).then(done, () => this._selectCode(box));
+        } catch (e) {
+          this._selectCode(box);
+        }
+      });
       U.setChildren(box,
         U.el('p', {}, U.el('b', { text: I.t('budget_title') }), ' ', n.items.map((x) => `${title(x.algorithm)}: ${what(x)}`).join(' · ')),
         U.el('p', { text: I.t('budget_hint') }),
-        U.el('pre', { class: 'cmd', tabindex: '0' }, U.el('code', { text: code })));
+        U.el('pre', { class: 'cmd', tabindex: '0' }, U.el('code', { text: code })),
+        U.el('div', { class: 'cmd-actions' }, copy));
+    }
+
+    /** Without the clipboard API: select the command so that the visitor can copy it. */
+    _selectCode(box) {
+      try {
+        const range = document.createRange();
+        range.selectNodeContents(U.$('pre.cmd', box));
+        const sel = window.getSelection();
+        sel.removeAllRanges();
+        sel.addRange(range);
+      } catch (e) { /* nothing to do */ }
     }
 
     /* ------------------------------------------------- loading (web site) */
@@ -495,6 +658,7 @@
 
     _bootFailed(err) {
       this.boot.error = err.message || String(err);
+      this.boot.reason = err.reason || null;
       this._showBoot(true);
       this._renderBoot();
     }
@@ -516,16 +680,25 @@
         if (state === 'active' && tot) frac = Math.min(1, (got || 0) / tot);
         const bar = U.$('.boot-bar i', li);
         if (bar) bar.style.width = `${(100 * frac).toFixed(1)}%`;
+        // the worker counts decoded bytes; the step shows what is transferred (as the lead text does)
+        const tr = (cfg.transfer || {})[k];
         const val = U.$('.boot-val', li);
-        if (val) val.textContent = k === 'download' && tot && state !== 'todo' ? `${mb(Math.min(got || 0, tot))} / ${mb(tot)}` : state === 'done' ? '✓' : '';
+        if (val) val.textContent = tr && state !== 'todo' ? `${mb(frac * tr)} / ${mb(tr)}` : state === 'done' ? '✓' : '';
       }
       const err = U.$('#boot-error'), retry = U.$('#boot-retry');
+      let msg = '';
+      if (b.error) {
+        msg = b.reason === 'stale' ? I.t('boot_stale')
+          : b.reason === 'integrity' ? I.t('boot_integrity', { m: b.error })
+            : `${I.t('boot_failed', { m: b.error }).replace(/([^.!?])$/, '$1.')} ${I.t('boot_blocked')}`;
+      }
       err.hidden = !b.error;
-      err.textContent = b.error ? I.t('boot_failed', { m: b.error }) : '';
+      err.textContent = msg;
       retry.hidden = !b.error;
+      retry.textContent = I.t(b.reason === 'stale' ? 'boot_reload' : 'boot_retry');
     }
 
-    async _loadScenarioList() {
+    async _loadScenarioList(again) {
       try {
         const data = await this.transport.request('scenarios');
         const sel = this.el.scenario;
@@ -535,6 +708,8 @@
         sel.value = cur;
         this.el.fieldScenario.hidden = !(data.scenarios || []).length;
       } catch (e) {
+        // a worker stopped by a time limit (or by the visitor) while the list was asked for: ask again
+        if ((e.timeout || e.cancelled) && !again) { this._loadScenarioList(true); return; }
         this.el.fieldScenario.hidden = true;
       }
     }
@@ -546,10 +721,12 @@
       try {
         const data = await this.transport.request('scenario', { name });
         this.note = null;
+        this.held = null;
+        if (this.transport.kind === 'worker') this.transport.prepare = name;
         this.app.loadPayload(data);
         this.fill();
       } catch (err) {
-        this.showError(I.t('err_generic', { m: err.message || String(err) }));
+        this.showError(this._errorText(err));
         this.setBusy(false);
         return;
       }
@@ -558,5 +735,5 @@
     }
   }
 
-  EVR.live = { Live, DEFAULT_ALGOS, HttpTransport, WorkerTransport, cliCommand };
+  EVR.live = { Live, DEFAULT_ALGOS, RUN_ORDER, runOrder, HttpTransport, WorkerTransport, cliCommand };
 })(window.EVR = window.EVR || {});

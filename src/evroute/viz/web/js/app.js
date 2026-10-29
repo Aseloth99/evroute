@@ -20,14 +20,7 @@
       this.ready = false;
       this.payload = payload;
       this.live = !!payload.live;
-      // a link can choose the language: page.html?lang=en or page.html#en
-      let lang = payload.lang;
-      try {
-        const q = new URLSearchParams(window.location.search).get('lang');
-        const h = window.location.hash.slice(1).toLowerCase();
-        lang = q || (h === 'en' || h === 'tr' ? h : lang);
-      } catch (e) { /* no location (embedded) */ }
-      I.setLang(lang === 'en' ? 'en' : 'tr');
+      I.setLang(App.initialLang(payload));
       this.model = new EVR.model.Model(payload);
       this.layers = { terrain: true, stations: true, labels: true, others: true };
       this.visible = new Set(this.model.results.map((r, i) => i));
@@ -62,6 +55,30 @@
       this.map.fitDefault(false);
       if (animate && this.model.results.length) this.anim.play();
       if (this.live && !this.model.results.length) this.liveCtl.plan();
+    }
+
+    /**
+     * The language to start in: a link's choice (page.html?lang=en or
+     * page.html#en), else the one saved by a language switch of a viewer, the
+     * results dashboard or the web site (localStorage "evroute.lang"), else --
+     * on the web site's pages (payload.lang_auto) -- the browser's language,
+     * else the page's own (payload.lang).
+     */
+    static initialLang(payload) {
+      const ok = (x) => (x === 'tr' || x === 'en' ? x : null);
+      let lang = null;
+      try {
+        lang = ok(new URLSearchParams(window.location.search).get('lang')) || ok(window.location.hash.slice(1).toLowerCase());
+      } catch (e) { /* no location (embedded) */ }
+      lang = lang || ok(U.storage.get('evroute.lang', null));
+      if (!lang && payload.lang_auto) {
+        try {
+          // as the web site's pages decide: Turkish anywhere in the browser's list
+          const prefs = navigator.languages && navigator.languages.length ? navigator.languages : [navigator.language || ''];
+          lang = /(^|,)tr/i.test(prefs.join(',')) ? 'tr' : 'en';
+        } catch (e) { /* no navigator */ }
+      }
+      return lang || (payload.lang === 'en' ? 'en' : 'tr');
     }
 
     /* ------------------------------------------------------------ selection */
@@ -311,6 +328,7 @@
 
     setLang(lang) {
       I.setLang(lang);
+      U.storage.set('evroute.lang', I.lang);   // the choice of the user, kept for the other EVRoute pages
       this.applyLang();
     }
 
@@ -383,8 +401,19 @@
       }
     }
 
+    /** Live mode: no results to show (every planner was stopped); the trip in the controls stays. */
+    clearResults() {
+      this.model.setResults([]);
+      this.visible = new Set();
+      this.selection = { ri: 0, ai: -1 };
+      this.waitPinned = -1;
+      this.applyLang();
+    }
+
     loadPayload(payload) {
       payload.live = true;
+      payload.site = payload.site || this.payload.site;
+      payload.lang_auto = payload.lang_auto || this.payload.lang_auto;
       this.payload = payload;
       this.model = new EVR.model.Model(payload);
       this.visible = new Set(this.model.results.map((r, i) => i));
@@ -399,7 +428,26 @@
     }
 
     /* --------------------------------------------------------------- wiring */
+    /** Pages of the project web site (payload.site): the logo leads home, a GitHub link sits in the top bar. */
+    _siteLinks() {
+      const site = this.payload.site;
+      if (!site) return;
+      const mark = U.$('#topbar .brand-mark');
+      if (site.home && mark) {
+        const a = U.el('a', { class: 'brand-mark brand-home', href: site.home, 'data-i18n-aria': 'site_home', 'data-i18n-title': 'site_home' });
+        a.append(...mark.childNodes);
+        mark.replaceWith(a);
+      }
+      if (site.repo) {
+        const gh = U.el('a', { class: 'btn-icon site-repo', href: site.repo, 'data-i18n-aria': 'site_repo', 'data-i18n-title': 'site_repo' });
+        // a constant icon (no data in this markup)
+        gh.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 19c-4 1.5-4-2-6-2.5m12 5v-3.5c0-1 .1-1.4-.5-2 2.8-.3 5.5-1.4 5.5-6a4.6 4.6 0 0 0-1.3-3.2 4.2 4.2 0 0 0-.1-3.2s-1.1-.3-3.5 1.3a12 12 0 0 0-6.2 0C6.5 2.8 5.4 3.1 5.4 3.1a4.2 4.2 0 0 0-.1 3.2A4.6 4.6 0 0 0 4 9.5c0 4.6 2.7 5.7 5.5 6-.6.6-.6 1.2-.5 2V21"/></svg>';
+        U.$('#topbar .topbar-actions').prepend(gh);
+      }
+    }
+
     _wireHeader() {
+      this._siteLinks();
       for (const b of U.$$('#lang-seg button')) b.addEventListener('click', () => this.setLang(b.dataset.lang));
       for (const b of U.$$('#theme-seg button')) b.addEventListener('click', () => this.setTheme(b.dataset.themeChoice));
       try {

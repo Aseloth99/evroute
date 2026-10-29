@@ -389,6 +389,39 @@ def test_options_are_validated():
         plan(sc, "bls-astar", potential="magic")
 
 
+_LABEL_SETTING = ("bls", "bls-astar", "cfp", "cfp-astar", "pareto")
+
+
+@pytest.fixture(scope="module")
+def eco_turkey():
+    """Karaman -> Istanbul with three speed levels: hundreds of thousands of labels for every planner."""
+    from evroute.generators.presets import get_scenario
+
+    return get_scenario("turkey-karaman-istanbul").with_preferences(speed_factors=(1.0, 0.9, 0.8)).prepare()
+
+
+@pytest.mark.parametrize("algo", _LABEL_SETTING)
+def test_time_limit_stops_the_search(algo, eco_turkey):
+    """Option time_limit_s (the in-browser planner's safeguard): a search over it stops and says so."""
+    p = plan(eco_turkey, algo, time_limit_s=1e-9)
+    assert p.stats.extra["status"] == "time_limit" and "time limit reached (time_limit_s=1e-09" in p.message
+    if algo == "pareto":
+        assert p.stats.extra["complete"] is False
+    for bad in (0, -1.0, float("inf"), "5", True):
+        with pytest.raises(ValueError, match="time_limit_s"):
+            plan(eco_turkey, algo, time_limit_s=bad)
+
+
+@pytest.mark.parametrize("algo", _LABEL_SETTING)
+def test_time_limit_not_reached_changes_nothing(algo):
+    sc = grid_scenario(7, 7, seed=4, initial_soc=0.3, objective="cost")
+    P = sc.prepare()
+    a, b = plan(P, algo), plan(P, algo, time_limit_s=3600)
+    assert b.stats.extra["status"] == a.stats.extra["status"] != "time_limit"
+    assert (b.feasible, b.objective_value, b.decision.edges, b.stats.settled) == (
+        a.feasible, a.objective_value, a.decision.edges, a.stats.settled)
+
+
 # ----------------------------------------------------------------------------
 # 5. charging at the origin when starting below the reserve
 # ----------------------------------------------------------------------------

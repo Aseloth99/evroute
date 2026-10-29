@@ -151,7 +151,9 @@ route = get_planner("bls-astar", potential="basic").plan(sc, trace=True)
   BLS / BLS-A\*: `targets="grid+breaks" | "grid"`, `max_labels`,
   `potential="tight" | "basic"` (A\* only); CFP / CFP-A\*: `exact_switching`,
   `max_labels`, `potential`; Pareto: `criteria`, `targets`, `epsilon`,
-  `epsilon_scope`, `goal_directed`, `max_labels`; greedy: `charge_to_soc`,
+  `epsilon_scope`, `goal_directed`, `max_labels`; these five also take
+  `time_limit_s` (an optional limit in seconds, used by the web site's
+  in-browser planner); greedy: `charge_to_soc`,
   `max_stops`, `final_leg`; station graph: `charge_to_soc`, `detour_factor`;
   genetic: `seed`, `population`, `generations`, `patience`, `max_stops`,
   `detour_factor`, `seed_greedy`.  The module docstrings of
@@ -225,16 +227,19 @@ same page without a server: EVRoute runs in the visitor's browser, in a Web
 Worker under [Pyodide](https://pyodide.org) 0.29.5 (Python 3.13, loaded once
 from the jsDelivr CDN, about 6 MB; later visits use the browser cache), and
 answers the page through the same functions as `evroute serve`
-(`evroute.server.api_call_json`), so a plan is the one `evroute plan`
-computes.  It offers the synthetic presets only -- the approximate Turkey
+(`evroute.server.api_call_json`), so it plans the routes `evroute plan`
+plans (a number may differ in its last digit: the browser's maths library
+rounds `sin`, `atan2`, ... differently).  It offers the synthetic presets only -- the approximate Turkey
 network, `corridor`, the synthetic countries up to `country-medium`,
 `random-geometric`, `grid-small`; the real-data network is not planned live
--- and all nine planners with browser budgets: at most 1.5 million labels for
-BLS / BLS-A\*, 1 million for CFP / CFP-A\* and the Pareto search, and 60 s
-per planner (on `country-medium` only BLS-A\* and CFP-A\* are ticked at first:
-greedy and the station graph take tens of seconds there in a browser).  A run
-stopped by a budget is marked *possibly incomplete*, with the commands that
-repeat it locally.  `python
+-- and all nine planners with browser limits: at most 1.5 million labels for
+BLS / BLS-A\*, 1 million for CFP / CFP-A\* and the Pareto search, 45 s for
+these five label-setting planners and 60 s for any planner (on
+`country-medium` only BLS-A\* and CFP-A\* are ticked at first: greedy and the
+station graph take tens of seconds there in a browser).  The fast exact
+planners run first, a long run shows its results so far and can be stopped;
+a run stopped by a limit is marked *possibly incomplete*, with the commands
+that repeat it locally.  `python
 tools/build_site.py -o _site` builds the whole site (landing page, live
 planner, examples); `.github/workflows/pages.yml` deploys it on every push to
 `main`.
@@ -654,8 +659,9 @@ levels or the cost objective with time-dependent queues make the label sets
 much larger (seconds).  On the 44 673-node OpenStreetMap network of Turkey
 the median over six trips is 4.0 s for BLS-A\* and 9.9 s for CFP-A\*
 ([`real-data.md`](real-data.md#results-the-real-data-experiment)).
-`max_labels` is the safeguard of every exact planner; when it is hit the
-planner says so instead of returning a non-optimal route as optimal.
+`max_labels` is the safeguard of every exact planner (and the optional
+`time_limit_s`); when it is hit the planner says so instead of returning a
+non-optimal route as optimal.
 
 **Is the Turkey data real?**  The Turkey family of presets: approximate
 geography, synthetic chargers - see [Scenarios and data](#scenarios-and-data).

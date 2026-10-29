@@ -168,7 +168,9 @@ tariffs"); the time objective never holds.  A* key =
 (`potential="basic"`: `LowerBounds.h(v, e)`).  Stop when the first label at
 the destination with `e >= P.e_dest_min` is popped.  Options:
 `targets="grid+breaks"|"grid"`, `max_labels` safeguard, `potential`
-(BLS-A\*).  Details and proofs: module docs of `labels.py`,
+(BLS-A\*), `time_limit_s` (optional safeguard in seconds, status
+`"time_limit"`; CFP, CFP-A\* and Pareto take it too; never set by the CLI or
+the experiments, so their results stay machine-independent).  Details and proofs: module docs of `labels.py`,
 `docs/algorithms.md` §1-3.
 
 ### 2.2 CFP (cfp.py) — continuous charging (time objective)
@@ -297,16 +299,32 @@ request) -> (status, answer)` / `api_call_json` (the same with JSON text).
 serve`) or, on the web site, `WorkerTransport`, which talks to a Web Worker
 (`site/worker.js`) running EVRoute under Pyodide.  The web site's live page
 carries a `"worker"` block in its payload (`tools/build_site.py`): `script`,
-`pyodide` (pinned CDN index URL) and `pyodide_version`, `wheel` (site-relative
-path), `service` (the `PlanningService` keyword arguments, with the browser's
-label budgets as `options`), `time_budget_s`, `download_bytes`, `sizes` and
-`install`.  Messages: page → worker `{type: "init", config}`, `{type: "call",
-id, endpoint, args}`; worker → page `{type: "progress", phase, loaded,
-total}`, `{type: "ready", ...}`, `{type: "failed", message}`, `{type:
+`pyodide` (pinned CDN index URL) and `pyodide_version`, `integrity` (SHA-256
+of every file the worker may take from the CDN; it refuses any other file
+and any mismatch), `wheel` (site-relative path), `service` (the
+`PlanningService` keyword arguments, with the browser's label and time limits
+as `options`), `time_budget_s`, `time_limit_s`, `download_bytes`, `sizes`
+(decoded bytes per loading step, as the worker counts them), `transfer`
+(bytes transferred per step, as shown) and `install`.  Messages: page →
+worker `{type: "init", config, prepare}` (`prepare`: the preset to get ready
+first), `{type: "call", id, endpoint, args}`; worker → page `{type:
+"progress", phase, loaded, total}`, `{type: "ready", ...}`, `{type:
+"failed", message, reason}` (`reason` `"stale"`: the page names a wheel the
+site no longer has -- reload; `"integrity"`: a CDN file did not match), `{type:
 "reply", id, status, body, fatal}` (`args` and `body` are JSON text).  The
-page plans one algorithm per request and terminates and restarts the worker
-when a planner runs over `time_budget_s`; a result whose `stats.extra.status`
-is `"limit"` or whose `complete` is `false` is shown as possibly incomplete.
+page plans one algorithm per request, the fast exact planners first, shows
+the results so far during a long run, and terminates and restarts the worker
+when a planner runs over `time_budget_s` or the visitor presses *Stop*.  A
+result whose `stats.extra.status` is `"limit"` or `"time_limit"` or whose
+`complete` is `false` is shown as possibly incomplete; planners that did not
+answer are listed in `errors` with `budget` `"time"`, `"cancelled"` or
+`"skipped"`, and a run without any answer keeps the trip in the controls and
+shows no results.  The site's viewer pages also carry `"site": {"home",
+"repo"}` (the logo leads home, a GitHub link) and `"lang_auto": true`.  The
+viewer starts in the language of `?lang=` / `#lang`, else the one saved by a
+language switch (`localStorage["evroute.lang"]`, shared with the results
+dashboard and the site), else -- with `lang_auto` -- the browser's, else the
+payload's `lang`.
 
 ## 4. Testing expectations
 

@@ -336,9 +336,11 @@ CRITERIA_SETS = (("time", "money", "wear"), ("time", "money"))
 #: Accepted values of the ``epsilon_scope`` option.
 EPSILON_SCOPES = ("front", "labels")
 #: Options understood by :class:`ParetoPlanner`.
-OPTIONS = ("criteria", "targets", "epsilon", "epsilon_scope", "max_labels", "goal_directed")
+OPTIONS = ("criteria", "targets", "epsilon", "epsilon_scope", "max_labels", "goal_directed", "time_limit_s")
 #: ``how`` code of the root label.
 _ROOT = -1
+#: Pops between two looks at the clock when the search has a deadline (option ``time_limit_s``).
+_DEADLINE_EVERY = 256
 
 __all__ = [
     "CRITERIA",
@@ -704,6 +706,7 @@ def _pareto_search(
     max_labels: int = 2_000_000,
     goal_directed: bool = True,
     trace: SearchTrace | None = None,
+    deadline: float | None = None,
 ) -> _ParetoSearch:
     """Run the multi-criteria label-setting search (see the module docs).
 
@@ -711,6 +714,8 @@ def _pareto_search(
     (``goal_directed``) or ``pot = 0`` (pure Martins order).  The relative
     tolerances ``eps_money`` / ``eps_wear`` always apply to the destination
     tests and, with ``eps_labels``, also to the dominance tests at the nodes.
+    ``deadline`` (a :func:`time.perf_counter` value; ``None``: none) stops the
+    search with status ``"time_limit"`` once it has passed.
     """
     net = P.net
     n = net.num_nodes
@@ -832,6 +837,8 @@ def _pareto_search(
 
     settled = generated = pruned = pruned_front = peak = replaced = 0
     status = "exhausted"
+    tick = _DEADLINE_EVERY if deadline is not None else -1
+    clock = time.perf_counter
 
     while heap:
         lq = len(heap)
@@ -840,6 +847,13 @@ def _pareto_search(
         if nl > max_labels:
             status = "limit"
             break
+        if tick > 0:  # the optional time limit (never without a deadline)
+            tick -= 1
+            if tick == 0:
+                if clock() > deadline:  # type: ignore[operator]
+                    status = "time_limit"
+                    break
+                tick = _DEADLINE_EVERY
         key, m, k, _, i = heappop(heap)
         t = TT[i]
         v = ND[i]
@@ -1189,6 +1203,11 @@ class ParetoPlanner(Planner):
         hundred bytes each).  When it is hit, the members found so far --
         the fastest part of the front -- are returned and
         ``stats.extra["complete"]`` is ``False``.
+    ``time_limit_s``
+        optional safeguard on the running time in seconds (default: none),
+        handled like ``max_labels`` with ``stats.extra["status"] ==
+        "time_limit"``.  The in-browser planner of the web site uses it; the
+        result then depends on the machine.
 
     The returned plan is the member with the smallest generalised cost
     (scenario objective ``"cost"``) or trip time (``"time"``);
@@ -1230,6 +1249,7 @@ class ParetoPlanner(Planner):
         tr = SearchTrace() if trace else None
 
         t0 = time.perf_counter()
+        deadline = self._deadline(t0)
         bounds = CompletionBounds(P)
         t1 = time.perf_counter()
         res = _pareto_search(
@@ -1243,6 +1263,7 @@ class ParetoPlanner(Planner):
             max_labels=max_labels,
             goal_directed=goal_directed,
             trace=tr,
+            deadline=deadline,
         )
         t2 = time.perf_counter()
         TT, MM, WW, EN = res.time, res.money, res.wear, res.energy
@@ -1272,7 +1293,9 @@ class ParetoPlanner(Planner):
             },
         )
         if not res.front:
-            return infeasible_plan(P, self.name, _infeasibility_reason(P, res, bounds, max_labels), stats, tr)
+            return infeasible_plan(
+                P, self.name, _infeasibility_reason(P, res, bounds, max_labels, opts.get("time_limit_s")), stats, tr
+            )
 
         time_obj = P.objective == "time"
         vot, wm, wd = P.vot_per_s, P.w_money, P.w_deg
@@ -1316,9 +1339,20 @@ def pareto_front(prepared: PreparedScenario | Scenario, **options: Any) -> list[
 # diagnostics
 # ======================================================================
 def _infeasibility_reason(
-    P: PreparedScenario, res: _ParetoSearch, bounds: CompletionBounds, max_labels: int
+    P: PreparedScenario,
+    res: _ParetoSearch,
+    bounds: CompletionBounds,
+    max_labels: int,
+    time_limit_s: float | None = None,
 ) -> str:
     o, d = P.origin, P.destination
+    if res.status == "time_limit":
+        return (
+            f"time limit reached (time_limit_s={time_limit_s:g}, {len(res.node):,} labels created) "
+            "before the first Pareto-optimal route was found; use epsilon > 0 with "
+            "epsilon_scope='labels', criteria=('time', 'money'), a coarser charge_step_soc or "
+            "targets='grid'"
+        )
     if res.status == "limit":
         return (
             f"label limit reached (max_labels={max_labels:,}, {len(res.node):,} labels created) "

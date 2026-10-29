@@ -528,9 +528,13 @@ def api_call_json(service: PlanningService, endpoint: str, request_json: str | N
     try:
         request = json.loads(request_json or "{}")
     except (json.JSONDecodeError, RecursionError) as exc:  # RecursionError: deep nesting
-        return HTTPStatus.BAD_REQUEST, _dumps({"error": f"invalid JSON: {exc}"})
+        return int(HTTPStatus.BAD_REQUEST), _dumps({"error": f"invalid JSON: {exc}"})
     status, obj = api_call(service, endpoint, request)
-    return int(status), _dumps(obj)
+    try:
+        return int(status), _dumps(obj)
+    except (TypeError, ValueError):  # e.g. NaN in an answer: what the server answers then (500)
+        log.exception("api %s: the answer is not valid JSON", endpoint)
+        return int(HTTPStatus.INTERNAL_SERVER_ERROR), _dumps({"error": "internal error"})
 
 
 def _dumps(obj: Any) -> str:

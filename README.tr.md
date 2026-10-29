@@ -379,8 +379,8 @@ Her planlayıcının her planı **bağımsız bir değerlendiricide** yeniden si
 edilir; sabit tohumlu bir **çapraz doğrulama paketi** on bir değişmezi kaba
 kuvvete, analitik referans çözümlere, metamorfik bağıntılara ve yerel aramaya
 karşı, rastgele şarj tarifeleri altında da sınar
-([`tests/fuzz_report.md`](tests/fuzz_report.md)). Toplam 726 test vardır;
-bunların 623'ü hızlı katmandadır ve CI'da Python 3.10-3.13 üzerinde
+([`tests/fuzz_report.md`](tests/fuzz_report.md)). Toplam 740 test vardır;
+bunların 636'sı hızlı katmandadır ve CI'da Python 3.10-3.13 üzerinde
 çalıştırılır ([ayrıntılar](docs/algorithms.md#8-how-correctness-is-verified)):
 
 ```bash

@@ -101,6 +101,7 @@ button { cursor: pointer; }
 .btn-primary:hover { background: var(--accent-hover); }
 .btn-primary kbd { background: rgba(255, 255, 255, .18); border-color: rgba(255, 255, 255, .3); color: inherit; }
 .btn-block { width: 100%; }
+a.btn { color: var(--text); text-decoration: none; }
 .btn[disabled] { opacity: .65; cursor: progress; }
 
 .btn-icon {
@@ -317,6 +318,7 @@ input[type="range"]:focus-visible::-webkit-slider-thumb { box-shadow: var(--focu
 }
 .form-note p { margin: 0 0 6px; }
 .form-note b { color: var(--warn); }
+/* one command per line, never broken inside an option: long lines scroll */
 .form-note .cmd {
   margin: 0; padding: 7px 9px;
   border-radius: 7px;
@@ -324,9 +326,20 @@ input[type="range"]:focus-visible::-webkit-slider-thumb { box-shadow: var(--focu
   border: 1px solid var(--border);
   font: 11px/1.45 var(--mono);
   color: var(--text);
-  white-space: pre-wrap; overflow-wrap: anywhere;
-  user-select: all;
+  white-space: pre; overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: thin;
 }
+.form-note .cmd-actions { display: flex; justify-content: flex-end; margin-top: 6px; }
+.form-note .btn-copy {
+  height: 24px; padding: 0 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text-2);
+  font-size: 11px; font-weight: 650;
+}
+.form-note .btn-copy:hover { color: var(--text); background: var(--surface-3); }
 .badge-live { background: var(--ok-soft); color: var(--ok); }
 .live-card .toggles { margin: 2px 0 4px; }
 
@@ -609,7 +622,17 @@ input[type="range"]:focus-visible::-webkit-slider-thumb { box-shadow: var(--focu
   background: color-mix(in srgb, var(--bg) 45%, transparent);
   -webkit-backdrop-filter: blur(2px); backdrop-filter: blur(2px);
   font-weight: 650;
+  text-align: center; padding: 16px;
 }
+.map-busy .btn-sm { height: 32px; padding: 0 14px; font-size: 13px; }
+
+/* web site pages: the logo leads home, a GitHub link in the top bar */
+a.brand-home { color: #fff; }
+a.brand-home:hover { filter: brightness(1.08); }
+a.brand-home:focus-visible, a.site-repo:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+a.site-repo { color: var(--text-2); }
+/* live mode on a phone: a shortcut from the map to the form (shown below 760 px only) */
+.plan-own:not([hidden]) { display: none; }
 
 /* first-visit loading screen of the in-browser planner (web site only) */
 .boot {
@@ -825,6 +848,8 @@ table.cmp { width: 100%; border-collapse: separate; border-spacing: 0; font-size
 
 /* ------------------------------------------------------------- phones */
 @media (max-width: 760px) {
+  .plan-own:not([hidden]) { display: inline-flex; gap: 8px; }
+  #live-card { scroll-margin-top: 10px; }
   .card-head { flex-wrap: wrap; row-gap: 6px; }
   .card-head h2 { flex: 1 0 auto; max-width: 100%; }
   .card-head .hint, .chart-legend { flex: 0 1 auto; margin-left: auto; white-space: normal; text-align: right; }
@@ -857,6 +882,7 @@ table.cmp { width: 100%; border-collapse: separate; border-spacing: 0; font-size
   .stop-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 @media (max-width: 420px) {
+  a.site-repo { display: none; }   /* the logo leads to the web site, which links the repository */
   .hud { width: 184px; }
   .battery { display: none; }
   .hud-grid { grid-template-columns: 1fr 1fr; }

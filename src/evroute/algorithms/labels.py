@@ -197,7 +197,8 @@ same path and counts unavoidable stops; ``potential="basic"`` reproduces
 the Pareto sets grow quickly (every edge trades time for energy), and with
 the cost objective eco-driving is nearly cost-neutral, so many labels have
 almost equal keys; the search stays exact but needs more labels
-(``max_labels`` is the safeguard).
+(``max_labels`` is the safeguard; ``time_limit_s`` bounds the running time
+as well, since labels that are generated and then dominated are not counted).
 
 The resource-constrained label-setting view follows Irnich & Desaulniers
 (2005).  For electric vehicles the battery-expanded label-setting approach
@@ -881,6 +882,8 @@ class _LabelSearch:
 #: float rounding of one charged label is below ``4e-16`` times the magnitudes
 #: involved, so ``1e-12`` is a safe margin that never matters in practice.
 _PARENT_RTOL = 1e-12
+#: Pops between two looks at the clock when a search has a deadline (option ``time_limit_s``).
+_DEADLINE_EVERY = 256
 
 
 def _label_search(
@@ -901,6 +904,7 @@ def _label_search(
     fastest_level_only: bool = False,
     upper_bound: float = INF,
     edge_options: Sequence[Sequence[tuple[int, float, float, float]]] | None = None,
+    deadline: float | None = None,
 ) -> _LabelSearch:
     """Run the battery-constrained label-setting search (see module docs).
 
@@ -912,6 +916,9 @@ def _label_search(
     from a run restricted to one speed level): labels whose key exceeds it
     are never pushed.  ``edge_options`` replaces ``P.edge_options`` (one
     tuple of ``(level, time, energy, drive_cost)`` options per edge).
+    ``deadline`` (a :func:`time.perf_counter` value; ``None``: none) stops the
+    search with status ``"time_limit"`` once it has passed (checked every
+    :data:`_DEADLINE_EVERY` pops).
 
     With the cost objective and time-dependent waits or a time-dependent
     tariff the 3-D sets compare ``(m, t, e)`` with ``m = g - vot * t`` (money
@@ -1098,6 +1105,8 @@ def _label_search(
     final = -1
     final_key = INF
     status = "exhausted"
+    tick = _DEADLINE_EVERY if deadline is not None else -1
+    clock = time.perf_counter
 
     while heap:
         lq = len(heap)
@@ -1106,6 +1115,13 @@ def _label_search(
         if nl > max_labels:
             status = "limit"
             break
+        if tick > 0:  # the optional time limit (never without a deadline)
+            tick -= 1
+            if tick == 0:
+                if clock() > deadline:  # type: ignore[operator]
+                    status = "time_limit"
+                    break
+                tick = _DEADLINE_EVERY
         key, nx, _, p, q, v, par, code = heappop(heap)
         if key > max_key:
             status = "max_key"
@@ -1589,7 +1605,7 @@ def single_level_options(P: PreparedScenario, rate: float = 0.0) -> list[tuple[t
 
 
 def _single_level_bound(
-    P: PreparedScenario, pot: AStarPotential, *, targets: str, max_labels: int
+    P: PreparedScenario, pot: AStarPotential, *, targets: str, max_labels: int, deadline: float | None = None
 ) -> tuple[float, int]:
     """Upper bound on the optimum from a search restricted to one speed level per edge.
 
@@ -1620,6 +1636,7 @@ def _single_level_bound(
         targets=targets,
         max_labels=max(1, max_labels // 4),
         edge_options=single_level_options(P, pot.rate),
+        deadline=deadline,
     )
     bound = res.upper
     if res.final >= 0:
@@ -1641,6 +1658,11 @@ class LabelSettingPlanner(Planner):
     ``max_labels``
         safeguard on the number of created labels (default 5 000 000); when
         it is hit an infeasible plan explaining that is returned.
+    ``time_limit_s``
+        optional safeguard on the running time in seconds (default: none);
+        when it is hit the plan is infeasible as with ``max_labels``, with
+        ``stats.extra["status"] == "time_limit"``.  The in-browser planner of
+        the web site uses it; the result then depends on the machine.
 
     Guarantee: optimal for the scenario objective among all routes whose
     charging targets lie in the target set (``exact = "grid"``); see the
@@ -1649,7 +1671,7 @@ class LabelSettingPlanner(Planner):
     """
 
     name = "bls"
-    OPTIONS = ("max_labels", "targets")
+    OPTIONS = ("max_labels", "targets", "time_limit_s")
     title = "BLS (label setting)"
     exact = "grid"
     objectives = ("time", "cost")
@@ -1676,9 +1698,10 @@ class LabelSettingPlanner(Planner):
         tr = SearchTrace() if trace else None
 
         t0 = time.perf_counter()
+        deadline = self._deadline(t0)
         pot = self._potential(P)
         t1 = time.perf_counter()
-        ub, ub_settled = _single_level_bound(P, pot, targets=targets, max_labels=max_labels)
+        ub, ub_settled = _single_level_bound(P, pot, targets=targets, max_labels=max_labels, deadline=deadline)
         t_ub = time.perf_counter()
         res = _label_search(
             P,
@@ -1693,6 +1716,7 @@ class LabelSettingPlanner(Planner):
             max_labels=max_labels,
             trace=tr,
             upper_bound=ub,
+            deadline=deadline,
         )
         t2 = time.perf_counter()
         h0 = pot(P.origin, P.e_init)
@@ -1724,7 +1748,7 @@ class LabelSettingPlanner(Planner):
             },
         )
         if res.final < 0:
-            reason = _infeasibility_reason(P, res, pot, max_labels)
+            reason = _infeasibility_reason(P, res, pot, max_labels, self.options.get("time_limit_s"))
             return infeasible_plan(P, self.name, reason, stats, tr)
         edges, levels, charges = res.reconstruct(res.final)
         decision = PlanDecision(edges, levels, charges)
@@ -1753,11 +1777,11 @@ class LabelAStarPlanner(LabelSettingPlanner):
 
     Both are consistent and non-increasing in the energy, so the result is
     identical to :class:`LabelSettingPlanner` while far fewer labels are
-    settled.  ``targets`` and ``max_labels`` as for BLS.
+    settled.  ``targets``, ``max_labels`` and ``time_limit_s`` as for BLS.
     """
 
     name = "bls-astar"
-    OPTIONS = ("max_labels", "targets", "potential")
+    OPTIONS = ("max_labels", "targets", "potential", "time_limit_s")
     title = "BLS-A*"
     exact = "grid"
     objectives = ("time", "cost")
@@ -1779,9 +1803,16 @@ class LabelAStarPlanner(LabelSettingPlanner):
 # ======================================================================
 # diagnostics
 # ======================================================================
-def _infeasibility_reason(P: PreparedScenario, res: _LabelSearch, pot: AStarPotential, max_labels: int) -> str:
+def _infeasibility_reason(
+    P: PreparedScenario, res: _LabelSearch, pot: AStarPotential, max_labels: int, time_limit_s: float | None = None
+) -> str:
     """Human-readable explanation of why no route was found."""
     o, d = P.origin, P.destination
+    if res.status == "time_limit":
+        return (
+            f"time limit reached (time_limit_s={time_limit_s:g}, {res.created:,} labels created) "
+            "before the destination was settled; this does not mean that no route exists"
+        )
     if res.status == "limit":
         return (
             f"label limit reached (max_labels={max_labels:,}, {res.created:,} labels created) "

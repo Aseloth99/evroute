@@ -26,7 +26,7 @@
       </div>
       <figure class="demo">
         <img src="assets/demo.gif" width="960" height="600" alt="The EVRoute viewer: the optimal plan drives Karaman → İstanbul with two charging stops, then every algorithm races on the same clock">
-        <figcaption><span lang="tr">En iyi plan Karaman → İstanbul yolunu iki şarj duraklamasıyla sürer; ardından bütün algoritmalar aynı saatle yarışır.</span><span lang="en">The optimal plan drives Karaman → İstanbul with two charging stops; then every algorithm races on the same clock.</span></figcaption>
+        <figcaption><span lang="tr">En iyi plan Karaman'dan İstanbul'a iki şarj molasıyla gider; ardından bütün algoritmalar aynı saatle yarışır.</span><span lang="en">The optimal plan drives Karaman → İstanbul with two charging stops; then every algorithm races on the same clock.</span></figcaption>
       </figure>
     </section>
 
@@ -37,7 +37,7 @@
         <div class="card"><h3><span lang="tr">9 planlayıcı, tek arayüz</span><span lang="en">9 planners, one API</span></h3>
           <p><span lang="tr">Bataryayı görmeyen en hızlı yoldan araç içi navigasyon sezgiseline; kesin etiket belirleme (BLS, BLS-A*), sürekli şarjla kesin CFP ve CFP-A*, süre, ücret ve yıpranma üzerinde Pareto araması.</span><span lang="en">From a battery-blind fastest path and an in-car navigator heuristic to exact label setting (BLS, BLS-A*), exact continuous charging (CFP, CFP-A*) and a Pareto search over time, money and wear.</span></p></div>
         <div class="card"><h3><span lang="tr">Kesin ve doğrulanmış</span><span lang="en">Exact and verified</span></h3>
-          <p><span lang="tr">Optimallik kanıtları; her plan bağımsız bir değerlendiriciyle yeniden oynatılır, kaba kuvvet ve analitik kâhinlerle çapraz denetlenir.</span><span lang="en">Optimality proofs; every plan is replayed by an independent evaluator and cross-checked against brute force and analytic oracles.</span></p></div>
+          <p><span lang="tr">Optimallik kanıtları; her plan bağımsız bir değerlendiriciyle yeniden oynatılır, kaba kuvvet ve analitik referans çözümlerle çapraz denetlenir.</span><span lang="en">Optimality proofs; every plan is replayed by an independent evaluator and cross-checked against brute force and analytic oracles.</span></p></div>
         <div class="card"><h3><span lang="tr">Tek bir en iyi rota yok</span><span lang="en">No single best route</span></h3>
           <p><span lang="tr">%80 kuralı ve puant saatleriyle şarj tarifeleri; daha ucuz fiyatı beklemenin ne zaman kazandırdığını kesin olarak planlar.</span><span lang="en">Charging tariffs with the 80 % rule and peak hours; it plans exactly when waiting for a cheaper price pays.</span></p></div>
         <div class="card"><h3><span lang="tr">Türkiye vaka çalışmaları</span><span lang="en">Turkey case studies</span></h3>
@@ -50,10 +50,10 @@
         <div>
           <span class="tag tag-ok"><span lang="tr">canlı</span><span lang="en">live</span></span>
           <h2 id="h-live"><span lang="tr">Tarayıcınızda planlayın</span><span lang="en">Plan in your browser</span></h2>
-          <p class="sub" style="margin-bottom:0"><span lang="tr">Görüntüleyicinin canlı kipi tamamen tarayıcınızda çalışır: bir Web Worker içinde Pyodide ile Python, <code>evroute serve</code> ile aynı kod ve komut satırıyla aynı sonuçlar.</span><span lang="en">The viewer's live mode runs entirely in your browser: Python via Pyodide in a Web Worker, the same code as <code>evroute serve</code> and the same results as the command line.</span></p>
+          <p class="sub" style="margin-bottom:0"><span lang="tr">Görüntüleyicinin canlı kipi tamamen tarayıcınızda çalışır: bir Web Worker içinde Pyodide ile Python, <code>evroute serve</code> ile aynı kod ve komut satırıyla aynı rotalar.</span><span lang="en">The viewer's live mode runs entirely in your browser: Python via Pyodide in a Web Worker, the same code as <code>evroute serve</code> and the same routes as the command line.</span></p>
           <ul>
             <li><span lang="tr">Sentetik ağlar: yaklaşık Türkiye ağı (8 yolculuk), koridor, sentetik ülkeler, rastgele geometrik ağ, ızgara</span><span lang="en">Synthetic networks: the approximate Turkey network (8 trips), corridor, synthetic countries, random geometric network, grid</span></li>
-            <li><span lang="tr">Dokuz planlayıcının hepsi, tarayıcı için etiket ve zaman bütçeleriyle</span><span lang="en">All nine planners, with label and time budgets for the browser</span></li>
+            <li><span lang="tr">Dokuz planlayıcının hepsi, tarayıcı için etiket ve zaman sınırlarıyla</span><span lang="en">All nine planners, with label and time limits for the browser</span></li>
             <li><span lang="tr">İlk ziyarette bir kez yaklaşık {{download_mb_tr}} indirilir, sonra önbellekten gelir</span><span lang="en">The first visit downloads about {{download_mb_en}} once, later visits use the cache</span></li>
           </ul>
           <p class="note"><span lang="tr">Gerçek veri (OpenStreetMap) ağı canlı planlanmaz: onun için paketi kurun.</span><span lang="en">The real-data (OpenStreetMap) network is not planned live: install the package for it.</span></p>
@@ -84,9 +84,9 @@
           <h3><span lang="tr">OpenStreetMap ağında</span><span lang="en">On OpenStreetMap</span></h3>
           <p><span lang="tr">Karaman → İstanbul, OSM yolları ve OSM şarj istasyonlarıyla. © OpenStreetMap katkıcıları, ODbL 1.0.</span><span lang="en">Karaman → İstanbul on OSM roads with the OSM charging stations. © OpenStreetMap contributors, ODbL 1.0.</span></p>
           <span class="go"><span lang="tr">Aç →</span><span lang="en">Open →</span></span></a>
-        <a class="card" href="examples/results.html">
+        <a class="card" href="examples/results.html" data-keep-lang>
           <span class="tag"><span lang="tr">deneyler</span><span lang="en">experiments</span></span>
-          <h3><span lang="tr">Sonuç panosu</span><span lang="en">Results dashboard</span></h3>
+          <h3><span lang="tr">Sonuç paneli</span><span lang="en">Results dashboard</span></h3>
           <p><span lang="tr">Makalenin bütün deneyleri tek sayfada: bulgular, kesinlik denetimleri, grafikler, CSV indirmeleri.</span><span lang="en">Every experiment of the paper on one page: findings, exactness checks, charts, CSV downloads.</span></p>
           <span class="go"><span lang="tr">Aç →</span><span lang="en">Open →</span></span></a>
       </div>
@@ -97,7 +97,7 @@
       <p class="sub"><span lang="tr">GitHub'daki belgeler.</span><span lang="en">The documentation on GitHub.</span></p>
       <div class="docs">
         <a lang="en" href="{{repo}}#readme">README</a>
-        <a lang="tr" href="{{repo}}/blob/main/README.tr.md">BENİOKU</a>
+        <a lang="tr" href="{{repo}}/blob/main/README.tr.md">README (Türkçe)</a>
         <a lang="en" href="{{repo}}/blob/main/docs/guide.md">Guide <small>for newcomers</small></a>
         <a lang="tr" href="{{repo}}/blob/main/docs/guide.tr.md">Rehber <small>yeni başlayanlar için</small></a>
         <a lang="en" href="{{repo}}/blob/main/docs/real-data.md">Real-data case study</a>
@@ -116,7 +116,7 @@
 <pre class="code">pip install git+{{repo}}
 evroute plan turkey-karaman-istanbul
 evroute serve --open</pre>
-          <p class="note"><a href="{{repo}}"><span lang="tr">Depo</span><span lang="en">Repository</span></a> · <a href="{{repo}}/releases"><span lang="tr">Sürümler</span><span lang="en">Releases</span></a></p>
+          <p class="note"><a href="{{repo}}"><span lang="tr">Depo</span><span lang="en">Repository</span></a> · <a href="{{releases}}"><span lang="tr">Sürüm notları</span><span lang="en">Release notes</span></a></p>
         </div>
         <div class="card">
           <h3 id="h-cite"><span lang="tr">Atıf</span><span lang="en">How to cite</span></h3>

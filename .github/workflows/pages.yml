@@ -1,8 +1,8 @@
 # The project web site, https://aseloth99.github.io/evroute/ : the landing page,
 # the live planner (EVRoute in the browser under Pyodide) and the prebuilt
 # examples, built by tools/build_site.py on every push to main and deployed
-# to GitHub Pages.  One-time set-up in the repository: Settings -> Pages ->
-# Build and deployment -> Source: "GitHub Actions".
+# to GitHub Pages.  One-time set-up in the repository, before the first run:
+# Settings -> Pages -> Build and deployment -> Source: "GitHub Actions".
 name: Pages
 
 on:
@@ -12,8 +12,6 @@ on:
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
 # one deployment at a time; a newer push waits instead of cancelling a running deployment
 concurrency:
@@ -23,16 +21,23 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      pages: read      # configure-pages reads the Pages settings; writing is the deploy job's
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
         with:
           # the Python of the pinned Pyodide (0.29.5: Python 3.13)
           python-version: "3.13"
-      - name: Install the wheel builder
-        run: pip install build
+      - name: Install
+        run: pip install -e . pytest build
+      - name: Test the site generator, the live planner's API and the viewer
+        # nothing is deployed unless these pass (the full suite runs in ci.yml)
+        run: pytest -m "not slow" tests/test_site.py tests/test_viewer.py
       - name: Build the site
-        # wheel, live planner, examples (the real-data example plans for about two minutes)
+        # wheel, live planner, examples (the real-data example plans for about three minutes)
         run: python tools/build_site.py -o _site
       - uses: actions/configure-pages@v6
       - uses: actions/upload-pages-artifact@v5
@@ -41,7 +46,13 @@ jobs:
 
   deploy:
     needs: build
+    # a manual run from another branch builds (and tests) the site but does not deploy it
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      pages: write
+      id-token: write
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}

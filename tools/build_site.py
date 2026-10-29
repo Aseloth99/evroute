@@ -24,11 +24,14 @@ to ``main``):
     :func:`evroute.server.api_call_json`, the functions behind ``evroute
     serve``, so a plan is the one the command line computes.  Only the
     synthetic presets are offered (not ``turkey-osm-*``: the real-data network
-    is not planned live), with the label budgets :data:`WEB_OPTIONS` and the
-    time budget :data:`TIME_BUDGET_S` per planner.  The wheel is the package
-    without the tables of the real-data network (:data:`WEB_WHEEL_EXCLUDE`,
-    1.5 MB the live page never uses); its folder name is a content hash, so
-    browsers never keep a stale copy.
+    is not planned live), with the label and time limits :data:`WEB_OPTIONS`
+    and the time budget :data:`TIME_BUDGET_S` per planner.  The worker checks
+    every CDN file against its SHA-256 digest (:data:`PYODIDE_FILES`).  The
+    wheel is the package without the tables of the real-data network
+    (:data:`WEB_WHEEL_EXCLUDE`, 1.5 MB the live page never uses), written
+    reproducibly (the same sources give the same bytes); its folder name is a
+    content hash, so browsers never keep a stale copy, and a page cached from
+    before a deploy that changed it asks the visitor to reload.
 ``examples/``
     Prebuilt viewer pages (nothing is computed when they open): Karaman →
     İstanbul on the approximate network, the same trip under the
@@ -74,44 +77,58 @@ SITE_URL = "https://aseloth99.github.io/evroute/"
 
 #: Pyodide release of the live planner: 0.29.5 (2026-09-16), the maintenance
 #: release of the stable 0.29 line, with Python 3.13.2 -- a Python version
-#: the test suite covers (3.10-3.13), so plans match those of CPython 3.13
-#: digit for digit.  (The 314.x line runs Python 3.14.)
+#: the test suite covers (3.10-3.13).  Routes, stops and every displayed
+#: value match CPython; a float may differ in its last digit, since the
+#: browser's maths library (sin, atan2, log10, ...) rounds differently from
+#: glibc.  (The 314.x line runs Python 3.14.)
 PYODIDE_VERSION = "0.29.5"
 PYODIDE_URL = f"https://cdn.jsdelivr.net/pyodide/v{PYODIDE_VERSION}/full/"
-#: Files of a first visit from jsDelivr: (bytes transferred with brotli, bytes decoded),
-#: measured on 2026-10-29.  pyodide.js and pyodide.asm.js come with importScripts, the
-#: others with fetch (the worker counts their decoded bytes for the progress bars).
-PYODIDE_FILES: dict[str, tuple[int, int]] = {
-    "pyodide.js": (7_491, 18_597),
-    "pyodide.asm.js": (226_427, 1_074_322),
-    "pyodide.asm.wasm": (2_672_398, 8_647_684),
-    "python_stdlib.zip": (2_386_522, 2_424_003),
-    "pyodide-lock.json": (26_288, 122_027),
-    "micropip-0.11.1-py3-none-any.whl": (111_109, 115_486),   # (it brings its own copy of packaging)
+#: Every file the live page takes from jsDelivr: (bytes transferred with brotli, bytes
+#: decoded, SHA-256 of the decoded file), measured on 2026-10-29.  The worker refuses any
+#: other file from the CDN and any file whose digest differs.
+PYODIDE_FILES: dict[str, tuple[int, int, str]] = {
+    "pyodide.js": (7_491, 18_597, "7f832a350240263d9946a9c3c877f7bcdab6c37d6dc65f72cd3be5905dca62dd"),
+    "pyodide.asm.js": (226_427, 1_074_322, "356c42f69e1695397e9d8670bd3c2e678248cde76e18bdae1731e848537b47d7"),
+    "pyodide.asm.wasm": (2_672_398, 8_647_684, "54309a5a2cfd757b1f0fdbc9093c92503f7b341500110329d932487183912718"),
+    "python_stdlib.zip": (2_386_522, 2_424_003, "831fd1e535084b972f87c6a35275de3d236efd5166f5e77ce89497710635e73c"),
+    "pyodide-lock.json": (26_288, 122_027, "14d2c2dba101277999e17135e653d8f15389ad1437f53eae213bf0c3cdff723d"),
+    # micropip (it brings its own copy of packaging)
+    "micropip-0.11.1-py3-none-any.whl": (111_109, 115_486,
+                                         "a5569ea4002b9cdd6cf50eda0c14fb3fcb0da9d8c702feadcfd04459b4c3040a"),
 }
-_DOWNLOAD_PHASE = ("pyodide.asm.wasm", "python_stdlib.zip", "pyodide-lock.json")
+#: The files of the loading screen's two download steps (the wheel joins the second).
+_DOWNLOAD_PHASE = ("pyodide.js", "pyodide.asm.js", "pyodide.asm.wasm", "python_stdlib.zip", "pyodide-lock.json")
 _INSTALL_PHASE = ("micropip-0.11.1-py3-none-any.whl",)
 
 #: The live page's planner (evroute.server.PlanningService options).
 DEFAULT_SCENARIO = "turkey-karaman-istanbul"
-#: Label budgets of the in-browser planner: they bound its memory (a label is a
-#: few hundred bytes) and time.  BLS and BLS-A* count created labels (library
-#: default 5 million), CFP and CFP-A* pushed labels (default 3 million); every
-#: synthetic preset's own trip stays within them (the largest, country-medium,
-#: needs 1.4 million BLS labels and 0.8 million CFP pushes).  The Pareto search
-#: keeps the viewer's (time, money) front and its budget of 1 million labels
-#: (evroute.viz.export.VIEWER_OPTIONS).  A planner that hits its budget says so
-#: (status "limit", or an incomplete front), and the page marks the run as
-#: possibly incomplete, with the command that repeats it locally.
+#: Time limit of the label-setting planners in the browser [s] (their option
+#: ``time_limit_s``): a search still running then stops by itself and is
+#: reported like a label limit, well before :data:`TIME_BUDGET_S`.
+WEB_TIME_LIMIT_S = 45
+#: Limits of the in-browser planner.  The label budgets bound its memory (a label
+#: is a few hundred bytes): BLS and BLS-A* count created labels (library default
+#: 5 million), CFP and CFP-A* pushed labels (default 3 million); every synthetic
+#: preset's own trip stays within them (the largest, country-medium, needs 1.4
+#: million BLS labels and 0.8 million CFP pushes).  They do not bound the time:
+#: labels that are generated and then dominated are not counted (with the cost
+#: objective and eco speeds BLS-A* generates tens of millions of them on
+#: Karaman -> Istanbul), so the label-setting planners also get
+#: :data:`WEB_TIME_LIMIT_S`.  The Pareto search keeps the viewer's (time, money)
+#: front and its budget of 1 million labels (evroute.viz.export.VIEWER_OPTIONS).
+#: A planner that hits a limit says so (status "limit" or "time_limit", or an
+#: incomplete front), and the page marks the run as possibly incomplete, with the
+#: command that repeats it locally.
 WEB_OPTIONS: dict[str, dict[str, Any]] = {
-    "bls": {"max_labels": 1_500_000},
-    "bls-astar": {"max_labels": 1_500_000},
-    "cfp": {"max_labels": 1_000_000},
-    "cfp-astar": {"max_labels": 1_000_000},
-    "pareto": {"criteria": ["time", "money"], "max_labels": 1_000_000},
+    "bls": {"max_labels": 1_500_000, "time_limit_s": WEB_TIME_LIMIT_S},
+    "bls-astar": {"max_labels": 1_500_000, "time_limit_s": WEB_TIME_LIMIT_S},
+    "cfp": {"max_labels": 1_000_000, "time_limit_s": WEB_TIME_LIMIT_S},
+    "cfp-astar": {"max_labels": 1_000_000, "time_limit_s": WEB_TIME_LIMIT_S},
+    "pareto": {"criteria": ["time", "money"], "max_labels": 1_000_000, "time_limit_s": WEB_TIME_LIMIT_S},
 }
 #: Wall-clock budget of one planner in the browser [s]: a planner still running
-#: then is stopped (the page restarts the worker) and reported as such.
+#: then (one without a time limit of its own: greedy, the station graph, the
+#: genetic algorithm) is stopped -- the page restarts the worker -- and reported.
 TIME_BUDGET_S = 60
 #: Presets with more nodes than this are not offered (as `evroute serve`).
 MAX_NODES = 15_000
@@ -128,8 +145,12 @@ EXAMPLES: tuple[tuple[str, str, dict[str, Any]], ...] = (
     ("tariff.html", "turkey-karaman-istanbul-tariff", {"objective": "cost", "charge_step_soc": 0.05}),
     ("osm-karaman-istanbul.html", "turkey-osm-karaman-istanbul", {}),
 )
-#: Language of the viewer pages when a link does not choose one (?lang=tr|en).
+#: Language of the viewer pages when neither a link (?lang=tr|en), a saved choice nor
+#: the browser's language chooses one.
 PAGE_LANG = "en"
+#: What the site's viewer pages (live planner, examples) add to their payload: the way
+#: back to the site and the repository, and the browser's language as a default.
+SITE_LINKS: dict[str, Any] = {"site": {"home": "../", "repo": REPO}, "lang_auto": True}
 
 
 # ====================================================================== helpers
@@ -193,25 +214,51 @@ def build_wheel(work: Path) -> Path:
 WEB_WHEEL_EXCLUDE = tuple(f"evroute/data/osm_turkey/{t}.csv.gz" for t in ("nodes", "edges", "places", "stations"))
 
 
+#: Time stamp of every member of the web wheel (the zip format's earliest date): the
+#: wheel's bytes depend on its content only, not on when or where it was built, so a
+#: deploy that does not change the package keeps the wheel's URL (browsers keep their copy).
+_ZIP_EPOCH = (1980, 1, 1, 0, 0, 0)
+
+
+def _zip_member(name: str, mode: int) -> zipfile.ZipInfo:
+    info = zipfile.ZipInfo(name, date_time=_ZIP_EPOCH)
+    info.compress_type = zipfile.ZIP_DEFLATED
+    info.create_system = 3  # Unix, so that the mode below means what it says
+    info.external_attr = ((mode & 0o777) | 0o100000) << 16  # a regular file
+    return info
+
+
 def web_wheel(wheel: Path) -> bytes:
-    """The wheel without :data:`WEB_WHEEL_EXCLUDE`, its RECORD rewritten to match."""
+    """The wheel without :data:`WEB_WHEEL_EXCLUDE`, its RECORD rewritten to match.
+
+    Reproducible: the members are written in name order (the ``.dist-info``
+    folder last, its RECORD at the very end), with the time stamp
+    :data:`_ZIP_EPOCH`, mode 644 and deflate level 9.
+    """
     buf = io.BytesIO()
     with zipfile.ZipFile(wheel) as zin, zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zout:
         record_name = next(n for n in zin.namelist() if n.endswith(".dist-info/RECORD"))
+        dist_info = record_name.rsplit("/", 1)[0] + "/"
         dropped = set()
+        names = []
         for info in zin.infolist():
+            if info.is_dir():
+                continue
             if info.filename in WEB_WHEEL_EXCLUDE:
                 dropped.add(info.filename)
                 continue
-            if info.filename == record_name:
-                continue
-            zout.writestr(info, zin.read(info.filename))
+            if info.filename != record_name:
+                names.append(info.filename)
+        names.sort(key=lambda n: (n.startswith(dist_info), n))
+        for name in names:
+            zout.writestr(_zip_member(name, 0o644), zin.read(name), compresslevel=9)
         rows = list(csv.reader(io.StringIO(zin.read(record_name).decode("utf-8"))))
-        kept = [r for r in rows if r and r[0] not in dropped]
+        kept = sorted((r for r in rows if r and r[0] not in dropped and r[0] != record_name),
+                      key=lambda r: (r[0].startswith(dist_info), r[0]))
+        kept.append([record_name, "", ""])
         text = io.StringIO()
         csv.writer(text, lineterminator="\n").writerows(kept)
-        info = zin.getinfo(record_name)
-        zout.writestr(info, text.getvalue().encode("utf-8"))
+        zout.writestr(_zip_member(record_name, 0o644), text.getvalue().encode("utf-8"), compresslevel=9)
     if dropped != set(WEB_WHEEL_EXCLUDE):
         raise RuntimeError(f"{wheel.name} lacks {sorted(set(WEB_WHEEL_EXCLUDE) - dropped)}: is it an evroute wheel?")
     return buf.getvalue()
@@ -288,13 +335,13 @@ def viewer_page(preset: str, prefs: dict[str, Any], quick: bool) -> tuple[str, l
     else:  # what `evroute viz` runs by default ("all"; on a large network without the slow ones)
         algos = [a for a in available() if not (large and a in SLOW_ON_LARGE)]
     plans = run_all(sc, algos, trace=True)
-    payload = viewer_payload(sc, plans, lang=PAGE_LANG, robustness_runs=0 if quick else 200)
+    payload = viewer_payload(sc, plans, lang=PAGE_LANG, robustness_runs=0 if quick else 200, extra=SITE_LINKS)
     return render_viewer_html(payload), [p.algorithm for p in plans]
 
 
 def worker_config(wheel_path: str, wheel_size: int, worker_hash: str) -> dict[str, Any]:
     """The ``worker`` block of the live page's payload (read by live.js and site/worker.js)."""
-    transferred = sum(t for t, _ in PYODIDE_FILES.values())
+    transferred = sum(f[0] for f in PYODIDE_FILES.values())
     return {
         "script": f"worker.js?v={worker_hash}",
         "pyodide": PYODIDE_URL,
@@ -311,12 +358,19 @@ def worker_config(wheel_path: str, wheel_size: int, worker_hash: str) -> dict[st
             "large_network_nodes": LARGE_NETWORK_NODES,
         },
         "time_budget_s": TIME_BUDGET_S,
-        # what a first visit downloads once, and the decoded bytes the worker counts per phase
+        "time_limit_s": WEB_TIME_LIMIT_S,
+        # what a first visit downloads once (bytes transferred) and, per step of the loading
+        # screen, the decoded bytes the worker counts (sizes) and the bytes transferred for them
         "download_bytes": transferred + wheel_size,
         "sizes": {
             "download": sum(PYODIDE_FILES[f][1] for f in _DOWNLOAD_PHASE),
             "install": sum(PYODIDE_FILES[f][1] for f in _INSTALL_PHASE) + wheel_size,
         },
+        "transfer": {
+            "download": sum(PYODIDE_FILES[f][0] for f in _DOWNLOAD_PHASE),
+            "install": sum(PYODIDE_FILES[f][0] for f in _INSTALL_PHASE) + wheel_size,
+        },
+        "integrity": {name: f[2] for name, f in PYODIDE_FILES.items()},
         "install": f"pip install git+{REPO}",
     }
 
@@ -330,6 +384,7 @@ def live_page(cfg: dict[str, Any]) -> tuple[str, list[str]]:
     service = PlanningService(**cfg["service"])
     payload = service.scenario_payload(None)
     payload["worker"] = cfg
+    payload.update(json.loads(json.dumps(SITE_LINKS)))
     return render_viewer_html(payload), [p["name"] for p in service.preset_names()]
 
 
@@ -398,7 +453,10 @@ def build_site(out: Path, *, wheel: Path | None = None, quick: bool = False) -> 
         shutil.copy2(SITE_SRC / name, out / "assets" / name)
     shutil.copy2(ROOT / "docs" / "img" / "demo.gif", out / "assets" / "demo.gif")
     partials = {p.stem: p.read_text(encoding="utf-8").rstrip("\n") for p in (SITE_SRC / "partials").glob("*.html")}
-    common = {"version": version, "repo": REPO, "pyodide": PYODIDE_VERSION}
+    notes = ROOT / "docs" / f"release-notes-v{version}.md"
+    # the release notes of this version until it is published as a GitHub release
+    releases = f"{REPO}/blob/main/docs/{notes.name}" if notes.is_file() else f"{REPO}/releases"
+    common = {"version": version, "repo": REPO, "pyodide": PYODIDE_VERSION, "releases": releases}
     landing = render(SITE_SRC.joinpath("index.html").read_text(encoding="utf-8"), partials, {
         **common, "root": "",
         "download_mb_en": mb(cfg["download_bytes"], "en"), "download_mb_tr": mb(cfg["download_bytes"], "tr"),
@@ -417,11 +475,14 @@ def build_site(out: Path, *, wheel: Path | None = None, quick: bool = False) -> 
         "site": SITE_URL,
         "evroute": version,
         "quick": quick,
-        "pyodide": {"version": PYODIDE_VERSION, "url": PYODIDE_URL, "files": PYODIDE_FILES},
+        "pyodide": {"version": PYODIDE_VERSION, "url": PYODIDE_URL,
+                    "files": {k: {"transferred": t, "decoded": d, "sha256": h}
+                              for k, (t, d, h) in PYODIDE_FILES.items()}},
         "wheel": {"path": f"live/{wheel_rel}", "bytes": len(data), "full_bytes": full_size,
                   "excluded": list(WEB_WHEEL_EXCLUDE), **wheel_info},
         "live": {"default_scenario": DEFAULT_SCENARIO, "presets": offered, "options": WEB_OPTIONS,
-                 "time_budget_s": TIME_BUDGET_S, "download_bytes": cfg["download_bytes"],
+                 "time_budget_s": TIME_BUDGET_S, "time_limit_s": WEB_TIME_LIMIT_S,
+                 "download_bytes": cfg["download_bytes"],
                  "page_bytes": len(html.encode("utf-8")),
                  "page_gzip_bytes": len(gzip.compress(html.encode("utf-8"), 6))},
         "examples": examples,

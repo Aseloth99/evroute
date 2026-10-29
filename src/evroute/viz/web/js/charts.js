@@ -141,7 +141,7 @@
       const app = this.app;
       const routes = app.visibleRoutes().filter((r) => r._soc && r._soc.length > 1);
       const sel = app.selectedRoute();
-      if (!routes.length) { this.empty(I.t('no_route')); return; }
+      if (!routes.length) { this.empty(I.t(app.live && !app.model.results.length ? 'not_planned' : 'no_route')); return; }
       this.empty(null);
       const narrow = w < 480;
       const pad = { l: narrow ? 40 : 48, r: narrow ? 46 : 56, t: 16, b: 36 };
@@ -416,7 +416,7 @@
       const res = app.model.results;
       const want = `${this.layoutHeight()}px`;
       if (this.host.style.height !== want) { this.host.style.height = want; this.redraw(); return; }
-      if (!res.length) { this.empty(I.t('no_route')); return; }
+      if (!res.length) { this.empty(I.t(app.live ? 'not_planned' : 'no_route')); return; }
       this.empty(null);
       ctx.font = `650 12px ${th.font}`;
       let lw = 60;

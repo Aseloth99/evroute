@@ -366,7 +366,7 @@ Every plan of every planner is replayed by an **independent evaluator**; a
 seeded **cross-validation suite** checks eleven invariants against brute
 force, analytic oracles, metamorphic relations and local search, also under
 random charging tariffs ([`tests/fuzz_report.md`](tests/fuzz_report.md)).
-726 tests, 623 in the fast tier, run on Python 3.10-3.13 in CI
+740 tests, 636 in the fast tier, run on Python 3.10-3.13 in CI
 ([details](docs/algorithms.md#8-how-correctness-is-verified)):
 
 ```bash

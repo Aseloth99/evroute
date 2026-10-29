@@ -1,8 +1,11 @@
 /* EVRoute web site -- language (TR/EN) and theme switches of the landing and
  * examples pages.  The <head> of every page resolves both before the first
- * paint (inline snippet); this file wires the buttons.  The choices are kept
- * in localStorage under the keys the viewer and the results dashboard use
- * ("evroute.lang", "evroute.theme"); links into a viewer carry ?lang=.
+ * paint (inline snippet: ?lang=, then the saved choice, then the browser's
+ * language); this file wires the buttons.  The choices are kept in
+ * localStorage under the keys the viewer and the results dashboard use
+ * ("evroute.lang", "evroute.theme").  Links into a viewer carry ?lang=; a
+ * link to the results dashboard (data-keep-lang), which reads only the saved
+ * choice, saves the language shown when it is followed.
  * No tracking, no network access.
  */
 (function () {
@@ -44,6 +47,9 @@
     setLang(root.getAttribute('data-lang') === 'tr' ? 'tr' : 'en', false);
     applyTheme();
     for (const b of document.querySelectorAll('[data-set-lang]')) b.addEventListener('click', () => setLang(b.dataset.setLang, true));
+    for (const a of document.querySelectorAll('a[data-keep-lang]')) {
+      a.addEventListener('click', () => store.set('evroute.lang', root.getAttribute('data-lang') === 'tr' ? 'tr' : 'en'));
+    }
     const t = document.getElementById('theme-toggle');
     if (t) t.addEventListener('click', toggleTheme);
     if (mq && mq.addEventListener) mq.addEventListener('change', applyTheme);

@@ -52,6 +52,25 @@ class Planner(ABC):
     def _plan(self, prepared: PreparedScenario, *, trace: bool) -> RoutePlan:
         """Compute a plan; must return an evaluated :class:`RoutePlan`."""
 
+    def _deadline(self, start: float) -> float | None:
+        """The :func:`time.perf_counter` value at which option ``time_limit_s`` stops the search.
+
+        ``None`` without the option (the default: no time limit, the result
+        depends on the scenario and the options only).  The label-setting
+        planners accept ``time_limit_s`` as an *operational* safeguard, like
+        ``max_labels`` but measured in seconds from ``start``: a search that
+        runs over it stops with ``stats.extra["status"] == "time_limit"``
+        (and is reported as the label limit is), so the outcome may then
+        depend on the machine's speed.  The web site's in-browser planner
+        sets it; the command line and the experiments never do.
+        """
+        v = self.options.get("time_limit_s")
+        if v is None:
+            return None
+        if isinstance(v, bool) or not isinstance(v, (int, float)) or not v > 0 or v == float("inf"):
+            raise ValueError(f"time_limit_s must be a positive number of seconds, got {v!r}")
+        return start + float(v)
+
     @classmethod
     def info(cls) -> dict[str, Any]:
         return {

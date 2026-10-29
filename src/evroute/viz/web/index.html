@@ -92,7 +92,7 @@
         </div>
       </div>
       <div class="pick-row">
-        <span class="hint" data-i18n="pick_hint">Haritaya tıklayın: başlangıç · Shift+tık: varış</span>
+        <span class="hint" id="pick-hint" data-i18n="pick_hint">Haritaya tıklayın: başlangıç · Shift+tık: varış</span>
         <div class="seg seg-sm" role="group" id="pick-seg" data-i18n-aria="map_click_sets">
           <button type="button" data-pick="origin" aria-pressed="true">A</button>
           <button type="button" data-pick="destination" aria-pressed="false">B</button>
@@ -228,7 +228,8 @@
     </div>
 
     <div class="map-tip" id="map-tip" role="tooltip" hidden></div>
-    <div class="map-busy" id="map-busy" hidden><span class="spinner spinner-lg"></span><span id="map-busy-text" data-i18n="planning">Planlanıyor…</span></div>
+    <div class="map-busy" id="map-busy" hidden><span class="spinner spinner-lg"></span><span id="map-busy-text" data-i18n="planning">Planlanıyor…</span>
+      <button type="button" class="btn btn-sm" id="btn-stop" data-i18n="btn_stop" hidden>Durdur</button></div>
 
     <!-- in-browser planner (web site only): first-visit loading screen -->
     <div class="boot" id="boot" hidden>
@@ -283,6 +284,8 @@
 
   <!-- ====================================================== right panel -->
   <aside class="panel panel-right" id="panel-right" data-i18n-aria="trip">
+    <!-- live mode on a phone: the form comes after the trip panels; this leads to it -->
+    <a class="btn btn-block plan-own" id="plan-own" href="#live-card" hidden><span data-i18n="plan_own">Kendi yolculuğunuzu planlayın</span><span aria-hidden="true">↓</span></a>
     <section class="card summary-card" id="summary-card" aria-live="polite"></section>
     <section class="card" id="stops-card">
       <div class="card-head"><h2 data-i18n="charging_stops">Şarj durakları</h2><span class="hint" id="stops-count"></span></div>
