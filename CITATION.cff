@@ -1,9 +1,12 @@
 cff-version: 1.2.0
 message: "If you use EVRoute in your research, please cite it as below."
 title: "EVRoute: exact, battery-, queue- and degradation-aware route planning for electric vehicles with charging stations"
-version: 1.0.0
-date-released: 2026-10-27
-license: MIT
+version: 1.1.0
+date-released: 2026-10-28
+# the code is MIT; the bundled real-data network of Turkey is ODbL 1.0, © OpenStreetMap contributors
+license:
+  - MIT
+  - ODbL-1.0
 repository-code: "https://github.com/Aseloth99/evroute"
 authors:
   - family-names: "Açık"

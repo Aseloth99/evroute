@@ -315,11 +315,17 @@ class Scenario:
         """Raise :class:`ValueError` for a value outside the model's domain.
 
         Origin, destination and station nodes must be nodes of the network;
-        SoC fractions lie in ``[0, 1]`` (``max_charge_soc`` in ``(0, 1]``),
-        ``safety_factor >= 1``, ``charge_step_soc > 0``, the departure
-        time and temperature are finite and the tariff is valid
-        (:meth:`Tariff.validate`).  Called by :meth:`prepare`, so an
-        out-of-range value is never clamped or wrapped silently.
+        every edge has a finite length and speed ``> 0``; SoC fractions lie
+        in ``[0, 1]`` (``max_charge_soc`` in ``(0, 1]``), speed factors in
+        ``(0, 1]``, ``safety_factor >= 1``, ``0.001 <= charge_step_soc <=
+        1``, the departure time is finite, the temperature above absolute
+        zero, the traffic factors ``> 0``, the cost weights ``>= 0``; a
+        station has a power ``> 0``, at least one plug, a price, set-up time
+        and daily sessions ``>= 0`` and a mean session ``> 0``; and the
+        tariff is valid (:meth:`Tariff.validate`).  Called by
+        :meth:`prepare`, so an out-of-range value is never clamped or
+        wrapped silently (it used to crash or hang a planner, or to void its
+        optimality).
         """
         n = self.network.num_nodes
 
@@ -330,18 +336,36 @@ class Scenario:
             v = getattr(self.query, key)
             if not is_node(v):
                 raise ValueError(f"{key} {v!r} is not a node of the network (0..{n - 1})")
+        net = self.network
+        for e, (d, s) in enumerate(zip(net.length, net.speed_kmh)):
+            if not (0.0 < d < math.inf and 0.0 < s < math.inf):  # also catches NaN
+                raise ValueError(f"edge {e}: length {d!r} m and speed {s!r} km/h must be finite and > 0")
         for st in self.stations:
             if not is_node(st.node):
                 raise ValueError(f"station {st.id} references unknown node {st.node!r}")
-        q, pref = self.query, self.preferences
+            _check_number(f"station {st.id}: power_kw", st.power_kw, 0.0, open_lo=True)
+            if isinstance(st.plugs, bool) or not isinstance(st.plugs, int) or st.plugs < 1:
+                raise ValueError(f"station {st.id}: plugs must be an integer >= 1, got {st.plugs!r}")
+            _check_number(f"station {st.id}: price_per_kwh", st.price_per_kwh, 0.0)
+            _check_number(f"station {st.id}: setup_s", st.setup_s, 0.0)
+            _check_number(f"station {st.id}: daily_sessions", st.daily_sessions, 0.0)
+            _check_number(f"station {st.id}: mean_service_min", st.mean_service_min, 0.0, open_lo=True)
+        q, pref, cond = self.query, self.preferences, self.conditions
         _check_number("initial_soc", q.initial_soc, 0.0, 1.0)
         _check_number("departure_s", q.departure_s)
-        _check_number("temperature_c", self.conditions.temperature_c)
+        _check_number("temperature_c", cond.temperature_c, -273.15, open_lo=True)
+        _check_number("traffic_factor", cond.traffic_factor, 0.0, open_lo=True)
+        for cls, f in cond.class_speed_factor.items():
+            _check_number(f"class_speed_factor[{cls!r}]", f, 0.0, open_lo=True)
         _check_number("reserve_soc", pref.reserve_soc, 0.0, 1.0)
         _check_number("min_arrival_soc", pref.min_arrival_soc, 0.0, 1.0)
         _check_number("max_charge_soc", pref.max_charge_soc, 0.0, 1.0, open_lo=True)
         _check_number("safety_factor", pref.safety_factor, 1.0)
-        _check_number("charge_step_soc", pref.charge_step_soc, 0.0, open_lo=True)
+        _check_number("charge_step_soc", pref.charge_step_soc, 1e-3, 1.0)
+        for f in pref.speed_factors:
+            _check_number("speed_factors", f, 0.0, 1.0, open_lo=True)
+        for key in ("value_of_time_per_h", "weight_money", "weight_degradation", "soh_cost_per_pct"):
+            _check_number(key, getattr(pref, key), 0.0)
         if not isinstance(self.tariff, Tariff):
             raise ValueError(f"tariff must be a Tariff, got {type(self.tariff).__name__}")
         self.tariff.validate()
@@ -616,7 +640,7 @@ class PreparedScenario:
         self.time_dependent = pref.queue_aware and pref.time_dependent_waits
 
         # -------------------------------------------- charging target grid
-        step = max(pref.charge_step_soc, 1e-3)
+        step = pref.charge_step_soc  # at least 0.001 (Scenario.validate)
         grid = set()
         s = step
         while s < 1.0 + 1e-9:

@@ -23,7 +23,7 @@ simplify the rest away:
 
 | Effect | In reality | EVRoute |
 |---|---|---|
-| Nonlinear charging | power drops sharply above ~50-80 % SoC | exact charging curves per vehicle × charger |
+| Nonlinear charging | power drops sharply above ~50-80 % state of charge (SoC) | exact charging curves per vehicle × charger |
 | Partial charging | stop at 54 %, not at 100 % | continuous amounts (CFP) or a fine grid (BLS) |
 | Queues | 20-40 min at busy service areas in the afternoon | Erlang-C queues with hourly demand |
 | Terrain and cold | descents refill the battery; −5 °C: smaller battery, slower charging | physics model with grade, wind and regeneration; cold-weather capacity and charging |
@@ -104,6 +104,7 @@ git clone https://github.com/Aseloth99/evroute.git
 cd evroute
 pip install -e .            # the planner: no dependencies at all
 pip install -e ".[plot]"    # optional: seaborn for static figures
+pip install -e ".[dev]"     # optional: + pytest, for the tests
 ```
 
 ### Command line
@@ -127,9 +128,10 @@ $ evroute plan turkey-karaman-istanbul
 arrival 16:06 | drive 7 h 19 min | charge 36 min | queue+setup 12 min | battery wear 0.0188 %SoH
 ```
 
-Every command and option (origin, destination, SoC, departure, temperature,
-vehicle, tariff, ...): [documentation](docs/index.md#command-line), or
-`evroute <command> -h`.
+Money is in Turkish lira (TRY), battery wear in percentage points of state
+of health (%SoH).  Every command and option (origin, destination, SoC,
+departure, temperature, vehicle, tariff, ...):
+[documentation](docs/index.md#command-line), or `evroute <command> -h`.
 
 ### Python
 
@@ -163,13 +165,35 @@ print(f"P(strand) = {mc.p_strand:.2%}   P(reserve breach) = {mc.p_reserve_breach
 P(strand) = 0.40%   P(reserve breach) = 51.9%
 ```
 
-The last line is the point of the robustness module: a plan that is optimal
-for the *expected* consumption arrives with barely more than the 10 % reserve
-(10.4 %), so half of all random worlds dip below it. Plan with
-`safety_factor` > 1 (`--safety`) to buy reliability with minutes - see
-[the robustness experiment](#experiments). Your own road network, vehicle
-and chargers, or OpenStreetMap data:
+(The Pareto search stops at its label budget, so the size of the front
+depends on floating-point rounding, and Python 3.12 changed how `sum()`
+rounds: Python 3.10 and 3.11 print 33.)  The last line is the point of the
+robustness module: a plan that is optimal for the *expected* consumption
+arrives with barely more than the 10 % reserve (10.4 %), so half of all
+random worlds dip below it. Plan with `safety_factor` > 1 (`--safety`) to
+buy reliability with minutes - see [the robustness experiment](#experiments).
+Your own road network, vehicle and chargers, or OpenStreetMap data:
 [documentation](docs/index.md#your-own-network-vehicle-and-chargers).
+
+## Requirements
+
+- **Python ≥ 3.10** (tested on 3.10-3.13) on Windows, macOS or Linux, and
+  **no runtime dependencies**: the planner, the viewer, the live server and
+  the bundled real-data network of Turkey (1.5 MB) use only the standard
+  library.  Plans on the real-data network need a few hundred MB of memory.
+- Optional: `.[plot]` adds seaborn ≥ 0.13 (with matplotlib, numpy and
+  pandas) for the static figures - without it `evroute experiments` writes
+  everything but the figures; `.[dev]` adds pytest for the test suite, which
+  lives in the repository, not in the installed package; `osmnx` downloads
+  other OpenStreetMap networks
+  ([documentation](docs/index.md#your-own-network-vehicle-and-chargers)).
+- For maintainers only: Node.js with Playwright regenerates the screenshots
+  and the GIF; rebuilding the real-data network needs `osmium`, `numpy`,
+  `scipy`, `shapely`, `openpyxl`, about 1 GB of disk and internet access
+  ([real data](docs/real-data.md#rebuilding-the-data)).
+
+[`requirements.txt`](requirements.txt) says the same for tools that look for
+one.
 
 ## Example: Karaman → İstanbul
 
@@ -177,7 +201,9 @@ and chargers, or OpenStreetMap data:
 Turkish C-SUV (85 kWh battery) leaving at 08:00 with 80 %, 10 % reserve on
 the way and on arrival, expected queues at every charger. Runtimes are the
 median of five runs of the planner alone on a 2.1 GHz Xeon core (Python
-3.13); the gap is measured against the continuous optimum of CFP:
+3.13); the gap is measured against the continuous optimum of CFP, and
+*labels settled* counts the partial routes a planner had to finalise, a
+measure of its search effort:
 
 | algorithm | trip time | gap | stops | charging cost [TRY] | arrival SoC | labels settled | runtime |
 |---|---:|---:|---:|---:|---:|---:|---:|
@@ -230,13 +256,15 @@ evroute plan turkey-osm-karaman-istanbul   # 9 h 14 min, 751.81 km, 2 stops, 999
 - **The exact planners stay exact and fast:** BLS-A\* and CFP-A\* find the
   optimum of 5 of 6 trips with OSM stations (İzmir → Erzurum, without a DC
   charger in the east, runs into the label limit) and of 6 of 6 with the
-  hybrid set, in a median of 4.0 s and 9.9 s on 44 673 nodes; BLS-A\* stays
-  within 0.4 % of CFP-A\*. With OSM stations the optimum takes 7.0 % longer
-  than on the approximate network, almost all of it slower driving.
+  hybrid set; on 44 673 nodes the median runtime over the six trips with OSM
+  stations is 4.0 s and 9.9 s, and BLS-A\* stays within 0.4 % of CFP-A\*.
+  With OSM stations the optimum takes 7.0 % longer than on the approximate
+  network, almost all of it slower driving.
 - **The heuristics do not:** with OSM stations greedy is 153 % slower than
   the optimum on average (6.4 % on the approximate network), charging for
-  hours at slow AC chargers, and the station graph needs up to 3 h 46 min
-  for one trip.
+  hours at slow AC chargers, and the station graph needed up to 3 h 46 min
+  for one trip (hybrid set; the experiment now stops a heuristic after 10
+  minutes).
 
 > [!NOTE]
 > Data © OpenStreetMap contributors, ODbL 1.0; elevations SRTM (NASA/USGS).
@@ -307,8 +335,9 @@ and [`docs/algorithms.md`](docs/algorithms.md#at-a-glance) (overview and proofs)
 ## Experiments
 
 Twelve seeded experiments reproduce every table and figure of the
-accompanying paper. Each writes CSV, JSON, figures and LaTeX tables; the run
-ends with `results.html`, an interactive offline dashboard.
+accompanying paper. Each writes CSV, JSON, figures (with the `plot` extra)
+and LaTeX tables; the run ends with `results.html`, an interactive offline
+dashboard.
 
 ```bash
 evroute experiments --quick -o results/            # smoke size: ~1.5 minutes
@@ -335,7 +364,7 @@ Every plan of every planner is replayed by an **independent evaluator**; a
 seeded **cross-validation suite** checks eleven invariants against brute
 force, analytic oracles, metamorphic relations and local search, also under
 random charging tariffs ([`tests/fuzz_report.md`](tests/fuzz_report.md)).
-677 tests, 574 in the fast tier, run on Python 3.10-3.13 in CI
+711 tests, 608 in the fast tier, run on Python 3.10-3.13 in CI
 ([details](docs/algorithms.md#8-how-correctness-is-verified)):
 
 ```bash
@@ -366,10 +395,10 @@ If EVRoute helps your research, please cite it ([`CITATION.cff`](CITATION.cff)):
   author  = {Açık, Mustafa},
   title   = {{EVRoute}: exact, battery-, queue- and degradation-aware route planning
              for electric vehicles with charging stations},
-  version = {1.0.0},
+  version = {1.1.0},
   year    = {2026},
   url     = {https://github.com/Aseloth99/evroute},
-  license = {MIT}
+  license = {MIT (code), ODbL-1.0 (bundled real data)}
 }
 ```
 

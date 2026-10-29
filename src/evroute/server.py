@@ -42,7 +42,10 @@ Endpoints
          "speed_factors": [1.0, 0.9, 0.8], "queue_aware": true, "departure_s": 28800,
          "tariff": "80"}
 
-    ``origin``/``destination`` are node ids or place names, ``departure_s``
+    ``origin``/``destination`` are node ids or place names, ``algorithms``
+    defaults to :data:`DEFAULT_ALGORITHMS` (on a network of more than
+    20 000 nodes, the real-data presets: :data:`LARGE_NETWORK_ALGORITHMS`,
+    since greedy and the station graph take minutes there), ``departure_s``
     seconds after midnight or ``"HH:MM"``, ``tariff`` ``"80"`` (the
     illustrative :data:`~evroute.generators.presets.DEMO_TARIFF`) or
     ``"flat"`` (no tariff; absent: the preset's own tariff).  The answer is
@@ -93,6 +96,17 @@ MAX_BODY_BYTES = 64 * 1024
 DEFAULT_MAX_NODES = 15000
 #: Algorithms planned when a request does not name any.
 DEFAULT_ALGORITHMS: tuple[str, ...] = ("greedy", "station-graph", "bls-astar", "cfp-astar")
+#: The same on a network of more than :data:`evroute.cli.LARGE_NETWORK_NODES` nodes
+#: (the real-data presets), where greedy and the station graph take minutes per trip.
+LARGE_NETWORK_ALGORITHMS: tuple[str, ...] = ("bls-astar", "cfp-astar")
+
+
+def default_algorithms(scenario: Scenario) -> tuple[str, ...]:
+    """The algorithms a plan request without ``"algorithms"`` runs (and the live page ticks)."""
+    from .cli import LARGE_NETWORK_NODES
+
+    return LARGE_NETWORK_ALGORITHMS if scenario.network.num_nodes > LARGE_NETWORK_NODES else DEFAULT_ALGORITHMS
+
 
 _PLAN_FIELDS = frozenset(
     {
@@ -140,6 +154,14 @@ def _node(scenario: Scenario, value: Any, key: str) -> int:
         try:
             return net.node_by_name(value)
         except KeyError:
+            if isinstance(scenario.meta, dict) and scenario.meta.get("generator") == "osm_turkey":
+                # every OSM place, also one that shares its node with a larger place (as the CLI)
+                from .generators.osm_turkey import find_osm_place
+
+                try:
+                    return find_osm_place(value).node
+                except KeyError:
+                    pass
             raise PlanRequestError(f"{key}: no place named {value!r}") from None
     raise PlanRequestError(f"{key} must be a node id or a place name")
 
@@ -243,7 +265,7 @@ def build_plan_scenario(base: Scenario, body: Mapping[str, Any]) -> tuple[Scenar
     # ------------------------------------------------------------ algorithms
     algos = body.get("algorithms")
     if algos is None:
-        names = [a for a in DEFAULT_ALGORITHMS if a in REGISTRY]
+        names = [a for a in default_algorithms(sc) if a in REGISTRY]
     else:
         if not isinstance(algos, list) or not all(isinstance(a, str) for a in algos):
             raise PlanRequestError("algorithms must be a list of names")
@@ -326,7 +348,8 @@ class ViewerServer(ThreadingHTTPServer):
         sc = self.base_scenario(name)
         return viewer_payload(
             sc, [], lang=self.lang, animate=True, live=True,
-            extra={"scenario_preset": name or self.default_scenario, "demo_tariff": DEMO_TARIFF.to_dict()},
+            extra={"scenario_preset": name or self.default_scenario, "demo_tariff": DEMO_TARIFF.to_dict(),
+                   "default_algorithms": list(default_algorithms(sc))},
         )
 
     def page(self) -> bytes:

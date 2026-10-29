@@ -230,6 +230,36 @@ def test_station_sets():
     assert osm_turkey_stations("hybrid")[0].price_per_kwh != 999.0  # fresh copies
 
 
+def test_synthetic_stations_stay_near_a_main_road(net):
+    """A synthetic station moves to the nearest node of its road class unless the nearest
+    main-road node is more than SYNTHETIC_SNAP_SLACK_M closer; seven of them used to land
+    24-58 km away although a main road was 1.4-6.5 km away."""
+    from evroute.generators.turkey import turkey_network
+
+    approx = turkey_network(0)
+    stations, info = OT._synthetic_stations(0)
+    main = [v for v in range(net.num_nodes) if any(net.road_class[e] in MAIN_CLASSES for e in net.out_edges[v])
+            or any(net.road_class[e] in MAIN_CLASSES for e in net.in_edges[v])]
+    assert sum(i["snap"] == "nearest main road" for i in info) == 7
+    for a, b, i in zip(turkey_stations(0), stations, info):
+        lat, lon = approx.lat[a.node], approx.lon[a.node]  # type: ignore[index]
+        d = haversine_m(lat, lon, net.lat[b.node], net.lon[b.node])  # type: ignore[index]
+        assert d == pytest.approx(i["snap_m"], abs=0.1)
+        if i["snap"] == "place":
+            assert d <= 5_000.0, (b.name, d)
+        else:  # the modelled roads lie up to 19.6 km from every OSM main road
+            nearest_main = min(haversine_m(lat, lon, net.lat[v], net.lon[v]) for v in main)  # type: ignore[index]
+            assert d <= nearest_main + OT.SYNTHETIC_SNAP_SLACK_M + 100.0, (b.name, d, nearest_main)
+            assert d <= 20_000.0, (b.name, d)
+
+
+def test_hybrid_gap_km_must_be_positive():
+    """gap_km <= 0 or NaN used to loop forever: no gap could ever be closed."""
+    for bad in (0.0, -1.0, math.nan, math.inf):
+        with pytest.raises(ValueError, match="gap_km"):
+            osm_turkey_stations("hybrid", gap_km=bad)
+
+
 def test_hybrid_covers_every_main_road_node():
     net = osm_turkey_network()
     dc = sorted({s.node for s in osm_turkey_stations("hybrid") if s.kind == "DC"})
@@ -283,7 +313,23 @@ def test_cli_lists_and_plans_osm_presets(capsys):
     assert main(["compare", "turkey-osm-karaman-konya", "--algorithms", "all"]) == 0
     out, err = capsys.readouterr()
     assert "left out of 'all'" in err and "bls-astar" in out and "pareto" not in out
-    assert not any(line.split()[0] in ("bls", "cfp") for line in out.splitlines() if line.strip())
+    assert not any(line.split()[0] in ("bls", "cfp", "station-graph") for line in out.splitlines() if line.strip())
+
+
+def test_live_server_on_a_real_data_preset():
+    """The live page planned greedy and the station graph by default (3 minutes on the flagship
+    trip), and the server did not know the OSM places that share a node with a larger place."""
+    from evroute.server import LARGE_NETWORK_ALGORITHMS, build_plan_scenario, make_server
+
+    base = get_scenario("turkey-osm-karaman-konya")
+    sc, algos = build_plan_scenario(base, {"origin": "Meram", "destination": "karaman"})
+    assert algos == list(LARGE_NETWORK_ALGORITHMS) and "station-graph" not in algos
+    assert sc.query.origin == find_osm_place("Meram").node and sc.query.destination == find_osm_place("Karaman").node
+    server = make_server("turkey-osm-karaman-konya", port=0, robustness_runs=0)
+    try:
+        assert server.scenario_payload(None)["default_algorithms"] == list(LARGE_NETWORK_ALGORITHMS)
+    finally:
+        server.server_close()
 
 
 def test_exact_planners_agree_on_a_short_real_trip():

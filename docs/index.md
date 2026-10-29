@@ -18,7 +18,7 @@ page is the map of the documentation; the [README](../README.md)
 | [`../CONTRIBUTING.md`](../CONTRIBUTING.md) | how to set up, test and extend the project |
 | [`demo/index.html`](demo/index.html) | the animated viewer for Karaman → İstanbul with every planner (one offline file; `#tr` opens it in Turkish) |
 | [`demo/tariff.html`](demo/tariff.html) | the same trip leaving at 14:00 under the demonstration tariff (80 % rule + peak 16:00-20:00), cost objective: the cost-optimal plan waits 2.4 min at İnegöl for the off-peak price (built with `--step 0.05` so the Pareto front fits the viewer's label budget) |
-| [`demo/results.html`](demo/results.html) | the results dashboard of a full experiments run, including the `tariffs` experiment |
+| [`demo/results.html`](demo/results.html) | the results dashboard of a full run of all twelve experiments, including `tariffs` and `real-data` (the recorded real-data run, made before its 10-minute budget per heuristic run) |
 
 On this page: [install](#install) · [command line](#command-line) ·
 [Python API](#python-api) · [web viewer](#web-viewer) ·
@@ -96,7 +96,8 @@ cheaper price period, a `hold` column; without one its output is unchanged.
 On a network of more than 20 000 nodes (the OpenStreetMap presets),
 `--algorithms all` of `compare`, `viz` and `figures` leaves out `bls`,
 `cfp` and `pareto`, which settle millions of labels there without the A\*
-potential, and says so on stderr; name them to run them anyway.
+potential, and `station-graph`, which takes minutes to hours there, and says
+so on stderr; name them to run them anyway.
 
 Examples:
 
@@ -109,7 +110,7 @@ evroute plan turkey-karaman-istanbul-tariff --objective cost     # waits 2 min f
 evroute plan turkey-karaman-istanbul --depart 14:00 --peak 16-20 --peak-factor 1.2 --high-soc-factor 1.5
 evroute robustness turkey-izmir-erzurum -n 2000 --safety 1.1
 evroute plan turkey-osm-karaman-istanbul --stations hybrid --from Konya   # real data: OSM roads and stations
-evroute compare turkey-osm-karaman-konya                                 # all planners on a short real-data trip
+evroute compare turkey-osm-karaman-konya --algorithms naive,greedy,station-graph,genetic,bls,bls-astar,cfp,cfp-astar   # every planner on a short real-data trip
 ```
 
 ## Python API
@@ -209,7 +210,9 @@ The same viewer in *live mode*: click the map or use the place pickers to set
 origin and destination, change vehicle, initial SoC, temperature, reserve,
 objective, value of time, eco speeds, queue awareness and departure, tick
 algorithms and press *Plan*; a switch turns the demonstration tariff on and
-off.  The server uses only the standard library
+off.  On the real-data presets (more than 20 000 nodes) only BLS-A\* and
+CFP-A\* are ticked at first, about half a minute of planning: greedy and the
+station graph take minutes there.  The server uses only the standard library
 (`http.server`) and exposes a small JSON API: `GET /api/health`,
 `GET /api/scenarios`, `GET /api/scenario?name=...`, `POST /api/plan`
 (documented in [`server.py`](../src/evroute/server.py)).  It binds to
@@ -256,12 +259,12 @@ fronts fit it).  It writes `tariffs/results.csv` (one row per plan, `kind` =
 with its front).  `--quick` keeps 14:00 and 18:00, flat and tier + peak,
 and a budget of 200 000 labels.
 
-Highlights of a full run (all experiments except scalability and real-data:
-8 minutes on a 2.1 GHz Xeon core with Python 3.13, 5 of them for `tariffs`;
-scalability alone needs 2 hours of planner time, 99 % of it in the station
-graph and the Dijkstra-order baselines; real-data took 6.8 hours of planning
-before it had a 10-minute budget per heuristic run, 6.4 of them in the
-station graph, and should take about 1.5 hours with it):
+Highlights of a full run.  On a 2.1 GHz Xeon core with Python 3.13, all
+experiments except scalability and real-data take 8 minutes (5 of them for
+`tariffs`); scalability needs 2 hours of planner time, 99 % of it in the
+station graph and the Dijkstra-order baselines; real-data should take about
+1.5 hours with its 10-minute budget per heuristic run (the recorded run,
+made before the budget, took 6.8 hours, 6.4 of them in the station graph):
 
 | experiment | finding |
 |---|---|
@@ -276,7 +279,7 @@ station graph, and should take about 1.5 hours with it):
 | `vehicles` | Karaman → İstanbul: 7 h 50 min (75 kWh sedan, 2 stops) to 10 h 57 min (27 kWh city car, 5 stops) |
 | `tariffs` | Karaman → İstanbul and Antalya → Ankara, departures 06:00-22:00 every 2 h: under the demonstration tariff (80 % tier + 16:00-20:00 peak) the fastest plan pays 2.6 % more than at flat prices on average (up to 10.5 %, Karaman leaving at 12:00); the cost-optimal plan pays 76.73 TRY (7.6 %) less than the fastest for 6.3 min more and waits for the cheaper period in 2 of 18 trips (up to 2.4 min); the 80 % tier alone moves the cost-optimal plans below 80 % (energy charged above it: Karaman 2.34 → 0.47 kWh, Antalya 0.94 → 0 kWh on average); (time, money) fronts of 55-202 plans on a 5 % grid, 14 of 72 stopped by the 1-million-label budget |
 | `scalability` | synthetic countries of 1 000-40 000 nodes, 8 trips each: BLS-A\* answers in 0.03 s → 1.7 s and CFP-A\* in 0.03 s → 2.5 s on average; Dijkstra-order BLS and CFP are already 20× and 35× slower at 10 000 nodes and run out of their label budgets on 3 / 4 of 8 trips at 20 000 nodes (CFP: 6 of 8 at 40 000); the station graph needs 8 minutes per trip at 40 000 nodes to build its meta-graph |
-| `real-data` | six trips on the approximate network and on OpenStreetMap roads (44 673 nodes) with the OSM stations or the hybrid set: the exact planners solve 5 of 6 trips with OSM stations (İzmir → Erzurum runs into the label limit: no DC charger in the east) and 6 of 6 with the hybrid set, in a median of 4.0 s (BLS-A\*) and 9.9 s (CFP-A\*); with OSM stations the optimum takes 7.0 % longer on average, almost all of it slower driving; the heuristics lose their footing: mean gap greedy 6.4 % → 153.0 % (OSM) → 103.5 % (hybrid), genetic 0.2 % → 9.3 % → 0.9 %, and the station graph needs up to 3 h 46 min per trip ([details](real-data.md#results-the-real-data-experiment)) |
+| `real-data` | six trips on the approximate network and on OpenStreetMap roads (44 673 nodes) with the OSM stations or the hybrid set: the exact planners solve 5 of 6 trips with OSM stations (İzmir → Erzurum runs into the label limit: no DC charger in the east) and 6 of 6 with the hybrid set; the median runtime over the six trips with OSM stations is 4.0 s (BLS-A\*) and 9.9 s (CFP-A\*); with OSM stations the optimum takes 7.0 % longer on average, almost all of it slower driving; the heuristics lose their footing: mean gap greedy 6.4 % → 153.0 % (OSM) → 103.5 % (hybrid), genetic 0.2 % → 9.3 % → 0.9 %, and the station graph needed up to 3 h 46 min per trip (before the 10-minute budget) ([details](real-data.md#results-the-real-data-experiment)) |
 
 ```bash
 evroute experiments --quick -o results/            # smoke size: ~1.5 minutes

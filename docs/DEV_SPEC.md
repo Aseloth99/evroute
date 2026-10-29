@@ -280,7 +280,10 @@ above]}`, multiplying `price_per_kwh` below / above `high_soc`).
 
 **Live server** (`server.py`).  The live page's payload (`"live": true`)
 carries `demo_tariff`, the `Tariff.to_dict()` of the illustrative
-`DEMO_TARIFF`, for the page's tariff switch.  `POST /api/plan` accepts
+`DEMO_TARIFF`, for the page's tariff switch, and `default_algorithms`, the
+planners ticked before the first plan (those of a request without
+`"algorithms"`: without greedy and the station graph on a network of more
+than 20 000 nodes).  `POST /api/plan` accepts
 `"tariff": "80"` (the demonstration tariff) or `"flat"` (no tariff; absent:
 the preset's own tariff) and answers with `results_payload(...)`:
 `{"scenario", "results", "wait_profiles"}` plus, for a tariff other than

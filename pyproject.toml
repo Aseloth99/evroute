@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "evroute"
-version = "1.0.0"
+version = "1.1.0"
 description = "Exact, battery-, queue- and degradation-aware route planning for electric vehicles with charging stations"
 readme = "README.md"
 requires-python = ">=3.10"

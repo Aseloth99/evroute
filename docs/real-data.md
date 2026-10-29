@@ -46,10 +46,10 @@ On this page: [at a glance](#at-a-glance) · [try it](#try-it) ·
 
 The network has 44 673 nodes and 70 886 directed edges (strongly connected)
 and covers 75 393 km of road: 6 511 km of motorway, 45 883 km of trunk
-roads, 18 261 km of primary roads, 4 472 km of ramps and 266 km of
-secondary roads.  Elevations range from −3 m to 3 076 m.  Nodes use the
-same map projection as the approximate network, so both share one map
-frame.  The loader is
+roads, 18 261 km of primary roads, 4 472 km of ramps, 263 km of secondary
+roads and 3 km of their ramps.  Elevations range from −3 m to 3 076 m.
+Nodes use the same map projection as the approximate network, so both share
+one map frame.  The loader is
 [`evroute.generators.osm_turkey`](../src/evroute/generators/osm_turkey.py);
 the files, their columns and their provenance are described in
 [`data/osm_turkey/README.md`](../src/evroute/data/osm_turkey/README.md).
@@ -90,17 +90,20 @@ driving alone takes 8 h 37 min.
 | `turkey-osm-ankara-adana` | over the Gülek pass, leaving at 15:00 | OSM |
 | `turkey-osm-karaman-mersin` | the Sertavul pass or the motorway via Pozantı | OSM |
 | `turkey-osm-izmir-erzurum` | the long west-east crossing | hybrid |
-| `turkey-osm-karaman-konya` | about 120 km at 30 % charge: a small test trip | OSM |
+| `turkey-osm-karaman-konya` | Karaman → Konya (119 km direct) at 30 % charge: no DC charger on the way, so the optimum detours to an AC charger (239 km, about 5 h); small enough for every planner | OSM |
 
-Each preset has the origin, destination, vehicle, charge, departure and
-temperature of its counterpart on the approximate network.
+Each preset except `turkey-osm-karaman-konya` has the origin, destination,
+vehicle, charge, departure and temperature of its counterpart on the
+approximate network.
 `--stations osm|synthetic|hybrid` chooses the
 [station set](#three-station-sets-osm-synthetic-hybrid) of any of them, and
 `--from` / `--to` accept the name of any of the 1 005 OSM places (case and
 Turkish letters do not matter).  On a network of more than 20 000 nodes,
 `--algorithms all` (`compare`, `viz`, `figures`) leaves out `bls`, `cfp`
 and `pareto`, which settle millions of labels there without the A\*
-potential; name them to run them anyway.
+potential, and `station-graph`, which takes minutes to hours there; name
+them to run them anyway.  The live server ticks only BLS-A\* and CFP-A\*
+at first on these presets.
 
 In Python:
 
@@ -112,7 +115,7 @@ sc = osm_turkey_scenario("Karaman", "İstanbul")                      # OSM stat
 print(plan(sc, "bls-astar"))
 print(plan(sc, "cfp-astar"))                                         # continuous charging: about half a minute
 hybrid = osm_turkey_scenario("izmir", "ERZURUM", stations="hybrid")  # names: any case, Turkish letters optional
-print(plan(hybrid, "bls-astar"))
+print(plan(hybrid, "bls-astar"))                                     # 80 % at 08:00 (the preset leaves at 06:00 with 90 %)
 print(sc.meta["station_info"]["0"])                                  # where the data of station 0 come from
 ```
 
@@ -307,9 +310,11 @@ charger to use.
 - **`synthetic`**: the 290 synthetic stations of the approximate case
   study (same seed, powers, plugs, prices and calibrated queues), each moved
   to the nearest node of the OSM network whose road class matches its road
-  in the approximate network (a city station to the OSM place of the same
-  name).  Same stations, real roads: the difference to the approximate
-  case study is the network alone.
+  in the approximate network, or to the nearest main-road node if that is
+  more than 5 km closer (a modelled road can lie far from the OSM road of
+  its class); a city station goes to the OSM place of the same name.  Same
+  stations, real roads: the difference to the approximate case study is the
+  network alone.
 - **`hybrid`**: the OSM stations plus **synthetic DC gap-fillers** wherever
   a main road (motorway, trunk or primary) is more than 75 km of road from
   every DC station.  Farthest gap first, each filler goes to a named place
@@ -430,16 +435,17 @@ What the numbers say:
   at the label limit (BLS-A\* after 4.59 million labels, CFP-A\* after 1.81
   million): *not solved*, not proven infeasible.  There is no DC charger on
   the eastern half of the route, and a feasible route does exist: greedy
-  (`evroute plan turkey-osm-izmir-erzurum --stations osm -a greedy`) finds
-  one of 46 h 34 min with 15 stops, 24 h 25 min of it charging at AC
-  stations.
+  (`evroute plan turkey-osm-izmir-erzurum --stations osm -a greedy`, about
+  3 minutes) finds one of 46 h 34 min with 15 stops, 24 h 25 min of it
+  charging at AC stations.
 - **With OSM stations the optimum takes 7.0 % longer on average for 0.1 %
   more distance.**  Nearly all of it is slower driving (+32 min on average;
   charging, queues and set-up −5.7 min): the OSM speeds are legal limits.
   The money is 11 % lower on average, but the spread is wide: Karaman →
   Mersin needs no stop at all on the real roads (236 km instead of 273 km),
-  while Ankara → Adana costs 46 % more and drives 76 km more than with the
-  hybrid set to reach DC chargers - the gap-fillers remove that detour.
+  while Ankara → Adana costs 46 % more than on the approximate network and
+  drives 76 km more than with the hybrid set to reach DC chargers - the
+  gap-fillers remove that detour.
 - **With the hybrid set** the optimum is 1.2 % faster than on the
   approximate network and 18 % dearer on average.
 - **BLS-A\* stays within 0.4 % of the continuous optimum** on every trip
@@ -493,7 +499,9 @@ Karaman → İstanbul on OSM data (`karaman-istanbul/`).
   hybrid gap-fillers are synthetic.
 - **Station data.**  64 % of the powers and 44 % of the plug counts are
   defaults; plug counts are lower bounds.  Availability, opening hours and
-  broken chargers are not modelled.
+  broken chargers are not modelled, and stations for one brand or for
+  customers only (e.g. "Sadece Renault", hotel chargers) are kept, since
+  OSM rarely tags the restriction.
 - **Speeds.**  Legal limits or imputed defaults, free flow, no traffic or
   congestion.  1 633 edges are faster than 130 km/h (almost all on
   motorways, where signs may allow 140 km/h), 539 edges (285 km) faster

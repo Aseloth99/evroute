@@ -47,9 +47,9 @@ Bu sayfada: [bir bakışta](#bir-bakışta) · [deneyin](#deneyin) ·
 
 Ağda 44 673 düğüm ve 70 886 yönlü kenar vardır (güçlü bağlantılı); 75 393
 km yolu kapsar: 6 511 km otoyol, 45 883 km ana yol, 18 261 km birincil
-yol, 4 472 km bağlantı yolu ve 266 km ikincil yol. Yükseklikler −3 m ile
-3 076 m arasındadır. Düğümler yaklaşık ağla aynı harita izdüşümünü
-kullanır; ikisi aynı harita çerçevesini paylaşır. Yükleyici
+yol, 4 472 km bağlantı yolu, 263 km ikincil yol ve 3 km ikincil bağlantı
+yolu. Yükseklikler −3 m ile 3 076 m arasındadır. Düğümler yaklaşık ağla
+aynı harita izdüşümünü kullanır; ikisi aynı harita çerçevesini paylaşır. Yükleyici
 [`evroute.generators.osm_turkey`](../src/evroute/generators/osm_turkey.py)
 modülüdür; dosyalar, sütunları ve kaynakları
 [`data/osm_turkey/README.md`](../src/evroute/data/osm_turkey/README.md)
@@ -91,17 +91,20 @@ yalnızca sürüş 8 sa 37 dk tutar.
 | `turkey-osm-ankara-adana` | Gülek Boğazı üzerinden, 15:00'te kalkış | OSM |
 | `turkey-osm-karaman-mersin` | Sertavul geçidi ya da Pozantı üzerinden otoyol | OSM |
 | `turkey-osm-izmir-erzurum` | uzun batı-doğu geçişi | hibrit |
-| `turkey-osm-karaman-konya` | %30 şarjla yaklaşık 120 km: küçük bir test yolculuğu | OSM |
+| `turkey-osm-karaman-konya` | %30 şarjla Karaman → Konya (doğrudan 119 km): yolda DC şarj noktası yok, bu yüzden optimum bir AC şarj noktasına sapar (239 km, yaklaşık 5 sa); her planlayıcı için yeterince küçük | OSM |
 
-Her hazır senaryonun başlangıcı, varışı, aracı, şarjı, kalkış saati ve
-sıcaklığı, yaklaşık ağdaki karşılığıyla aynıdır.
+`turkey-osm-karaman-konya` dışındaki her hazır senaryonun başlangıcı,
+varışı, aracı, şarjı, kalkış saati ve sıcaklığı, yaklaşık ağdaki
+karşılığıyla aynıdır.
 `--stations osm|synthetic|hybrid` herhangi birinin
 [istasyon kümesini](#üç-istasyon-kümesi-osm-synthetic-hybrid) seçer;
 `--from` / `--to`, 1 005 OSM yerleşiminden herhangi birinin adını kabul
 eder (büyük/küçük harf ve Türkçe karakterler fark etmez). 20 000'den fazla
 düğümlü bir ağda `--algorithms all` (`compare`, `viz`, `figures`),
 A\* potansiyeli olmadan orada milyonlarca etiket kesinleştiren `bls`, `cfp`
-ve `pareto`'yu dışarıda bırakır; yine de çalıştırmak için adlarını yazın.
+ve `pareto`'yu ve orada dakikalar, hatta saatler süren `station-graph`'ı
+dışarıda bırakır; yine de çalıştırmak için adlarını yazın. Canlı sunucu bu
+hazır senaryolarda başta yalnızca BLS-A\* ve CFP-A\*'ı işaretler.
 
 Python'da:
 
@@ -113,7 +116,7 @@ sc = osm_turkey_scenario("Karaman", "İstanbul")                      # OSM ista
 print(plan(sc, "bls-astar"))
 print(plan(sc, "cfp-astar"))                                         # sürekli şarj: yaklaşık yarım dakika
 hybrid = osm_turkey_scenario("izmir", "ERZURUM", stations="hybrid")  # adlar: büyük/küçük harf ve Türkçe karakter serbest
-print(plan(hybrid, "bls-astar"))
+print(plan(hybrid, "bls-astar"))                                     # %80 şarj, 08:00 (hazır senaryo 06:00'da %90 ile çıkar)
 print(sc.meta["station_info"]["0"])                                  # 0 numaralı istasyonun verileri nereden geliyor
 ```
 
@@ -313,9 +316,11 @@ yolculuklarında kullanılacak hızlı şarj noktası yoktur.
   [Kuyruklar](#kuyruklar-varsayımlar) bölümündeki varsayımlarla.
 - **`synthetic`**: yaklaşık vaka çalışmasının 290 sentetik istasyonu (aynı
   tohum, güç, soket, fiyat ve ayarlanmış kuyruklar); her biri, yaklaşık
-  ağdaki yolunun sınıfıyla eşleşen en yakın OSM ağ düğümüne taşınır (bir
-  şehir istasyonu aynı adlı OSM yerleşimine). Aynı istasyonlar, gerçek
-  yollar: yaklaşık vaka çalışmasından tek fark ağdır.
+  ağdaki yolunun sınıfıyla eşleşen en yakın OSM ağ düğümüne, en yakın ana
+  yol düğümü 5 km'den fazla daha yakınsa ona taşınır (modellenmiş bir yol,
+  OSM'de aynı sınıftaki yoldan uzakta kalabilir); bir şehir istasyonu aynı
+  adlı OSM yerleşimine gider. Aynı istasyonlar, gerçek yollar: yaklaşık vaka
+  çalışmasından tek fark ağdır.
 - **`hybrid`**: OSM istasyonları ve bir ana yolun (otoyol, ana yol ya da
   birincil yol) her DC istasyona yol üzerinden 75 km'den uzak olduğu her
   yerde **sentetik DC boşluk doldurucular**. En uzak boşluktan başlayarak
@@ -439,17 +444,17 @@ Sayıların söyledikleri:
   etiketten sonra): *çözülemedi*, ama olanaksız olduğu ispatlanmadı.
   Rotanın doğu yarısında hiç DC şarj noktası yok, yine de uygun bir rota
   var: greedy
-  (`evroute plan turkey-osm-izmir-erzurum --stations osm -a greedy`) 15
-  molalı, 46 sa 34 dk'lık bir rota bulur; bunun 24 sa 25 dk'sı AC
-  istasyonlarda şarjdır.
+  (`evroute plan turkey-osm-izmir-erzurum --stations osm -a greedy`,
+  yaklaşık 3 dakika) 15 molalı, 46 sa 34 dk'lık bir rota bulur; bunun
+  24 sa 25 dk'sı AC istasyonlarda şarjdır.
 - **OSM istasyonlarıyla optimum, ortalama %0,1 daha uzun mesafe için
   ortalama %7,0 daha uzun sürer.** Bunun neredeyse tamamı daha yavaş
   sürüştür (ortalama +32 dk; şarj, kuyruk ve hazırlık −5,7 dk): OSM hızları
   yasal sınırlardır. Para ortalama %11 daha azdır, ama dağılım geniştir:
   Karaman → Mersin gerçek yollarda hiç mola gerektirmez (273 km yerine
-  236 km), Ankara → Adana ise %46 daha pahalıdır ve DC şarj noktalarına
-  ulaşmak için hibrit kümeyle olduğundan 76 km fazla yol gider; boşluk
-  doldurucular bu dolambacı kaldırır.
+  236 km), Ankara → Adana ise yaklaşık ağdakinden %46 daha pahalıdır ve DC
+  şarj noktalarına ulaşmak için hibrit kümeyle olduğundan 76 km fazla yol
+  gider; boşluk doldurucular bu dolambacı kaldırır.
 - **Hibrit kümeyle** optimum, yaklaşık ağa göre ortalama %1,2 daha hızlı
   ve %18 daha pahalıdır.
 - **BLS-A\* her yolculukta ve her veri kümesinde sürekli optimumun %0,4
@@ -504,7 +509,9 @@ grafiklerini (`karaman-istanbul/`) yazar.
   sentetiktir.
 - **İstasyon verisi.** Güçlerin %64'ü ve soket sayılarının %44'ü
   varsayılandır; soket sayıları alt sınırdır. Müsaitlik, çalışma saatleri
-  ve arızalı şarj noktaları modellenmez.
+  ve arızalı şarj noktaları modellenmez; tek bir markaya ya da yalnızca
+  müşterilere açık istasyonlar (ör. "Sadece Renault", otel şarj noktaları)
+  kümede kalır, çünkü OSM bu kısıtı nadiren işaretler.
 - **Hızlar.** Yasal sınırlar ya da atanmış varsayılanlar; serbest akış,
   trafik ya da sıkışıklık yok. 1 633 kenarın hızı 130 km/sa üzerindedir
   (neredeyse tamamı otoyollarda; levhalar orada 140 km/sa'e kadar izin

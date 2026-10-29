@@ -21,7 +21,7 @@ from .plan import ChargeDecision, PlanDecision, RoutePlan
 from .scenario import Conditions, PreparedScenario, Preferences, Query, Scenario, Station, Tariff
 from .vehicle import VEHICLES, ChargingCurve, Vehicle, get_vehicle
 
-__version__ = "1.0.0"
+__version__ = "1.1.0"
 
 __all__ = [
     "VEHICLES",

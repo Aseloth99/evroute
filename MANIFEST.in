@@ -3,7 +3,7 @@
 # contributors) plus the test suite with its conftest.py, the examples, the
 # build script of the real-data network, the text documentation and the
 # citation. Figures and the built demo pages of docs/ stay in the repository.
-include README.md README.tr.md LICENSE CITATION.cff CONTRIBUTING.md
+include README.md README.tr.md LICENSE CITATION.cff CONTRIBUTING.md requirements.txt
 recursive-include src/evroute/data *.csv *.csv.gz *.json *.md
 include tools/build_osm_turkey.py
 recursive-include tests *.py *.md

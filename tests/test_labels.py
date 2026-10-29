@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import math
 import random
+import re
 
 import pytest
 
@@ -375,6 +376,9 @@ def test_unreachable_destination_and_label_limit():
     sc = grid_scenario(8, 8, seed=2, initial_soc=0.3)
     p = plan(sc, "bls", max_labels=50)
     assert not p.feasible and "label limit" in p.message
+    # the count is the one the limit applies to: created labels, more than the settled ones
+    created = int(re.search(r"([\d,]+) labels created", p.message).group(1).replace(",", ""))
+    assert created > 50 and created > p.stats.settled
 
 
 def test_options_are_validated():

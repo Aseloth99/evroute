@@ -39,16 +39,17 @@ evroute/
 │   ├── charging.py queueing.py scenario.py         # charging functions, Erlang-C queues, scenarios
 │   ├── plan.py evaluate.py search.py               # plans, independent evaluator, bounds
 │   ├── algorithms/      # naive, greedy, station_graph, genetic, labels (BLS), cfp, pareto
-│   ├── generators/      # basic grids, turkey, synthetic, osm, presets
-│   ├── data/            # Turkey places and roads (CSV)
+│   ├── generators/      # basic grids, turkey, osm_turkey (real data), synthetic, osm, presets
+│   ├── data/            # Turkey places and roads (CSV); osm_turkey/: the real-data network (ODbL)
 │   ├── robustness.py    # Monte Carlo reliability, safety-factor sweeps
 │   ├── viz/             # export.py + web/ (viewer), results.py (dashboard), figures.py + style.py (seaborn)
 │   ├── experiments/     # runner, plots, figures for the paper
 │   ├── server.py        # live planning server (http.server)
 │   └── cli.py           # `evroute` command
 ├── tests/               # pytest suite + fuzz_report.md
+├── tools/               # build_osm_turkey.py: rebuilds data/osm_turkey from OpenStreetMap
 ├── examples/            # quickstart.py, custom_network.py, viewer_demo.py
-└── docs/                # index, guide (EN/TR), model, algorithms, DEV_SPEC, PLAN.tr, demo/ (viewer + dashboard), img/
+└── docs/                # index, guide (EN/TR), real-data (EN/TR), model, algorithms, DEV_SPEC, PLAN.tr, demo/ (viewer + dashboard), img/
 ```
 
 ## Adding or changing a planner
@@ -82,8 +83,11 @@ best possible report; the suite keeps such reproductions as
 - Regenerate the static figures with `evroute gallery -o docs/img` and the
   viewer screenshots and the GIF with `python examples/viewer_demo.py --screenshots docs/img`
   (Node.js + Playwright).
-- `README.md` and `README.tr.md` are translations of each other; please
+- `README.md` and `README.tr.md` are translations of each other, and so
+  are `docs/guide.md` / `.tr.md` and `docs/real-data.md` / `.tr.md`; please
   update both, or say in the pull request that the other one needs an update.
 
 By contributing you agree that your contribution is licensed under the
-[MIT licence](LICENSE).
+[MIT licence](LICENSE); changes to the bundled data in
+`src/evroute/data/osm_turkey/` are under the ODbL 1.0
+([`DATA_LICENSE.md`](src/evroute/data/osm_turkey/DATA_LICENSE.md)).

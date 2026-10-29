@@ -23,7 +23,8 @@ synthetic | hybrid`` selects the charging stations of the real-data
 ``turkey-osm-*`` presets (:mod:`evroute.generators.osm_turkey`).  On a
 network of more than 20 000 nodes ``--algorithms all`` (``compare``, ``viz``,
 ``figures``) leaves out ``bls``, ``cfp`` and ``pareto``, which settle
-millions of labels there without the A* potential; name them to run them.
+millions of labels there without the A* potential, and ``station-graph``,
+which takes minutes to hours there; name them to run them.
 Bad input (an unknown name, an out-of-range value, an unreadable file) is
 reported as one ``error: ...`` line on stderr with exit code 2.
 
@@ -235,12 +236,15 @@ def _algorithm(name: str) -> str:
     return name
 
 
-#: Networks with more nodes than this leave the Dijkstra-order exact planners and
-#: the Pareto search out of ``--algorithms all`` (the real-data network has 44 673).
+#: Networks with more nodes than this leave the Dijkstra-order exact planners, the
+#: Pareto search and the station graph out of ``--algorithms all`` (the real-data
+#: network has 44 673).
 LARGE_NETWORK_NODES = 20_000
 #: The planners left out of ``--algorithms all`` on a large network: without the A*
-#: potential they settle millions of labels there (minutes, or their label budget).
-SLOW_ON_LARGE = ("bls", "cfp", "pareto")
+#: potential bls, cfp and pareto settle millions of labels there (minutes, or their
+#: label budget), and the station graph grows a label tree over the whole network for
+#: every station it expands (minutes, up to hours on a long trip).
+SLOW_ON_LARGE = ("bls", "cfp", "pareto", "station-graph")
 
 
 def _algorithms(spec: str | None, sc=None) -> list[str]:
@@ -422,11 +426,13 @@ def cmd_serve(args: argparse.Namespace) -> int:
 def _figures_off_screen(*, required: bool = True) -> None:
     """Commands that write figure files draw them off screen (the ``Agg``
     backend, unless ``MPLBACKEND`` names another); with ``required``,
-    a missing seaborn is reported as a usage error."""
+    a missing seaborn is reported as a usage error, otherwise as a note."""
     from .viz.style import has_seaborn
 
-    if required and not has_seaborn():
-        raise UsageError("figures need seaborn: pip install 'evroute[plot]'")
+    if not has_seaborn():
+        if required:
+            raise UsageError("figures need seaborn: pip install 'evroute[plot]'")
+        print("note: seaborn is not installed: figures skipped (pip install 'evroute[plot]')", file=sys.stderr)
     os.environ.setdefault("MPLBACKEND", "Agg")
 
 

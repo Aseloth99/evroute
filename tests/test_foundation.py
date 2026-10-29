@@ -243,6 +243,18 @@ def test_evaluator_detects_broken_path():
         ("preferences", {"safety_factor": 0.0}, "safety_factor"),
         ("preferences", {"charge_step_soc": 0.0}, "charge_step_soc"),
         ("preferences", {"charge_step_soc": math.nan}, "charge_step_soc"),
+        # used to hang a planner, to crash it or to be clamped silently
+        ("conditions", {"temperature_c": -273.15}, "temperature_c"),
+        ("conditions", {"traffic_factor": 0.0}, "traffic_factor"),
+        ("conditions", {"class_speed_factor": {"motorway": -1.0}}, "class_speed_factor"),
+        ("preferences", {"charge_step_soc": 0.0005}, "charge_step_soc"),
+        ("preferences", {"charge_step_soc": 1.5}, "charge_step_soc"),
+        ("preferences", {"speed_factors": (1.0, 0.0)}, "speed_factors"),
+        ("preferences", {"speed_factors": (2.0,)}, "speed_factors"),
+        ("preferences", {"value_of_time_per_h": -1.0}, "value_of_time_per_h"),
+        ("preferences", {"weight_money": -1.0}, "weight_money"),
+        ("preferences", {"weight_degradation": -0.5}, "weight_degradation"),
+        ("preferences", {"soh_cost_per_pct": -1.0}, "soh_cost_per_pct"),
     ],
 )
 def test_prepare_rejects_values_outside_the_model(where, change, fragment):
@@ -252,10 +264,45 @@ def test_prepare_rejects_values_outside_the_model(where, change, fragment):
         sc.prepare()
 
 
+@pytest.mark.parametrize(
+    "field, value",
+    [("power_kw", 0.0), ("plugs", 0), ("plugs", 2.5), ("price_per_kwh", -0.1), ("setup_s", -3000.0),
+     ("daily_sessions", -1.0), ("mean_service_min", 0.0), ("mean_service_min", math.inf)],
+)
+def test_prepare_rejects_station_values_outside_the_model(field, value):
+    """A negative set-up time made BLS-A* return a 20-minute "plan" for 161 km (and BLS disagree)."""
+    sc = grid_scenario(rows=4, cols=4, seed=1)
+    stations = [Station.from_dict(st.to_dict()) for st in sc.stations]
+    setattr(stations[0], field, value)
+    with pytest.raises(ValueError, match=re.escape(f"station {stations[0].id}: {field}")):
+        sc.with_(stations=stations).prepare()
+
+
+@pytest.mark.parametrize("key, value", [("length", 0.0), ("length", math.nan), ("speed_kmh", 0.0), ("speed_kmh", -50.0)])
+def test_prepare_rejects_edges_without_length_or_speed(key, value):
+    """A zero-length edge raised ZeroDivisionError in the energy model; speed 0 became 1 m/s silently."""
+    sc = grid_scenario(rows=4, cols=4, seed=1)
+    d = sc.network.to_dict()
+    d[key][3] = value
+    with pytest.raises(ValueError, match="edge 3: length"):
+        sc.with_(network=RoadNetwork.from_dict(d)).prepare()
+
+
+def test_lower_bounds_reject_negative_cost_weights():
+    """Dijkstra over negative weights did not terminate (CFP-A* and Pareto hung on a negative VoT)."""
+    P = grid_scenario(rows=4, cols=4, seed=1).prepare()
+    P.vot_per_s = -1.0
+    with pytest.raises(ValueError, match="non-negative cost weights"):
+        LowerBounds(P)
+
+
 def test_prepare_accepts_the_edges_of_the_domain():
     base = grid_scenario(rows=4, cols=4, seed=1)
     for sc in (base.with_query(initial_soc=0.0, origin=3), base.with_query(initial_soc=1.0, destination=3),
                base.with_preferences(reserve_soc=0.0, min_arrival_soc=1.0, max_charge_soc=1.0, safety_factor=1.0),
+               base.with_preferences(charge_step_soc=0.001, speed_factors=(1.0, 0.5), value_of_time_per_h=0.0,
+                                     weight_money=0.0, weight_degradation=0.0, soh_cost_per_pct=0.0),
+               base.with_preferences(charge_step_soc=1.0),
                base.with_query(destination=base.query.origin)):  # a trip of length zero is valid for the API
         P = sc.prepare()
         assert P.e_init == sc.query.initial_soc * P.capacity

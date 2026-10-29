@@ -1784,7 +1784,7 @@ def _infeasibility_reason(P: PreparedScenario, res: _LabelSearch, pot: AStarPote
     o, d = P.origin, P.destination
     if res.status == "limit":
         return (
-            f"label limit reached (max_labels={max_labels:,}, {len(res.node):,} labels created) "
+            f"label limit reached (max_labels={max_labels:,}, {res.created:,} labels created) "
             "before the destination was settled; increase max_labels or use a coarser "
             "charge_step_soc / targets='grid'"
         )

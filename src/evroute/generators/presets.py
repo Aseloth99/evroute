@@ -430,7 +430,8 @@ def _register_osm_turkey() -> None:
     reg(
         "turkey-osm-karaman-konya",
         osm_turkey_scenario,
-        "Karaman -> Konya (~120 km) on OpenStreetMap roads at 30 % charge, too little to get there without a stop.",
+        "Karaman -> Konya on OpenStreetMap roads at 30 % charge: no DC charger on the way, the plans detour to an AC "
+        "charger (~240 km).",
         defaults={"origin": "Karaman", "destination": "Konya", "initial_soc": 0.3, "temperature_c": 18.0,
                   "departure": "08:00", "stations": "osm"},
         family="turkey-osm", tags=("test", "short", *osm), approx_nodes=_OSM_NODES,

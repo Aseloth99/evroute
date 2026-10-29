@@ -24,7 +24,7 @@ basitleştirip geçer:
 
 | Etki | Gerçekte | EVRoute |
 |---|---|---|
-| Doğrusal olmayan şarj | SoC ~%50-80'i geçince güç keskin biçimde düşer | her araç × şarj ünitesi çifti için kesin şarj eğrileri |
+| Doğrusal olmayan şarj | şarj durumu (SoC) ~%50-80'i geçince güç keskin biçimde düşer | her araç × şarj ünitesi çifti için kesin şarj eğrileri |
 | Kısmi şarj | şarj %100'de değil, %54'te kesilir | sürekli şarj miktarları (CFP) ya da ince bir ızgara (BLS) |
 | Kuyruklar | öğleden sonraları yoğun dinlenme tesislerinde 20-40 dk | saatlik talep profilli Erlang-C kuyrukları |
 | Arazi ve soğuk | inişler bataryayı yeniden doldurur; −5 °C'de kapasite küçülür, şarj yavaşlar | eğim, rüzgâr ve rejeneratif frenlemeyi içeren fizik modeli; soğukta kapasite ve şarj |
@@ -106,6 +106,7 @@ git clone https://github.com/Aseloth99/evroute.git
 cd evroute
 pip install -e .            # planlayıcı: hiçbir bağımlılığı yok
 pip install -e ".[plot]"    # isteğe bağlı: statik grafikler için seaborn
+pip install -e ".[dev]"     # isteğe bağlı: + pytest, testler için
 ```
 
 ### Komut satırı
@@ -114,7 +115,7 @@ pip install -e ".[plot]"    # isteğe bağlı: statik grafikler için seaborn
 evroute scenarios                                    # hazır senaryoları listeler
 evroute plan turkey-karaman-istanbul                 # BLS-A* ile planlar (varsayılan)
 evroute plan turkey-karaman-istanbul-tariff --objective cost      # %80 kuralı + puant saatler: 20:00'yi bekler
-evroute viz turkey-karaman-istanbul -o karaman-istanbul.html --lang en   # animasyonlu görüntüleyici, çevrimdışı çalışır
+evroute viz turkey-karaman-istanbul -o karaman-istanbul.html   # animasyonlu görüntüleyici, çevrimdışı çalışır
 evroute serve turkey-karaman-istanbul --open          # tarayıcıda canlı planlama
 evroute experiments --quick -o results/               # on iki deneyin tamamı, hızlı boyut (~1,5 dk)
 ```
@@ -129,9 +130,10 @@ $ evroute plan turkey-karaman-istanbul
 arrival 16:06 | drive 7 h 19 min | charge 36 min | queue+setup 12 min | battery wear 0.0188 %SoH
 ```
 
-Tüm komutlar ve seçenekler (başlangıç, varış, SoC, kalkış saati, sıcaklık,
-araç, tarife, ...): [dokümantasyon](docs/index.md#command-line) ya da
-`evroute <command> -h`.
+Para Türk lirası (TRY), batarya yıpranması sağlık durumunun yüzde puanı
+(%SoH) cinsindendir. Tüm komutlar ve seçenekler (başlangıç, varış, SoC,
+kalkış saati, sıcaklık, araç, tarife, ...):
+[dokümantasyon](docs/index.md#command-line) ya da `evroute <command> -h`.
 
 ### Python
 
@@ -165,7 +167,10 @@ print(f"P(strand) = {mc.p_strand:.2%}   P(reserve breach) = {mc.p_reserve_breach
 P(strand) = 0.40%   P(reserve breach) = 51.9%
 ```
 
-Son satır, sağlamlık modülünün neden var olduğunu özetliyor: *beklenen*
+(Pareto araması etiket bütçesinde durduğu için cephenin boyutu kayan
+noktalı yuvarlamaya bağlıdır ve Python 3.12, `sum()` fonksiyonunun
+yuvarlamasını değiştirdi: Python 3.10 ve 3.11'de 33 yazdırılır.) Son satır,
+sağlamlık modülünün neden var olduğunu özetliyor: *beklenen*
 tüketime göre optimal olan bir plan hedefe %10'luk rezervin ancak biraz
 üstünde (%10,4) varır; dolayısıyla rastgele gerçekleşmelerin yarısında bu
 rezervin altına düşülür. Birkaç dakika karşılığında güvenilirlik satın almak
@@ -174,6 +179,27 @@ için `safety_factor` > 1 ile (`--safety`) planlayın — bkz.
 istasyonlarınız ya da OpenStreetMap verileri için:
 [dokümantasyon](docs/index.md#your-own-network-vehicle-and-chargers).
 
+## Gereksinimler
+
+- Windows, macOS ya da Linux üzerinde **Python ≥ 3.10** (3.10-3.13 üzerinde
+  sınanır); **çalışma zamanında hiçbir bağımlılık yok**: planlayıcı,
+  görüntüleyici, canlı sunucu ve paketle gelen Türkiye gerçek veri ağı
+  (1,5 MB) yalnızca standart kütüphaneyi kullanır. Gerçek veri ağındaki
+  planlar birkaç yüz MB bellek ister.
+- İsteğe bağlı: `.[plot]` statik grafikler için seaborn ≥ 0.13'ü
+  (matplotlib, numpy ve pandas ile) ekler; o olmadan `evroute experiments`
+  grafikler dışında her şeyi yazar. `.[dev]` test paketi için pytest'i
+  ekler; testler kurulan pakette değil, depodadır. `osmnx` başka
+  OpenStreetMap ağlarını indirir
+  ([dokümantasyon](docs/index.md#your-own-network-vehicle-and-chargers)).
+- Yalnızca geliştiriciler için: ekran görüntülerini ve GIF'i yeniden üretmek
+  için Playwright'lı Node.js; gerçek veri ağını yeniden kurmak için
+  `osmium`, `numpy`, `scipy`, `shapely`, `openpyxl`, yaklaşık 1 GB disk ve
+  internet erişimi ([gerçek veri](docs/real-data.tr.md#veriyi-yeniden-oluşturmak)).
+
+[`requirements.txt`](requirements.txt) aynı bilgiyi, böyle bir dosya arayan
+araçlar için verir.
+
 ## Örnek: Karaman → İstanbul
 
 Konya Ovası ve Afyon–Kütahya–Bursa koridoru boyunca 747 km: 85 kWh bataryalı
@@ -181,18 +207,20 @@ yerli bir C-SUV saat 08:00'de %80 şarjla yola çıkıyor; yol boyunca ve varı�
 %10 rezerv korunuyor, her şarj noktasında beklenen kuyruklar hesaba katılıyor.
 Çalışma süreleri, 2,1 GHz'lik bir Xeon çekirdeğinde (Python 3.13) yalnızca
 planlayıcının ölçüldüğü beş koşunun medyanıdır; açık, CFP'nin sürekli
-optimumuna göre ölçülmüştür:
+optimumuna göre ölçülmüştür; *kesinleşen etiket* ise bir planlayıcının
+kesinleştirmek zorunda kaldığı kısmi rotaların sayısıdır, yani arama
+çabasının bir ölçüsü:
 
 | algoritma | yolculuk süresi | açık | durak | şarj maliyeti [TRY] | varış SoC | kesinleşen etiket | çalışma süresi |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| `naive` | 364 km sonra yolda kalır | | 0 | | −77.2 % | 887 | 1 ms |
-| `greedy` | 8:30:51 | +4.97 % | 2 | 1,659.68 | 47.1 % | 2,076 | 9 ms |
-| `station-graph` | 9:19:35 | +14.98 % | 2 | 1,180.77 | 17.0 % | 14 | 61 ms |
-| `genetic` | 8:08:28 | +0.37 % | 2 | 1,175.32 | 10.0 % | 754 | 244 ms |
-| `bls` | 8:06:56 | +0.05 % | 2 | 1,138.78 | 10.4 % | 42,980 | 258 ms |
-| **`bls-astar`** | **8:06:56** | +0.05 % | 2 | 1,138.78 | 10.4 % | **1,491** | **38 ms** |
-| `cfp` | 8:06:41 | 0 | 2 | 1,133.96 | 10.0 % | 5,665 | 383 ms |
-| **`cfp-astar`** | **8:06:41** | 0 | 2 | 1,133.96 | 10.0 % | **347** | **27 ms** |
+| `naive` | 364 km sonra yolda kalır | | 0 | | −%77,2 | 887 | 1 ms |
+| `greedy` | 8:30:51 | +%4,97 | 2 | 1 659,68 | %47,1 | 2 076 | 9 ms |
+| `station-graph` | 9:19:35 | +%14,98 | 2 | 1 180,77 | %17,0 | 14 | 61 ms |
+| `genetic` | 8:08:28 | +%0,37 | 2 | 1 175,32 | %10,0 | 754 | 244 ms |
+| `bls` | 8:06:56 | +%0,05 | 2 | 1 138,78 | %10,4 | 42 980 | 258 ms |
+| **`bls-astar`** | **8:06:56** | +%0,05 | 2 | 1 138,78 | %10,4 | **1 491** | **38 ms** |
+| `cfp` | 8:06:41 | 0 | 2 | 1 133,96 | %10,0 | 5 665 | 383 ms |
+| **`cfp-astar`** | **8:06:41** | 0 | 2 | 1 133,96 | %10,0 | **347** | **27 ms** |
 
 - **Bataryayı hesaba katmayan rota** 364 km sonra yolda kalır; "gerektiğinde
   %80'e kadar şarj et" diyen açgözlü (greedy) sezgisel 24 dakika daha yavaş
@@ -237,14 +265,15 @@ evroute plan turkey-osm-karaman-istanbul   # 9 sa 14 dk, 751,81 km, 2 mola, 999,
 - **Kesin planlayıcılar kesin ve hızlı kalır:** BLS-A\* ve CFP-A\*, OSM
   istasyonlarıyla 6 yolculuğun 5'inde (doğuda DC şarj noktası olmayan
   İzmir → Erzurum etiket sınırına takılır), hibrit kümeyle 6'sında da
-  optimumu 44 673 düğümde medyan 4,0 sn ve 9,9 sn'de bulur; BLS-A\*,
-  CFP-A\*'ın %0,4 yakınında kalır. OSM istasyonlarıyla optimum, yaklaşık
-  ağdakinden ortalama %7,0 daha uzun sürer; farkın neredeyse tamamı daha
-  yavaş sürüşten gelir.
+  optimumu bulur; 44 673 düğümde OSM istasyonlarıyla altı yolculuğun medyan
+  çalışma süresi 4,0 sn ve 9,9 sn'dir ve BLS-A\*, CFP-A\*'ın %0,4 yakınında
+  kalır. OSM istasyonlarıyla optimum, yaklaşık ağdakinden ortalama %7,0 daha
+  uzun sürer; farkın neredeyse tamamı daha yavaş sürüşten gelir.
 - **Sezgiseller kalmaz:** OSM istasyonlarıyla greedy, yavaş AC şarj
   noktalarında saatlerce şarj ederek optimumdan ortalama %153 yavaş kalır
   (yaklaşık ağda %6,4); station graph tek bir yolculuk için 3 sa 46 dk'ya
-  kadar uğraşır.
+  kadar uğraştı (hibrit küme; deney artık bir sezgiseli 10 dakika sonra
+  durdurur).
 
 > [!NOTE]
 > Veri © OpenStreetMap contributors, ODbL 1.0; yükseklikler SRTM (NASA/USGS).
@@ -319,8 +348,9 @@ ve [`docs/algorithms.md`](docs/algorithms.md#at-a-glance) (genel bakış ve ispa
 ## Deneyler
 
 Sabit tohumlu on iki deney, eşlik eden makaledeki tüm tablo ve şekilleri
-yeniden üretir. Her deney CSV, JSON, grafikler ve LaTeX tabloları yazar;
-koşu, etkileşimli ve çevrimdışı bir panel olan `results.html` ile tamamlanır.
+yeniden üretir. Her deney CSV, JSON, grafikler (`plot` ekiyle) ve LaTeX
+tabloları yazar; koşu, etkileşimli ve çevrimdışı bir panel olan
+`results.html` ile tamamlanır.
 
 ```bash
 evroute experiments --quick -o results/            # hızlı boyut: ~1,5 dakika
@@ -347,8 +377,8 @@ Her planlayıcının her planı **bağımsız bir değerlendiricide** yeniden si
 edilir; sabit tohumlu bir **çapraz doğrulama paketi** on bir değişmezi kaba
 kuvvete, analitik referans çözümlere, metamorfik bağıntılara ve yerel aramaya
 karşı, rastgele şarj tarifeleri altında da sınar
-([`tests/fuzz_report.md`](tests/fuzz_report.md)). Toplam 677 test vardır;
-bunların 574'ü hızlı katmandadır ve CI'da Python 3.10-3.13 üzerinde
+([`tests/fuzz_report.md`](tests/fuzz_report.md)). Toplam 711 test vardır;
+bunların 608'i hızlı katmandadır ve CI'da Python 3.10-3.13 üzerinde
 çalıştırılır ([ayrıntılar](docs/algorithms.md#8-how-correctness-is-verified)):
 
 ```bash
@@ -385,10 +415,10 @@ EVRoute araştırmanıza katkı sağladıysa lütfen atıf yapın
   author  = {Açık, Mustafa},
   title   = {{EVRoute}: exact, battery-, queue- and degradation-aware route planning
              for electric vehicles with charging stations},
-  version = {1.0.0},
+  version = {1.1.0},
   year    = {2026},
   url     = {https://github.com/Aseloth99/evroute},
-  license = {MIT}
+  license = {MIT (code), ODbL-1.0 (bundled real data)}
 }
 ```
 

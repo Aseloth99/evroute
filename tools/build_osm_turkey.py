@@ -101,11 +101,9 @@ import hashlib
 import io
 import json
 import math
-import os
 import pickle
 import re
 import subprocess
-import sys
 import time
 from collections import Counter, defaultdict
 from pathlib import Path
@@ -1702,7 +1700,6 @@ def stage_validate(work: Path, g: dict, places: list[dict]) -> tuple[list[dict],
     wb = openpyxl.load_workbook(xlsx, read_only=True, data_only=True)
     rows = [r for r in wb.worksheets[0].iter_rows(values_only=True)]
     table_date = rows[0][0]
-    header = rows[1]
     plates, names, mat = [], [], []
     for r in rows[2:]:
         if r[0] is None or r[1] is None:

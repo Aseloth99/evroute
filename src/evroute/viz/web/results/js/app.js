@@ -125,6 +125,13 @@
     app.onScroll = U.rafThrottle(update);
     window.addEventListener('scroll', app.onScroll, { passive: true });
     update();
+    // a partial run (e.g. one experiment): at the top of the page, bring the first
+    // experiment that was run into the bar instead of the pills of those not run
+    const first = pills.find((p, i) => i > 0 && !p.classList.contains('is-missing'));
+    if (current === pills[0] && first && pills.some((p) => p.classList.contains('is-missing'))) {
+      const tr = first.parentElement;
+      if (first.offsetLeft + first.offsetWidth + 24 > tr.scrollLeft + tr.clientWidth) tr.scrollLeft = Math.max(0, first.offsetLeft - 24);
+    }
   }
 
   /* ---------------------------------------------------------- overview */

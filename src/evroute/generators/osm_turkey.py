@@ -74,9 +74,12 @@ Charging stations (``stations=``)
     The 290 synthetic stations of :mod:`evroute.generators.turkey` (same
     seed, same powers, plugs, prices and calibrated queues), each moved to
     the nearest node of this network whose road class matches the station's
-    road in the approximate network (a city station to the node of the OSM
-    place of the same name).  Same stations, real roads: the difference to
-    the approximate case study is the network alone.
+    road in the approximate network -- or to the nearest main-road node if
+    that is more than :data:`SYNTHETIC_SNAP_SLACK_M` (5 km) closer, since a
+    modelled road may lie far from the OSM road of its class -- and a city
+    station to the node of the OSM place of the same name.  Same stations,
+    real roads: the difference to the approximate case study is the network
+    alone.
 ``"hybrid"``
     The OSM stations plus **synthetic DC gap-fillers** wherever a main road
     (motorway, trunk or primary) is more than ``gap_km`` (75 km) of road
@@ -210,6 +213,9 @@ GAP_KM = 75.0
 GAP_PLACE_RADIUS_M = 20_000.0
 #: Road classes whose nodes the hybrid gap-fillers must cover.
 MAIN_CLASSES = ("motorway", "trunk", "primary")
+#: A synthetic station moves to the nearest node of its road class, unless that
+#: node is more than this much farther away than the nearest main-road node [m].
+SYNTHETIC_SNAP_SLACK_M = 5_000.0
 
 
 # ===================================================================== raw files
@@ -555,6 +561,8 @@ def _synthetic_stations(seed: int) -> tuple[tuple[Station, ...], tuple[dict[str,
         ids = [v for v in range(net.num_nodes) if c in classes[v]]
         pool_nodes[c] = ids
         pools[c] = GridIndex([net.x[v] for v in ids], [net.y[v] for v in ids])
+    main_nodes = [v for v in range(net.num_nodes) if classes[v] & set(MAIN_CLASSES)]
+    main_pool = GridIndex([net.x[v] for v in main_nodes], [net.y[v] for v in main_nodes])
     everything = GridIndex(net.x, net.y)
     out: list[Station] = []
     info: list[dict[str, Any]] = []
@@ -575,6 +583,13 @@ def _synthetic_stations(seed: int) -> tuple[tuple[Station, ...], tuple[dict[str,
             if best is not None:
                 c = next(k for k, r in rank.items() if r == best)
                 node, how = pool_nodes[c][pools[c].nearest(x, y)], f"nearest {c}"
+                # the modelled road may lie far from the OSM road of its class: then the
+                # nearest main road (7 stations of seed 0: 1.4-6.5 km instead of 24-58 km away)
+                main = main_nodes[main_pool.nearest(x, y)]
+                if math.hypot(net.x[node] - x, net.y[node] - y) > (
+                    math.hypot(net.x[main] - x, net.y[main] - y) + SYNTHETIC_SNAP_SLACK_M
+                ):
+                    node, how = main, "nearest main road"
             else:
                 node, how = everything.nearest(x, y), "nearest node"
         d = st.to_dict()
@@ -656,6 +671,8 @@ def _station_set(source: str, seed: int, gap_km: float) -> tuple[list[Station], 
         st, info = _synthetic_stations(seed)
         return copy_stations(st), [dict(i) for i in info]
     if source == "hybrid":
+        if isinstance(gap_km, bool) or not isinstance(gap_km, (int, float)) or not 0.0 < gap_km < math.inf:
+            raise ValueError(f"gap_km must be a finite number > 0, got {gap_km!r}")  # else no gap ever closes
         st, info = _osm_stations()
         fill, finfo = _gap_fillers(seed, float(gap_km))
         out = copy_stations(st)

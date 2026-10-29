@@ -45,6 +45,8 @@ def _error_line(capsys) -> str:
         (["plan", SC, "--safety", "0.9"], "safety_factor"),
         (["plan", SC, "--safety", "0"], "safety_factor"),
         (["plan", SC, "--step", "0"], "charge_step_soc"),
+        (["plan", SC, "--step", "0.0005"], "charge_step_soc"),  # used to be raised to 0.001 silently
+        (["plan", SC, "--temp", "-273.15"], "temperature_c"),  # used to raise ZeroDivisionError
         (["robustness", SC, "-n", "0"], "-n"),
         (["serve", "nope"], "unknown preset"),
         (["serve", "scenario.json"], "preset name"),
@@ -184,3 +186,13 @@ def test_figure_commands_without_seaborn(argv, monkeypatch, tmp_path, capsys):
     assert main(argv) == 2
     assert "pip install 'evroute[plot]'" in _error_line(capsys)
     assert not any(tmp_path.iterdir())  # nothing written
+
+
+def test_experiments_without_seaborn_say_that_figures_are_skipped(monkeypatch, capsys):
+    import evroute.experiments.runner as runner
+    import evroute.viz.style as style
+
+    monkeypatch.setattr(style, "has_seaborn", lambda: False)
+    monkeypatch.setattr(runner, "run_experiments", lambda *a, **k: None)
+    assert main(["experiments", "vehicles", "--quick", "--no-panel"]) == 0
+    assert "figures skipped (pip install 'evroute[plot]')" in capsys.readouterr().err
