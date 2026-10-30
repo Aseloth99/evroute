@@ -68,6 +68,86 @@
     return s;
   };
 
+  /* ---------------------------------------------------------- A/B markers */
+  /**
+   * The letters of the origin (A) and destination (B) markers as filled
+   * outlines in a 16 x 16 box whose ink is centred on (8, 8) by
+   * construction, so that the letter sits in the middle of its circle
+   * whatever font the browser has (text glyphs sit higher or lower by the
+   * font's ascent and descent).  Even-odd fill: the counters are holes.
+   */
+  U.GLYPH = {
+    A: 'M4.2 12 6.9 4h2.2l2.7 8H9.85l-.55-1.8H6.7L6.15 12ZM7.15 8.7h1.7L8 5.9Z',
+    B: 'M4.7 4h3.6c1.8 0 2.7.9 2.7 2.1 0 .8-.45 1.4-1.15 1.65.9.25 1.45.95 1.45 1.9C11.3 11.05 10.3 12 8.5 12H4.7Z'
+      + 'M6.55 5.5v1.75h1.6c.65 0 1-.3 1-.88 0-.57-.35-.87-1-.87ZM6.55 8.65v1.85H8.3c.75 0 1.15-.35 1.15-.93 0-.57-.4-.92-1.15-.92Z',
+  };
+
+  /** An A/B circle (SVG) for the DOM: `which` 'A' (origin, --pin-a) or 'B' (destination, --pin-b). */
+  U.odDot = function (which, cls) {
+    const ns = 'http://www.w3.org/2000/svg';
+    const s = document.createElementNS(ns, 'svg');
+    s.setAttribute('viewBox', '0 0 16 16');
+    s.setAttribute('aria-hidden', 'true');
+    s.setAttribute('class', `od-dot od-${which === 'B' ? 'b' : 'a'}${cls ? ' ' + cls : ''}`);
+    const c = document.createElementNS(ns, 'circle');
+    c.setAttribute('cx', '8'); c.setAttribute('cy', '8'); c.setAttribute('r', '8');
+    const p = document.createElementNS(ns, 'path');
+    p.setAttribute('d', U.GLYPH[which === 'B' ? 'B' : 'A']);
+    p.setAttribute('fill-rule', 'evenodd');
+    s.append(c, p);
+    return s;
+  };
+
+  /**
+   * fillText with the ink of `text` centred on (x, y): the measured glyph
+   * box (actualBoundingBox*), not the font's ascent and descent, decides
+   * the position, so digits in a badge sit in its optical middle.
+   */
+  U.fillTextCentered = function (ctx, text, x, y) {
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'alphabetic';
+    const m = ctx.measureText(text);
+    const l = m.actualBoundingBoxLeft || 0, r = m.actualBoundingBoxRight || m.width;
+    const a = m.actualBoundingBoxAscent, d = m.actualBoundingBoxDescent || 0;
+    if (!(a > 0)) {   // no glyph metrics: the font's middle
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(text, x, y);
+      return;
+    }
+    ctx.fillText(text, x - (r - l) / 2 + l, y + (a - d) / 2);
+  };
+
+  /* --------------------------------------------------------------- search */
+  /**
+   * Text folded for searching: case-, accent- and Turkish-insensitive
+   * ("İstanbul", "ISTANBUL", "istanbul" and "Istanbul" fold alike; ı/i, ş/s,
+   * ğ/g, ç/c, ö/o, ü/u fold to the same letter).
+   */
+  U.fold = function (s) {
+    return String(s).normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/ı/g, 'i');
+  };
+
+  /**
+   * `text` folded character by character: {f, map} with map[k] the index in
+   * `text` of the character that produced f[k] (to highlight a match in the
+   * original text).
+   */
+  U.foldMap = function (text) {
+    let f = '';
+    const map = [];
+    const chars = Array.from(String(text));
+    let pos = 0;
+    for (const ch of chars) {
+      const x = U.fold(ch);
+      for (let k = 0; k < x.length; k++) map.push(pos);
+      f += x;
+      pos += ch.length;
+    }
+    map.push(pos);
+    return { f, map };
+  };
+
   /* -------------------------------------------------------------- numbers */
   U.clamp = (x, lo, hi) => (x < lo ? lo : x > hi ? hi : x);
   U.lerp = (a, b, t) => a + (b - a) * t;
