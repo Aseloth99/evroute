@@ -20,6 +20,7 @@ and simplify the rest away:
 | Prices | dearer above 80 % SoC and at peak hours | one price per kWh | tariffs by SoC and time of day (fixed or from the queue load), exact planning of when to wait for a cheaper price |
 | Uncertainty | consumption deviates ±10 % | deterministic | Monte Carlo reliability, safety factor, adaptive driver policy |
 | Eco-driving | driving slower can save a stop | one speed | several speed levels per road |
+| Vehicle and plug | LFP lasts longer but charges slowly in the cold; some cars take 50 kW at most, have CHAdeMO or no DC inlet | one generic car, every charger fits | chemistry-specific wear and cold derating, DC power limit, connector standards of vehicles and stations |
 
 The model in one screen; the sections below state each part exactly.
 
@@ -53,6 +54,10 @@ The model in one screen; the sections below state each part exactly.
 - **Uncertainty** ([§9](#9-uncertainty-evaluation-only), evaluation only) -
   log-normal trip and edge factors on the consumption, exponential queueing
   delays.
+- **Vehicles** ([§10](#10-vehicles-cell-chemistry-dc-power-limit-connectors)) -
+  NMC/NCA/LFP wear and cold behaviour, a DC power limit, connector
+  standards: a station is used only through a socket of its kind that the
+  vehicle has.
 
 ## 1. Road network
 
@@ -129,7 +134,8 @@ The vehicle's battery-side power limit is piecewise constant on SoC bins
 $[s_i, s_{i+1})$: $p_i^{veh}$ (published curves are binned with the harmonic
 mean, which preserves the exact time to cross a bin; `vehicle.ChargingCurve`).
 At a DC station $j$ with power $P_j$ the effective power is
-$p_{ij} = \phi(T)\min(p_i^{veh}, P_j)$, where $\phi(T) = \max(\phi_{\min},
+$p_{ij} = \phi(T)\min(p_i^{veh}, \bar P_{DC}, P_j)$, where $\bar P_{DC}$ is
+the vehicle's DC power limit (`dc_max_kw`, $+\infty$ by default; §10) and $\phi(T) = \max(\phi_{\min},
 1 - \lambda_c (20 - T))$ derates a battery below 20 °C that was not
 preconditioned ($\phi = 1$ otherwise).  At an AC station the on-board
 charger limits the power to $\min(p^{veh}_{AC}, P_j)$ up to 95 % SoC and to
@@ -300,3 +306,92 @@ multiplied by $\xi_{trip}\,\xi_e$ and regeneration ($c \le 0$) is divided by
 it, with independent log-normal factors of mean 1, and
 queueing delays are drawn from an exponential distribution with the expected
 wait as mean (`robustness.monte_carlo`).
+
+## 10. Vehicles: cell chemistry, DC power limit, connectors
+
+**Cell chemistry** (`Vehicle.chemistry`: `NMC`, `NCA` or `LFP`).  Lithium
+iron phosphate (LFP) cells differ from the nickel-rich NMC/NCA cells in ways
+that matter for trip planning:
+
+- they tolerate a high state of charge and last longer: in the
+  multi-chemistry cycling study of Preger et al. (2020, *J. Electrochem.
+  Soc.* 167, 120532) the LFP cells outlasted the NMC and NCA cells several
+  times and were the least sensitive to the SoC range, so makers of LFP
+  cars allow and recommend regular charges to 100 %;
+- their voltage curve is flat, which makes the SoC hard to estimate from the
+  voltage (another reason for the regular full charge; not modelled);
+- they are weaker in the cold: lower ionic conductivity and a higher
+  impedance reduce the usable capacity and above all the charging power;
+- they store less energy per kilogram, so an LFP pack of the same capacity
+  is heavier (the presets carry it in their mass).
+
+The model expresses these facts with illustrative coefficients, not with a
+fit to any cell (`vehicle.AgingModel.for_chemistry`, the LFP presets):
+
+| parameter (§3, §4, §7) | NMC / NCA (default) | LFP |
+|---|---|---|
+| equivalent full cycles to end of life $N_{EFC}$ | 1500 | 3500 |
+| high-SoC stress $k_s$ | 1.0 | 0.2 |
+| cold stress $k_{cold}$ [1/K] | 0.06 | 0.10 |
+| usable-capacity loss in the cold $\lambda_T$ [1/K] | 0.004 | 0.006 |
+| cold charging derating $\lambda_c$ [1/K], floor $\phi_{\min}$ | 0.025, 0.35 | 0.035, 0.25 |
+
+The shape of the DC curve (the early taper of one LFP pack, the long flat
+plateau of another) belongs to each vehicle's curve, not to the chemistry.
+
+**DC power limit** (`Vehicle.dc_max_kw`, $\bar P_{DC}$).  The bin powers of
+the DC curve become $\min(p_i^{veh}, \bar P_{DC})$ before the charger limit
+and the cold derating apply (§4), wherever DC charging functions are built;
+`Vehicle.dc_peak_kw` reports the effective peak.  A limit only lowers powers,
+so every charging time grows or stays and the optimum can only get slower;
+the charging functions stay piecewise linear, so every planner and every
+guarantee is unchanged.  A limit at or above the curve's peak leaves the
+curve object itself, so the plans are bit-identical.
+
+**Connectors.**  A vehicle lists the standards it can plug into
+(`Vehicle.connectors`, default Type 2 + CCS2), a station its sockets
+(`Station.connectors`; empty means the default of its kind: Type 2 at AC,
+CCS2 at DC):
+
+| standard | carries | | standard | carries |
+|---|---|---|---|---|
+| `Type2` (IEC 62196-2) | AC | | `CCS2` (Combo 2) | DC |
+| `Type1` (SAE J1772) | AC | | `CCS1` (Combo 1) | DC |
+| `CHAdeMO` | DC | | `NACS` (SAE J3400) | AC and DC |
+
+A station is modelled as one charger of its kind, so the vehicle can use
+station $j$ iff some standard is a socket of $j$, a connector of the vehicle
+and carries the kind of $j$ (`Station.usable_by`).  A Type 2 socket listed
+at a DC station therefore does not make it usable for a car without a DC
+inlet: its charging function is the DC one (data sources split a site with
+DC and AC points into two stations, so the AC points stay usable).  The
+planners see only the usable stations (`PreparedScenario.station_at`; the
+station indices are kept), which is the same as planning on the scenario
+without the other stations: every guarantee holds unchanged.  The bounds
+of the exact planners (best charging rate, highest power, smallest stop
+overhead) cover the usable stations only, which keeps them valid and makes
+them tighter.  The evaluator reports a stop at an unusable station as a
+violation.
+
+**Vehicle presets** (approximate public figures of each class, generic
+names; `vehicle.VEHICLES`; DC peak = effective peak, 10→80 % = minutes at a
+charger that does not limit the power, 20 °C):
+
+| key | chemistry | battery [kWh] | DC peak [kW] | AC [kW] | connectors | 10→80 % [min] |
+|---|---|---|---|---|---|---|
+| `city27` | NMC | 26.8 | 30 | 7 | Type2 + CCS2 | 40 |
+| `compact50` | NMC | 50 | 99 | 11 | Type2 + CCS2 | 26 |
+| `sedan75` | NMC | 75 | 169 | 11 | Type2 + CCS2 | 26 |
+| `suv84_800v` | NMC | 80 | 225 | 11 | Type2 + CCS2 | 18 |
+| `togg_t10x_lr` | NMC | 85 | 149 | 11 | Type2 + CCS2 | 31 |
+| `van75` | NMC | 72 | 109 | 11 | Type2 + CCS2 | 34 |
+| `hatch51_lfp` | LFP | 50.8 | 116 | 11 | Type2 + CCS2 | 27 |
+| `sedan60_lfp` | LFP | 57.5 | 168 | 11 | Type2 + CCS2 | 25 |
+| `suv60_lfp` | LFP | 60.5 | 88 | 11 | Type2 + CCS2 | 32 |
+| `city23_ac` | NMC | 23 | 0 (no DC inlet) | 7.4 | Type2 | - |
+| `hatch40_chademo` | NMC | 39 | 46 | 6.6 | Type2 + CHAdeMO | 41 |
+
+`hatch40_chademo` stands for an older car with a passively cooled pack: its
+wear model has a stronger heat stress ($k_{heat}$ 0.06 from 25 °C instead
+of 0.03 from 30 °C); the power drop after repeated fast charges on a hot
+pack is not modelled.
