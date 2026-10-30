@@ -430,7 +430,7 @@ def vehicle_meta(key: str) -> dict[str, Any]:
     for name, obj, attr in (("battery_kwh", v, "battery_kwh"), ("usable_kwh", v, "usable_capacity_kwh"),
                             ("dc_peak_kw", v, "dc_peak_kw")):  # effective: capped at dc_max_kw
         val = value(obj, attr) if obj is not None else None
-        if val is not None:
+        if val is not None and not (name == "dc_peak_kw" and val <= 0.0):  # no DC inlet: no DC figure
             out[name] = val
     return out
 

@@ -6,15 +6,18 @@ per cent of the public charge points.  Operators keep the complete and live
 picture, and the adapters of this module turn the formats they publish into
 :class:`~evroute.scenario.Station` lists for any network:
 
-=====================  ==============================================================
-:func:`stations_from_csv`   a documented generic table (your own survey, an export)
-:func:`stations_from_ocpi`  OCPI 2.2.1 ``Location`` objects -- the roaming standard
-                            operators speak -- with a **live availability snapshot**
-                            of the EVSEs, optionally priced by OCPI ``Tariff`` objects
-:func:`stations_from_ocm`   Open Charge Map POIs (the JSON of its public API)
-:func:`load_stations`       one of the three from a file (format detected)
-:func:`with_stations`       a scenario with the imported stations instead of its own
-=====================  ==============================================================
+:func:`stations_from_csv`
+    a documented generic table (:data:`CSV_COLUMNS`: your own survey, an export);
+:func:`stations_from_ocpi`
+    OCPI 2.2.1 ``Location`` objects -- the roaming standard operators speak --
+    with a **live availability snapshot** of the EVSEs, optionally priced by
+    OCPI ``Tariff`` objects;
+:func:`stations_from_ocm`
+    Open Charge Map POIs (the JSON of its public API);
+:func:`load_stations`
+    one of the three from a file (format detected);
+:func:`with_stations`
+    a scenario with the imported stations instead of its own.
 
 The library never goes online: fetch the data with the provider's API and
 your own credentials, save it, and hand the file or the parsed JSON to these
@@ -33,13 +36,14 @@ projection.  A synthetic network without coordinates takes positions in its
 own frame (CSV columns ``x``/``y`` in metres) or node ids (column ``node``).
 
 *One station per kind.*  The model charges at a station with one charging
-function (:attr:`~evroute.scenario.Station.kind` AC or DC), so a site with DC
-and AC charge points becomes two stations at the same node: a car without a
-DC inlet can still use the site's AC points.  ``power_kw`` is the largest
-power of the kind at the site, ``plugs`` the number of charge points that can
-serve a vehicle at the same time (OCPI: EVSEs in service; OCM: the
-``Quantity`` of the connections) and ``connectors`` the standards of that
-kind (:data:`evroute.vehicle.CONNECTORS`).
+function (:attr:`~evroute.scenario.Station.kind` AC or DC), so an OCPI
+location or an OCM POI with DC and AC charge points becomes two stations at
+the same node: a car without a DC inlet can still use the site's AC points.
+``power_kw`` is the largest power of the kind at the site, ``plugs`` the
+number of charge points that can serve a vehicle at the same time (OCPI:
+EVSEs in service; OCM: the ``Quantity`` of the connections) and
+``connectors`` the standards of that kind
+(:data:`evroute.vehicle.CONNECTORS`).  A CSV row is one station.
 
 *Prices.*  An explicit price wins (CSV ``price_per_kwh``, an OCPI tariff);
 otherwise the operator's verified AC/DC list price of the Turkish price
@@ -299,7 +303,7 @@ class _Prices:
         if operator_prices:
             for name in osm_turkey_prices()["operators"]:
                 self._known.append((_words(name), name))
-            self._known.sort(key=lambda kv: -len(kv[0]))  # the longest name first ("Shell Recharge" before "Shell")
+            self._known.sort(key=lambda kv: -len(kv[0]))  # the longest name first: it wins over a word of it
         self._cache: dict[str, str | None] = {}
 
     def operator_key(self, operator: str) -> str | None:
