@@ -500,10 +500,10 @@ does the copy.  So every exact planner stays exact with the rule, the heuristics
 simply raise their targets to the floor, and the independent evaluator
 reports any stop that breaks it.  Cars usually reach a stop near the
 reserve, so a floor of reserve + Δ behaves like "+Δ".  It is a level, not an
-amount: a car that arrives above the floor may still add a little (with a
-40 % floor, Karaman → Mersin stops at Ereğli with 33 % and charges to
-40 %), and a floor of 0 switches the rule off and gives exactly the plans
-of before.
+amount: a car that arrives just below the floor adds only what it takes to
+reach it (with a 40 % floor, Karaman → Mersin stops at Ereğli with 33 % and
+charges to 40 %), one that arrives above it may add any amount, and a floor
+of 0 switches the rule off and gives exactly the plans of before.
 
 *For experts:* the rule in [`model.md` §3](model.md#3-battery); Lemma 1F
 (the floor keeps monotonicity, and "+Δ" does not), the floor in BLS's
