@@ -354,10 +354,12 @@ def reaches(P: PreparedScenario, target: int) -> list[bool]:
 
 
 def min_stop_overhead_s(P: PreparedScenario) -> float:
-    """Smallest possible ``wait + setup`` of one charging stop [s] (0 without stations)."""
+    """Smallest possible ``wait + setup`` of one charging stop [s] at a station the
+    vehicle can use (0 without one)."""
     best = INF
     for s, prof in enumerate(P.wait_profiles):
-        best = min(best, P.setup_s[s] + max(0.0, min(prof.waits_s)))
+        if P.station_usable[s]:
+            best = min(best, P.setup_s[s] + max(0.0, min(prof.waits_s)))
     return 0.0 if best == INF else best
 
 
@@ -513,7 +515,7 @@ class AStarPotential:
         overhead = min_stop_overhead_s(P)
         stop = overhead if time_obj else P.vot_per_s * overhead
         r = P.e_charge_cap - min(P.e_min, P.e_init) + EPS
-        inv_r = 1.0 / r if r > 0.0 and P.stations else 0.0
+        inv_r = 1.0 / r if r > 0.0 and any(P.station_usable) else 0.0
         pot = cls(base, e_lin, rate, stop, e_basic, inv_r, name="tight coupled energy-deficit + stop count")
         pot.need = completion_energy(P, base, obj)
         return pot
@@ -1043,7 +1045,7 @@ def _label_search(
             # targets below the reserve lead to labels that can never move -- unless
             # another station of the node (or this one, in another price period)
             # can raise the energy further (module docs)
-            alone = len(station_at[P.stations[s].node]) <= 1 and not (money_td and P.price_changes[s])
+            alone = len(station_at.get(P.stations[s].node, ())) <= 1 and not (money_td and P.price_changes[s])
             JMIN.append(bisect_left(tg, emin_eps) if alone else 0)
     cf = P.cf
     cfp = P.cf_peak
@@ -1824,11 +1826,11 @@ def _infeasibility_reason(
     if P.e_init < P.e_min - EPS and not P.is_station_node[o]:
         return (
             f"initial energy {P.e_init:.2f} kWh is below the reserve {P.e_min:.2f} kWh "
-            "and there is no charging station at the origin"
+            "and there is no charging station at the origin that the vehicle can use"
         )
     msg = (
         f"no battery-feasible route from {o} to {d}: the charging infrastructure "
-        f"({len(P.stations)} station(s)) cannot bridge the energy gaps "
+        f"({P.stations_note()}) cannot bridge the energy gaps "
         f"(start {P.e_init:.2f} kWh, reserve {P.e_min:.2f} kWh, required on arrival "
         f"{P.e_dest_min:.2f} kWh, max charge {P.e_charge_cap:.2f} kWh)"
     )

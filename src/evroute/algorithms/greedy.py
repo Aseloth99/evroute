@@ -8,7 +8,8 @@ charging stop:
    the **fastest path to the destination**.  If the battery suffices (the
    reserve ``P.e_min`` holds at every node and the arrival requirement
    ``P.e_dest_min`` is met), drive it and stop.
-2. Otherwise consider every **not yet used** charging station that can be
+2. Otherwise consider every **not yet used** charging station with a
+   connector of the vehicle (``P.station_usable``) that can be
    reached from ``(v, x)`` without violating the reserve (the set comes from
    :func:`~evroute.algorithms.labels.fastest_feasible_tree`, which respects
    hills, regeneration and the speed levels) and pick the one that minimises
@@ -181,6 +182,7 @@ def run_greedy(
     w_fast = time_weights(P)
     lv_fast = fastest_levels(P)
     need = {dest: P.e_dest_min}
+    usable = P.station_usable  # stations without a connector of the vehicle are never candidates
     fast_cache: dict[int, tuple[list[int], list[int]] | None] = {}
     run = GreedyRun(ok=False)
 
@@ -266,7 +268,7 @@ def run_greedy(
             if finishing_leg(v, y, tree2, t) is not None:
                 return True, tree2
         for s2, st2 in enumerate(P.stations):
-            if s2 == s or s2 in used or st2.node == v:
+            if s2 == s or s2 in used or st2.node == v or not usable[s2]:
                 continue
             if station_record(tree2, st2.node, v, y, t) is not None and time_lb[st2.node] < INF:
                 return True, tree2
@@ -297,7 +299,7 @@ def run_greedy(
         # ------------------------------------------------ candidate stations
         cands: list[tuple[float, float, float, int, float, float, list[float], tuple]] = []
         for s, st in enumerate(P.stations):
-            if s in used or st.node == exclude_node:
+            if s in used or st.node == exclude_node or not usable[s]:
                 continue
             rec = station_record(tree, st.node, node, energy, t_now)
             lbv = time_lb[st.node]

@@ -44,6 +44,9 @@ from evroute.plan import ChargeDecision, PlanDecision
 from evroute.scenario import Conditions, Preferences, Query, Scenario, Station
 from evroute.vehicle import VEHICLES, ChargingCurve, get_vehicle
 
+#: vehicle presets of 0.x (the random instances stay those of earlier releases)
+_PRESETS_0X = ("city27", "compact50", "sedan75", "suv84_800v", "togg_t10x_lr", "van75")
+
 # ----------------------------------------------------------------------------
 # helpers
 # ----------------------------------------------------------------------------
@@ -829,7 +832,7 @@ def _stack_line(rng):
     rng.shuffle(chargers)
     reserve = rng.choice([0.0, 0.05, 0.1, 0.25])
     soc = rng.uniform(0.0, 0.4) if at_origin else rng.uniform(reserve + 0.05, 0.5)
-    veh = get_vehicle(rng.choice(sorted(VEHICLES)))
+    veh = get_vehicle(rng.choice(sorted(k for k in VEHICLES if k in _PRESETS_0X)))  # the instances of 0.x
     if rng.random() < 0.3:
         nb = rng.randint(2, 7)
         cuts = sorted(rng.sample(range(1, 20), nb - 1))

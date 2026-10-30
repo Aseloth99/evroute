@@ -785,7 +785,7 @@ def _pareto_search(
         # targets below the reserve lead to labels that can never move -- unless
         # another station of the node (or this one, in another price period) can
         # raise the energy further
-        alone = len(station_at[P.stations[s].node]) <= 1 and not (money_td and P.price_changes[s])
+        alone = len(station_at.get(P.stations[s].node, ())) <= 1 and not (money_td and P.price_changes[s])
         JMIN.append(bisect_left(tg, emin_eps) if alone else 0)
     cf = P.cf
     cfp = P.cf_peak
@@ -1365,11 +1365,11 @@ def _infeasibility_reason(
     if P.e_init < P.e_min - EPS and not P.is_station_node[o]:
         return (
             f"initial energy {P.e_init:.2f} kWh is below the reserve {P.e_min:.2f} kWh "
-            "and there is no charging station at the origin"
+            "and there is no charging station at the origin that the vehicle can use"
         )
     return (
         f"no battery-feasible route from {o} to {d}: the charging infrastructure "
-        f"({len(P.stations)} station(s)) cannot bridge the energy gaps "
+        f"({P.stations_note()}) cannot bridge the energy gaps "
         f"(start {P.e_init:.2f} kWh, reserve {P.e_min:.2f} kWh, required on arrival "
         f"{P.e_dest_min:.2f} kWh, max charge {P.e_charge_cap:.2f} kWh)"
     )

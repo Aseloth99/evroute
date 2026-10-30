@@ -7,7 +7,8 @@ charge along the exact charging function -- and records every quantity in a
 algorithm, so it doubles as the correctness oracle in the test-suite:
 
 * a plan is *feasible* iff it is a connected origin->destination path, every
-  charging stop is at a station on that path, the energy never drops below
+  charging stop is at a station on that path that the vehicle can plug into
+  (``PreparedScenario.station_usable``), the energy never drops below
   the reserve at any node, never exceeds the charging cap when charging, and
   the arrival energy meets the destination requirement -- each up to the
   float tolerance :data:`TOL_KWH`, which also applies to the empty battery
@@ -97,6 +98,12 @@ def evaluate(
         if not 0 <= c.station < len(P.stations) or P.stations[c.station].node != nodes[c.position]:
             violations.append(f"station {c.station} is not at path position {c.position}")
             continue
+        if not P.station_usable[c.station]:  # replayed anyway, so the plan's numbers stay meaningful
+            st = P.stations[c.station]
+            violations.append(
+                f"station {c.station} has no {st.kind} connector of the vehicle "
+                f"(station {'/'.join(st.sockets)}, vehicle {'/'.join(P.vehicle.connectors)})"
+            )
         by_pos.setdefault(c.position, []).append(c)
 
     # -------------------------------------------------------- replay
