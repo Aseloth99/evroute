@@ -2332,7 +2332,8 @@ def plot_charging_curves(
     are exact for the binned curve, ``sum(dSoC * battery / P)``; the shared
     legend below the panels reports the classic ``soc_from`` -> ``soc_to``
     charging time of each vehicle.  Both panels are
-    :func:`seaborn.lineplot` (colour = vehicle).
+    :func:`seaborn.lineplot` (colour = vehicle).  The curves are capped at a
+    vehicle's ``dc_max_kw``; vehicles without a DC inlet are left out.
     """
     vehicles = _vehicles(vehicle_or_keys)
     with style.paper():
@@ -2344,9 +2345,11 @@ def plot_charging_curves(
         steps: dict[str, list[Any]] = {"x": [], "y": [], "hue": []}
         ramps: dict[str, list[Any]] = {"x": [], "y": [], "hue": []}
         dots: dict[str, list[Any]] = {"x": [], "y": [], "hue": []}
-        for k, v in enumerate(vehicles):
-            breaks = list(v.dc_curve.soc_breaks)
-            powers = [min(p, station_kw) if station_kw else p for p in v.dc_curve.power_kw]
+        with_dc = [v for v in vehicles if getattr(v, "dc_capable", True)]  # a DC inlet
+        for k, v in enumerate(with_dc):
+            curve = getattr(v, "dc_curve_effective", v.dc_curve)  # capped at the vehicle's dc_max_kw
+            breaks = list(curve.soc_breaks)
+            powers = [min(p, station_kw) if station_kw else p for p in curve.power_kw]
             ts, ss, t_target = _soc_vs_minutes(v, powers, soc_from, soc_to)
             name = v.name + (f"  ({t_target:.0f} min)" if t_target is not None else "")
             names.append(name)

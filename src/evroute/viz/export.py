@@ -22,6 +22,14 @@ computed here, exactly, from the prepared scenario:
   instant of a stop (power is constant between breakpoints);
 * ``stations[s]["wait_profile"]`` -- the FIFO-safe expected-wait profile the
   planners used (:class:`~evroute.queueing.WaitProfile`);
+* ``stations[s]["connectors"]`` -- the station's connector standards
+  (:attr:`~evroute.scenario.Station.sockets`) and ``stations[s]["usable"]``
+  -- whether the scenario's vehicle can plug in there
+  (:attr:`~evroute.scenario.PreparedScenario.station_usable`; the planners
+  never stop where it is ``false``);
+* ``vehicles[]`` and ``scenario["vehicle"]`` -- battery, chemistry,
+  connectors, AC power and the *effective* DC peak ``dc_peak_kw`` (capped at
+  ``dc_max_kw``, 0 without a DC inlet);
 * with a charging tariff other than ``Tariff()`` only: ``scenario["tariff"]``
   (:meth:`~evroute.scenario.Tariff.to_dict`), and per station ``peak_s``
   (its peak period as clock intervals ``[a, b)`` in seconds of the day) and
@@ -420,9 +428,12 @@ def _scenario_block(scenario: Scenario, P: PreparedScenario) -> dict[str, Any]:
                 "name": veh.name,
                 "battery_kwh": veh.battery_kwh,
                 "capacity_kwh": round(P.capacity, 4),
-                "dc_peak_kw": round(veh.dc_curve.peak_kw, 1),
+                "dc_peak_kw": round(veh.dc_peak_kw, 1),
                 "ac_max_kw": veh.ac_max_kw,
                 "mass_kg": veh.mass_kg,
+                "chemistry": veh.chemistry,
+                "connectors": list(veh.connectors),
+                "dc_max_kw": veh.dc_max_kw,
             },
             "query": {
                 "origin": q.origin,
@@ -438,6 +449,22 @@ def _scenario_block(scenario: Scenario, P: PreparedScenario) -> dict[str, Any]:
             "meta": {k: v for k, v in meta.items() if k in (
                 "generator", "preset", "data_version", "seed", "disclaimer", "attribution", "licence")},
             "prepared": P.summary(),
+        }
+    )
+
+
+def _vehicle_entry(v: Any) -> dict[str, Any]:
+    """One entry of the payload's vehicle list (the pickers and the vehicle card)."""
+    return _clean(
+        {
+            "key": v.key,
+            "name": v.name,
+            "battery_kwh": v.battery_kwh,
+            "dc_peak_kw": round(v.dc_peak_kw, 1),
+            "ac_max_kw": v.ac_max_kw,
+            "chemistry": v.chemistry,
+            "connectors": list(v.connectors),
+            "notes": v.notes,
         }
     )
 
@@ -458,6 +485,8 @@ def _stations_block(P: PreparedScenario) -> list[dict[str, Any]]:
                 "operator": st.operator,
                 "setup_s": st.setup_s,
                 "wait_profile": P.wait_profiles[i].to_dict(),
+                "connectors": list(st.sockets),
+                "usable": P.station_usable[i],
             }
         )
         if P.tariff != Tariff():
@@ -492,7 +521,9 @@ def results_payload(
     ``{"scenario": ..., "results": [...], "wait_profiles": [...]}`` -- what
     the live server returns from ``POST /api/plan`` (the network and the
     station list stay in the page).  ``wait_profiles`` follow the station
-    order and change with ``queue_aware`` / ``time_dependent_waits``; with a
+    order and change with ``queue_aware`` / ``time_dependent_waits``;
+    ``station_usable`` (also in station order) tells which stations the
+    request's vehicle can plug into (it changes with the vehicle); with a
     charging tariff other than ``Tariff()``, ``station_tariffs`` lists the
     ``peak_s`` and ``price_factors`` of every station (they change with the
     tariff and the departure-independent busy hours).
@@ -509,6 +540,7 @@ def results_payload(
             for p in plans
         ],
         "wait_profiles": [_clean(prof.to_dict()) for prof in P.wait_profiles],
+        "station_usable": list(P.station_usable),
     }
     if P.tariff != Tariff():
         data["station_tariffs"] = _clean([_station_tariff(P, i) for i in range(len(P.stations))])
@@ -599,10 +631,7 @@ def viewer_payload(
             for p in plans
         ],
         "algorithms": _clean(algorithms),
-        "vehicles": [
-            {"key": v.key, "name": v.name, "battery_kwh": v.battery_kwh, "dc_peak_kw": round(v.dc_curve.peak_kw, 1)}
-            for v in VEHICLES.values()
-        ],
+        "vehicles": [_vehicle_entry(v) for v in VEHICLES.values()],
     }
     if extra:
         payload.update(_clean(dict(extra)))

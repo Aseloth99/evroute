@@ -428,7 +428,7 @@ def vehicle_meta(key: str) -> dict[str, Any]:
         return float(val) if _finite(val) else None
 
     for name, obj, attr in (("battery_kwh", v, "battery_kwh"), ("usable_kwh", v, "usable_capacity_kwh"),
-                            ("dc_peak_kw", getattr(v, "dc_curve", None), "peak_kw")):
+                            ("dc_peak_kw", v, "dc_peak_kw")):  # effective: capped at dc_max_kw
         val = value(obj, attr) if obj is not None else None
         if val is not None:
             out[name] = val
