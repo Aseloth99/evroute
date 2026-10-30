@@ -37,6 +37,11 @@ switches any tariff off; ``--high-soc``, ``--high-soc-factor``, ``--peak``,
 fields.  ``plan`` adds a ``hold`` column to its stop table when a stop waits
 for a cheaper price period, and a ``tariff`` column for a scenario with a
 tariff.
+
+``--min-stop-soc 0.4`` (a SoC fraction like ``--soc``, ``--reserve`` and
+``--arrive``) sets the minimum stop SoC of the floor rule: every charging stop
+ends at 40 % or above unless the vehicle arrives above it -- no "+2 %"
+top-ups; ``plan`` prints it under the stop table when it is on.
 """
 
 from __future__ import annotations
@@ -140,6 +145,8 @@ def _apply_overrides(sc, args: argparse.Namespace):
         p["reserve_soc"] = args.reserve
     if getattr(args, "arrive", None) is not None:
         p["min_arrival_soc"] = args.arrive
+    if getattr(args, "min_stop_soc", None) is not None:
+        p["min_stop_soc"] = args.min_stop_soc
     if getattr(args, "eco", False):
         p["speed_factors"] = (1.0, 0.9, 0.8)
     if getattr(args, "no_queue", False):
@@ -322,6 +329,10 @@ def _print_plan(plan, sc) -> None:
                   *(["tariff"] if tariff else []), "cost"]
         print(_table(rows, header, left=3))
     hold = f" | hold {format_duration(plan.hold_time_s)}" if plan.hold_time_s > 0.0 else ""
+    floor = sc.preferences.min_stop_soc
+    if floor > 0.0:  # floor rule (only shown when it is on)
+        print(f"minimum stop SoC {100 * min(floor, sc.preferences.max_charge_soc):.0f}% "
+              "(every stop ends there or above unless it starts above it)")
     print(
         f"arrival {format_clock(dep + plan.total_time_s)} | drive {format_duration(plan.drive_time_s)}"
         f" | charge {format_duration(plan.charge_time_s)} | queue+setup "
@@ -510,6 +521,9 @@ def _scenario_options(p: argparse.ArgumentParser) -> None:
     p.add_argument("--objective", choices=["time", "cost"])
     p.add_argument("--reserve", type=float, help="reserve SoC (0..1)")
     p.add_argument("--arrive", type=float, help="minimum arrival SoC (0..1)")
+    p.add_argument("--min-stop-soc", type=float, metavar="S",
+                   help="every charging stop ends at this SoC or above unless it starts above it, i.e. no "
+                        "'+2 %%' top-ups (0..1, capped at the charging cap; 0: off, the default)")
     p.add_argument("--eco", action="store_true", help="allow eco speeds (100/90/80 %%)")
     p.add_argument("--no-queue", action="store_true", help="ignore charging queues")
     p.add_argument("--step", type=float, help="charging-target grid step (SoC fraction)")

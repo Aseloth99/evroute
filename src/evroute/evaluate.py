@@ -8,8 +8,9 @@ algorithm, so it doubles as the correctness oracle in the test-suite:
 
 * a plan is *feasible* iff it is a connected origin->destination path, every
   charging stop is at a station on that path, the energy never drops below
-  the reserve at any node, never exceeds the charging cap when charging, and
-  the arrival energy meets the destination requirement -- each up to the
+  the reserve at any node, never exceeds the charging cap when charging,
+  every stop obeys the minimum stop SoC (the floor rule below), and the
+  arrival energy meets the destination requirement -- each up to the
   float tolerance :data:`TOL_KWH`, which also applies to the empty battery
   (the battery is empty when the energy falls below ``-TOL_KWH``);
 * the objective it reports must match the algorithm's internal objective.
@@ -24,7 +25,12 @@ Rules (shared with all algorithms):
   setup time, even if no energy is added;
 * the money of a stop is that of the station's price period at the time it
   joins the queue (:meth:`~evroute.scenario.PreparedScenario.money_cf`);
-* charging targets below the current energy add nothing.
+* charging targets below the current energy add nothing;
+* with a minimum stop SoC (``Preferences.min_stop_soc``, ``P.e_stop_min``
+  kWh) a stop that starts below that energy must end at it or above (the
+  *floor rule*; a stop that starts at or above it may add any amount); a stop
+  that starts *and* ends below it -- a "+2 %" top-up, or one that adds
+  nothing -- is a violation (both up to :data:`TOL_KWH`).
 """
 
 from __future__ import annotations
@@ -112,6 +118,8 @@ def evaluate(
     consumed = regen = charged = grid = money = soh_charge = 0.0
     drive_cost = 0.0
     stranded_at: float | None = None
+    # floor rule (Preferences.min_stop_soc): a stop that starts below the floor must end at it
+    floor_lim = P.e_stop_min - TOL_KWH if P.e_stop_min > 0.0 else -math.inf
 
     for i in range(n):
         v = nodes[i]
@@ -167,6 +175,11 @@ def evaluate(
                     hold_until_s=t if hold > 0.0 else None,
                 )
             )
+            if e_in < floor_lim and e_out < floor_lim:
+                violations.append(
+                    f"stop at station {s} (position {i}) ends at {e_out:.3f} kWh, below the minimum stop "
+                    f"energy {P.e_stop_min:.3f} kWh although it starts below it ({e_in:.3f} kWh)"
+                )
             t += w + su + ch
             hold_t += hold
             wait_t += w

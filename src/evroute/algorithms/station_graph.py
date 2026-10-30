@@ -14,7 +14,8 @@ Model
 =====
 
 Let ``T`` be the **charging target** (option ``charge_to_soc``, default 1.0,
-capped at ``P.e_charge_cap``).  *Every* stop charges to ``T``, so the vehicle
+capped at ``P.e_charge_cap`` and raised to the minimum stop energy
+``P.e_stop_min``, so every stop obeys the floor rule).  *Every* stop charges to ``T``, so the vehicle
 always departs from a station with exactly ``T`` kWh; it leaves the origin with
 ``P.e_init``.
 
@@ -312,6 +313,8 @@ class StationGraphPlanner(Planner):
             raise ValueError("detour_factor must be >= 1")
         widen = bool(opts.get("widen", True))
         target = min(frac * P.capacity, P.e_charge_cap)
+        if target < P.e_stop_min:  # floor rule: never stop for less than the minimum stop SoC
+            target = P.e_stop_min
         tr = SearchTrace() if trace else None
 
         meta = _MetaSearch(P, target, tr)

@@ -106,6 +106,56 @@ same tag ``s`` as ``B``'s child.  For ``y <= e_A`` ``A`` itself dominates
 kept a separate set for charged labels at multi-station nodes; they missed
 routes such as DC-then-AC at one node.)
 
+Minimum stop SoC (the floor rule)
+=================================
+
+Drivers do not stop for "+2 %": parking, plugging in and paying cost the
+same for a small top-up as for a real charge.  ``Preferences.min_stop_soc``
+gives the floor ``phi = P.e_stop_min`` (capped at ``e_charge_cap``; ``0``
+switches the rule off): *every stop ends at an energy of at least* ``phi``
+*unless the vehicle arrives there with at least* ``phi`` *already* (then any
+target above the arrival energy is allowed, as without the rule).  In the
+search a charge transition from ``e < phi`` only goes to targets ``y >=
+phi``; ``phi`` itself is a target (:func:`charging_targets`), so "charge
+exactly to the floor" is always an option.  Holds and the consecutive stops
+of a node obey the same test, which in practice binds only the first stop
+of a node visit: every stop ends at ``phi`` or above, so the next one
+starts there.  (Float tolerance: the search uses ``phi - EPS`` for both
+comparisons, i.e. exactly this rule for the floor ``phi - EPS``; the
+evaluator reports a stop that starts *and* ends below ``phi - TOL_KWH``.)
+
+A rule "add at least ``+D`` kWh per stop" would look more natural but breaks
+the dominance argument: a label with *more* energy would have to charge into
+a slower part of the curve and could end later than one with less energy.
+The floor keeps it:
+
+**Lemma F.**  Let ``A`` and ``B`` be labels at one node with ``t_A <= t_B``
+and ``e_A >= e_B`` (and ``m_A <= m_B`` or ``g_A <= g_B`` as in the rules
+above).  Every stop of ``B`` to a target ``y`` allowed by the floor rule is
+either unnecessary for ``A`` (``y <= e_A``: ``A`` itself dominates the
+child) or allowed for ``A`` as well, and ``A``'s stop to ``y`` ends no later
+and costs no more.
+
+*Proof.*  Let ``y > e_A``.  If ``e_A >= phi`` every target above ``e_A`` is
+allowed.  If ``e_A < phi`` then ``e_B <= e_A < phi``, so ``B``'s stop was
+forced and ``y >= phi``: allowed for ``A``.  The time ``t_A + w(t_A) + u +
+F_s(y) - F_s(e_A)`` is at most ``B``'s by FIFO and the monotonicity of
+``F_s``, and money and wear telescope the same way.  :math:`\square`
+
+So the dominance rules, the one-set-per-node argument (the parent ``C`` of
+a charged label ``A`` may charge directly to any ``y > e_A``: if ``e_C <
+phi`` then ``A``'s stop was forced, ``e_A >= phi`` and ``y > phi``) and the
+dominated-parent skip of :func:`_label_search` (an earlier parent with less
+energy may use every target the later one may use) stay exact.  The A*
+potentials, the completion energies and the upper bounds need no change:
+the potentials are lower bounds on a *relaxation* -- the problem without the
+floor -- and consistent on every transition of it, hence on the subset of
+transitions the floor allows; a label with enough energy to finish
+(:func:`completion_energy`) needs no further stop, and a route of the
+single-level search obeys the rule like every other route.  With ``phi =
+0`` the target sets and every comparison are those of the model without the
+rule, so the results are bit-identical.
+
 Charging tariffs
 ================
 
@@ -319,7 +369,9 @@ def charging_targets(P: PreparedScenario, station: int, mode: str = "grid+breaks
     the energies at which the charging power changes, where continuous
     optima like to stop.  Values are clamped to ``e_charge_cap`` (so that
     the evaluator charges exactly to them) and values closer than ``1e-9``
-    kWh to a smaller one are merged.
+    kWh to a smaller one are merged.  With a minimum stop SoC (``P.e_stop_min
+    > 0``, the floor rule of the module docs) the floor itself is a target in
+    both modes, unless a target within ``1e-9`` kWh of it is already present.
     """
     if mode not in TARGET_MODES:
         raise ValueError(f"unknown targets mode {mode!r}; choose from {TARGET_MODES}")
@@ -333,6 +385,13 @@ def charging_targets(P: PreparedScenario, station: int, mode: str = "grid+breaks
         if y <= 0.0 or (out and y - out[-1] <= EPS):
             continue
         out.append(y)
+    floor = P.e_stop_min
+    if floor > 0.0:
+        # floor rule (module docs): "charge exactly to the floor" is always an option,
+        # unless a target within EPS of it is already there (the set is unchanged then)
+        j = bisect_left(out, floor - EPS)
+        if j == len(out) or out[j] > floor + EPS:
+            out.insert(j, floor)
     return out
 
 
@@ -413,6 +472,11 @@ class AStarPotential:
     by at most ``r D`` and the stop term by at most ``sigma`` -- never more
     than the stop costs.  Every part is non-increasing in ``e``, and
     ``h(destination, e) = 0`` for ``e >= e_goal``.
+
+    *Minimum stop SoC.*  The floor rule (module docs) only removes charging
+    transitions, so every potential here -- built without it -- bounds a
+    relaxation: it stays admissible, and consistent on every transition that
+    remains.
     """
 
     __slots__ = ("base", "e_lin", "e_stop", "inv_r", "name", "need", "rate", "stop")
@@ -1025,6 +1089,10 @@ def _label_search(
     SY: list[list[float]] = []
     PHI: list[float] = []  # magnitude of the y-dependent part of a charged label (rounding margin)
     JMIN: list[int] = []
+    # floor rule (module docs): a stop that starts below ``floor_lim`` must end at a
+    # target with index >= JF[s] (the floor); ``-inf`` without a minimum stop SoC
+    JF: list[int] = []
+    floor_lim = P.e_stop_min - EPS if P.e_stop_min > 0.0 else -INF
     vot, wm, wd = P.vot_per_s, P.w_money, P.w_deg
     if allow_charging:
         for s in range(len(P.stations)):
@@ -1045,6 +1113,7 @@ def _label_search(
             # can raise the energy further (module docs)
             alone = len(station_at[P.stations[s].node]) <= 1 and not (money_td and P.price_changes[s])
             JMIN.append(bisect_left(tg, emin_eps) if alone else 0)
+            JF.append(bisect_left(tg, floor_lim) if floor_lim > -INF else 0)
     cf = P.cf
     cfp = P.cf_peak
     is_peak = P.is_peak
@@ -1264,6 +1333,8 @@ def _label_search(
                     j0 = bisect_right(tg, x + EPS)
                     if j0 < JMIN[s]:
                         j0 = JMIN[s]
+                    if x < floor_lim and j0 < JF[s]:
+                        j0 = JF[s]  # floor rule: end at the floor or above
                     if j0 >= L:
                         continue
                     f = cf[s]
@@ -1333,6 +1404,8 @@ def _label_search(
                 j0 = bisect_right(tg, x + EPS)
                 if j0 < JMIN[s]:
                     j0 = JMIN[s]
+                if x < floor_lim and j0 < JF[s]:
+                    j0 = JF[s]  # floor rule: end at the floor or above
                 if j0 >= L:
                     continue
                 f = cf[s]

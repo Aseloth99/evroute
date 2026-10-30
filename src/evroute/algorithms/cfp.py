@@ -186,6 +186,50 @@ labels whose energy is ``F_2^{-1}(t - kappa)`` with
 smaller or equal ``kappa`` dominates the later one outright.  Only candidates
 whose ``kappa`` strictly improves on all earlier ones are created.
 
+*The floor rule (minimum stop SoC).*  With ``phi = P.e_stop_min > 0``
+(``Preferences.min_stop_soc``, capped at ``cap``) a stop that starts below
+``phi`` must end at ``phi`` or above; one that starts at ``phi`` or above is
+free (the rule and the reason for a floor instead of "``+D`` kWh per stop":
+:mod:`evroute.algorithms.labels`, Lemma F).  A stop label at ``s2`` created at
+``tj`` with ``b = B(tj) < phi`` is *folded*: it starts at
+
+    ``b' = phi``,  ``t0' = t0 + F_2(phi) - F_2(b)``
+
+and its function for ``t >= t0'`` is unchanged (``x(t) = F_2^{-1}(F_2(b) + t -
+t0) = F_2^{-1}(F_2(b') + t - t0')``), so the label stands for exactly the
+stops that obey the rule; its parameters, keys, ``kappa`` and
+reconstruction are those of a label with ``b' = phi``.  A stop at a node that
+follows another stop there always starts at ``phi`` or above.  Two places
+use the folding explicitly: a folded label *has* charged at ``s`` at its own
+``t0'``, so its switch at ``t0'`` is not skipped (the skip "nothing charged at
+``s`` yet" refers to ``t0`` before folding), and sibling pruning stays exact
+because ``kappa`` does not change and ``t0' = max(t0, kappa + F_2(phi))`` is
+non-decreasing in ``tj`` like ``t0``.
+
+**Lemma 1F.**  The candidate set of Lemma 1 is still complete: for every leave
+time ``tau``, the best energy over all switch times that obey the floor rule
+is attained at a candidate (or by not stopping at ``s2``), and if no switch
+time obeys the rule, none at all does.
+
+*Proof.*  Switching at ``t`` with ``B(t) < phi`` is allowed iff the stop ends
+at ``phi`` or above, i.e. iff ``Phi(t) >= phi``; with ``B(t) >= phi`` it is
+always allowed and then ``Phi(t) >= B(t) >= phi`` (the vehicle charges until
+``tau``).  So the admissible switch times are exactly ``{t : Phi(t) >= phi}``,
+an upper level set of the very function Lemma 1 maximises.  If ``M = max
+Phi`` over all switch times is ``>= phi``, every maximiser is admissible and
+Lemma 1 puts one at a candidate (or at ``t = tau - w - u``, dominated by
+``L`` itself as before, which obeys the rule); if ``M < phi`` no switch time is
+admissible.  :math:`\square`
+
+In particular the earliest time ``T* = min_t T(t)``, ``T(t) = t + w(t) + u +
+F_2(phi) - F_2(B(t))``, at which the vehicle can leave with ``phi`` is reached
+by a candidate label (apply the lemma at ``tau = T*``): the "earliest route
+that leaves with exactly ``phi``" that dominates all others with that energy
+needs no candidate of its own (such as the time at which ``B`` crosses
+``phi``).  The test-suite checks the lemma against a dense scan, and the
+whole planner against an exact dynamic programme over stop sequences and
+breakpoint energies that includes ``phi``.
+
 4. Queue keys and dominance
 ===========================
 
@@ -300,13 +344,17 @@ other (the destination may host a faster station, or a detour may pay off).
 waits FIFO.  Then the incumbent at termination is the least trip time over all
 routes that are feasible in exact arithmetic, with arbitrary charging amounts
 ``<= cap`` (any number of consecutive stops at different stations of a node)
--- the routes the evaluator accepts, up to its float tolerance (see below).
+and, with a minimum stop SoC, every stop that starts below ``phi`` ending at
+``phi`` or above -- the routes the evaluator accepts, up to its float
+tolerance (see below).
 
 *Sketch.*  (i) The label function describes exactly the set of
 ``(time, energy)`` pairs of its route family, extension (section 2) and stops
 (section 3) map families to families, and by Lemma 1 the finitely many labels
 created at the candidate times have the same upper envelope as the continuum of
-all switch times, for every final time.  (ii) Everything is monotone (arriving
+all switch times, for every final time (Lemma 1F with the floor rule; the
+monotonicity in (ii) holds for it by Lemma F of
+:mod:`evroute.algorithms.labels`).  (ii) Everything is monotone (arriving
 earlier with more energy is never worse -- FIFO for the waits), so a label
 below the envelope of the settled labels of its node can be dropped together
 with all its descendants (section 4, with energies above ``need[v]``
@@ -1204,6 +1252,11 @@ def _search(
     wait_s = P.wait_s
     wconst = [wait_s(s, 0.0) for s in range(ns)] if static else [0.0] * ns
     dep = P.departure_s
+    # minimum stop SoC (section 3, "The floor rule"): a stop that starts below `phi` is
+    # folded so that its label starts at `phi`; F_s(phi) per station
+    phi = P.e_stop_min
+    floor_on = phi > 0.0
+    Fphi = [f(phi) for f in time_at] if floor_on else []
     up_energies: list[list[float]] = []
     knots: list[tuple[float, ...]] = []
     for s in range(ns):
@@ -1417,6 +1470,11 @@ def _search(
         if is_station[v]:
             last = s if charged else -1  # never the same station twice in a row
             mv = multi[v]
+            # switch times up to the start of charging at s add nothing at s (skipped
+            # below); with the floor rule a folded label starts later than that, at phi
+            t_skip = t0
+            if floor_on and charged:
+                t_skip = sw + ((wconst[s] if static else wait_s(s, sw)) + setup[s])
             for s2 in station_at[v]:
                 if s2 == last:
                     continue
@@ -1438,10 +1496,12 @@ def _search(
                     if bj >= blim:
                         break  # no energy may be added / none is needed any more
                     tj = cts[j]
-                    if charged and tj <= t0:
+                    if charged and tj <= t_skip:
                         # nothing charged at s yet: switching to s2 directly is no worse
                         continue
-                    below = bj < emin_eps  # (only at the origin)
+                    # floor rule: a stop that starts below phi charges to phi at least
+                    bn = phi if (floor_on and bj < phi) else bj
+                    below = bn < emin_eps  # (only at the origin)
                     if below and emin > cap_lim:
                         continue  # the reserve can never be reached
                     t0n = tj + ((wc if static else wait_s(s2, tj)) + su)
@@ -1451,10 +1511,15 @@ def _search(
                         pruned_kappa += 1
                         continue  # dominated by an earlier sibling
                     kmin = kap
+                    if bn != bj:
+                        # fold the mandatory part of the stop into the label: it starts at
+                        # (t0n + F2(phi) - F2(bj), phi) with the same function x(t) after that
+                        t0n = t0n + (Fphi[s2] - Fbn)
+                        Fbn = Fphi[s2]
                     if not below or mv:
                         # (an extended label below the reserve may switch again from t0n on)
                         tfn = t0n
-                        bf = bj
+                        bf = bn
                     else:  # below the reserve, no other station: charge up to it first
                         tfn = t0n + (F2(emin) - Fbn)
                         bf = emin
@@ -1462,7 +1527,7 @@ def _search(
                     if bounded:
                         kb = tfn + hfull(v, bf)
                         if use_stop:
-                            bmu = cap if cap >= bj else bj
+                            bmu = cap if cap >= bn else bn
                             if bmu > Q:
                                 bmu = Q
                             kb = key_min(v, kb, bf, bmu, t0n, F2, Fbn, 0.0)
@@ -1473,13 +1538,13 @@ def _search(
                         pruned_bound += 1
                         continue
                     if v == dest:
-                        ta = arrival_time(cf2, cap, t0n, Fbn, bj, emin, 0.0, Q, egoal, eps)
+                        ta = arrival_time(cf2, cap, t0n, Fbn, bn, emin, 0.0, Q, egoal, eps)
                         if ta < best:
                             best = ta
                             best_rec = (t0n, Fbn, s2, i_new, -2 - s2, tj)
                             if kb >= best:
                                 continue
-                    push(heap, (kn, seq, v, s2, t0n, Fbn, bj, emin, 0.0, Q, i_new, -2 - s2, tj))
+                    push(heap, (kn, seq, v, s2, t0n, Fbn, bn, emin, 0.0, Q, i_new, -2 - s2, tj))
                     seq += 1
                     pushes += 1
                     station_labels += 1

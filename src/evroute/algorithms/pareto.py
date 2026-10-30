@@ -58,7 +58,12 @@ arrival time.  The stop rule is the one of BLS: a label created by a stop at
 ``s`` may stop again at any *other* station of ``v`` (e.g. fast DC, then
 cheap AC), never at ``s`` itself right away (the first stop could have
 charged further for less); a stop may end below the reserve at a node with
-several stations, since only another stop can follow it there.
+several stations, since only another stop can follow it there.  With a
+minimum stop SoC (``P.e_stop_min > 0``) a stop that starts below that floor
+only goes to targets at or above it (the floor rule and its Lemma F in
+:mod:`evroute.algorithms.labels`); the lemma covers money and wear as well,
+so the dominance below stays exact, and the completion bounds, computed
+without the rule, bound a relaxation.
 
 Dominance
 =========
@@ -773,6 +778,10 @@ def _pareto_search(
     MYP: list[list[float]] = []  # money at the targets in the peak period (money_td)
     SY: list[list[float]] = []
     JMIN: list[int] = []
+    # floor rule (as in BLS): a stop that starts below ``floor_lim`` ends at the target
+    # with index JF[s] (the floor) or above; ``-inf`` without a minimum stop SoC
+    JF: list[int] = []
+    floor_lim = P.e_stop_min - EPS if P.e_stop_min > 0.0 else -INF
     for s in range(len(P.stations)):
         f = P.cf[s]
         tg = charging_targets(P, s, targets)
@@ -787,6 +796,7 @@ def _pareto_search(
         # raise the energy further
         alone = len(station_at[P.stations[s].node]) <= 1 and not (money_td and P.price_changes[s])
         JMIN.append(bisect_left(tg, emin_eps) if alone else 0)
+        JF.append(bisect_left(tg, floor_lim) if floor_lim > -INF else 0)
     cf = P.cf
     cfp = P.cf_peak
     setup = P.setup_s
@@ -994,6 +1004,8 @@ def _pareto_search(
                     j0 = bisect_right(tg, x + EPS)
                     if j0 < JMIN[s]:
                         j0 = JMIN[s]
+                    if x < floor_lim and j0 < JF[s]:
+                        j0 = JF[s]  # floor rule: end at the floor or above
                     if j0 >= L:
                         continue
                     f = cf[s]
@@ -1066,6 +1078,8 @@ def _pareto_search(
                 j0 = bisect_right(tg, x + EPS)
                 if j0 < JMIN[s]:
                     j0 = JMIN[s]
+                if x < floor_lim and j0 < JF[s]:
+                    j0 = JF[s]  # floor rule: end at the floor or above
                 if j0 >= L:
                     continue
                 f = cf[s]

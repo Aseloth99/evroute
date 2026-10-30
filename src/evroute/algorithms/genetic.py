@@ -24,7 +24,8 @@ The decoder turns a chromosome into a :class:`~evroute.plan.PlanDecision`:
   levels, battery-unaware).  Legs are computed lazily by Dijkstra and cached
   per ``(u, v)`` node pair;
 * at station ``s_i`` the vehicle charges to
-  ``max(target_i, just_enough_i)`` capped at ``P.e_charge_cap``, where
+  ``max(target_i, just_enough_i)`` capped at ``P.e_charge_cap`` and raised to
+  the minimum stop energy ``P.e_stop_min`` (floor rule), where
   ``just_enough_i`` is the smallest departure energy for which the next leg
   keeps the reserve at every node (and, on the last leg, meets the arrival
   requirement).  It is obtained exactly from the leg's *energy profile*
@@ -280,6 +281,7 @@ class _Problem:
                 return None
             legs.append(lg)
         cap, cap_e = P.capacity, P.e_charge_cap
+        floor = P.e_stop_min  # (<= cap_e)
         x = P.e_init
         edges: list[int] = []
         levels: list[int] = []
@@ -289,6 +291,8 @@ class _Problem:
                 s, soc = genes[i - 1]
                 need = lg.need_last if i == k else lg.need
                 y = min(cap_e, max(soc * cap, need))
+                if y < floor:  # floor rule: never stop for less than the minimum stop SoC
+                    y = floor
                 if y > x + _MIN_ADD_KWH:
                     charges.append(ChargeDecision(len(edges), s, y))
                     x = y
