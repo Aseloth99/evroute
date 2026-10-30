@@ -346,25 +346,36 @@ def test_osm_stations_stay_usable_for_the_default_vehicles():
 
 
 # ====================================================================== exactness on the new presets
-@pytest.mark.parametrize("seed", range(6))
-def test_exact_planners_agree_on_the_new_presets(seed):
-    rng = random.Random(seed)
-    key = NEW_PRESETS[seed % len(NEW_PRESETS)]
-    veh = get_vehicle(key)
-    if rng.random() < 0.6 and veh.dc_capable:
-        veh = veh.with_(dc_max_kw=round(rng.uniform(25.0, veh.dc_peak_kw), 1))
-    sc = _mixed_instance(seed, "compact50").with_(vehicle=veh)
-    sc = sc.with_preferences(objective=rng.choice(["time", "cost"]), charge_step_soc=0.05,
-                             time_dependent_waits=rng.random() < 0.5)
-    sc = sc.with_conditions(temperature_c=rng.choice([-8.0, 5.0, 20.0]), preconditioning=rng.random() < 0.5)
-    plans = {a: plan(sc, a) for a in ("bls", "bls-astar", "cfp", "cfp-astar", "pareto")}
-    for a, p in plans.items():
-        assert p.feasible, (a, p.message)
-        assert check_objective(p), a
-    assert plans["bls-astar"].objective_value == pytest.approx(plans["bls"].objective_value, rel=1e-9, abs=1e-6)
-    if sc.preferences.objective == "time":
-        assert plans["cfp-astar"].total_time_s == pytest.approx(plans["cfp"].total_time_s, rel=1e-9, abs=1e-6)
-        assert plans["cfp"].total_time_s <= plans["bls"].total_time_s + 1e-6
+def test_exact_planners_agree_on_the_new_presets():
+    """BLS = BLS-A*, CFP = CFP-A*, CFP <= BLS (time objective), Pareto and the evaluator agree:
+    LFP curves, DC limits, an AC-only and a CHAdeMO car on stations of mixed connectors."""
+    stops = 0
+    for seed in range(15):
+        rng = random.Random(seed)
+        key = NEW_PRESETS[seed % len(NEW_PRESETS)]
+        veh = get_vehicle(key)
+        if rng.random() < 0.6 and veh.dc_capable:
+            veh = veh.with_(dc_max_kw=round(rng.uniform(25.0, veh.dc_peak_kw), 1))
+        soc = 0.35 if key == "city23_ac" else round(rng.uniform(0.14, 0.22), 3)
+        sc = _mixed_instance(seed, "compact50").with_(vehicle=veh).with_query(initial_soc=soc)
+        sc = sc.with_preferences(objective=rng.choice(["time", "cost"]), charge_step_soc=0.05,
+                                 time_dependent_waits=rng.random() < 0.5)
+        sc = sc.with_conditions(temperature_c=rng.choice([-8.0, 5.0, 20.0]), preconditioning=rng.random() < 0.5)
+        plans = {a: plan(sc, a) for a in ("bls", "bls-astar", "cfp", "cfp-astar", "pareto")}
+        if not plans["cfp"].feasible:  # the continuous optimum: then no planner may find a route
+            assert not any(p.feasible for p in plans.values()), seed
+            continue
+        for a, p in plans.items():
+            assert p.feasible, (seed, a, p.message)
+            assert check_objective(p), (seed, a)
+            assert all(sc.prepare().station_usable[s.station] for s in p.stops)
+        assert plans["bls-astar"].objective_value == pytest.approx(plans["bls"].objective_value, rel=1e-9, abs=1e-6)
+        assert plans["pareto"].objective_value <= plans["bls"].objective_value + 1e-6
+        if sc.preferences.objective == "time":
+            assert plans["cfp-astar"].total_time_s == pytest.approx(plans["cfp"].total_time_s, rel=1e-9, abs=1e-6)
+            assert plans["cfp"].total_time_s <= plans["bls"].total_time_s + 1e-6
+        stops += bool(plans["bls"].stops)
+    assert stops >= 10
 
 
 # ====================================================================== JSON
