@@ -227,6 +227,9 @@ class TariffOracle:
         for y in sorted(vals):
             if y > 0 and not (out and y - out[-1] <= EPS):
                 out.append(y)
+        floor = P0.e_stop_min  # minimum stop SoC: the floor is a target too
+        if floor > 0.0 and not any(abs(y - floor) <= EPS for y in out):
+            out = sorted(out + [floor])
         return out
 
     # ------------------------------------------------------------- replay
@@ -258,6 +261,8 @@ class TariffOracle:
                 if c.target_kwh > P0.e_charge_cap + TOL_KWH:
                     ok = False
                 y = max(e, min(c.target_kwh, P0.e_charge_cap))
+                if P0.e_stop_min > 0.0 and max(e, y) < P0.e_stop_min - TOL_KWH:
+                    ok = False  # the floor rule: a stop that starts below the floor ends at it
                 hu = c.hold_until_s
                 if hu is not None and not math.isfinite(hu):
                     return False, INF, INF, INF, []
@@ -902,6 +907,7 @@ def brute_force(P: PreparedScenario, orc: TariffOracle, *, max_visits: int = 2, 
     any target of the oracle's target set, joining the queue at once or after a hold until
     each price change in ``(t, t + 24 h]`` (:meth:`TariffOracle.hold_times`) and, with
     ``grid_s``, until every multiple of ``grid_s`` seconds after the arrival up to 24 h.
+    With a minimum stop SoC a stop that starts below the floor ends at it or above.
 
     A partial route is only cut by lower bounds of its completions: at least the least
     remaining driving time, and the energy it still lacks (least remaining consumption plus
@@ -932,6 +938,7 @@ def brute_force(P: PreparedScenario, orc: TariffOracle, *, max_visits: int = 2, 
     rw = min((x[2] for x in per), default=INF)
     rg = min((vot * x[0] + wm * x[1] + wd * x[2] for x in per), default=INF)
     grid = [k * grid_s for k in range(1, int(DAY / grid_s) + 1)] if grid_s else []
+    floor = P0.e_stop_min - EPS if P0.e_stop_min > 0.0 else -INF  # minimum stop SoC (floor rule)
     visits = [0] * net.num_nodes
     visits[P0.origin] = 1
     best: list[Any] = [INF if bound is None else bound, None]
@@ -994,7 +1001,8 @@ def brute_force(P: PreparedScenario, orc: TariffOracle, *, max_visits: int = 2, 
                     pk = orc.peak(s, tj)
                     for j, y in enumerate(tg[s]):
                         # a stop may end below the reserve only if another stop can follow
-                        if y > e + EPS and (y >= P0.e_min - EPS or here + 1 < stops_per_visit):
+                        if y > e + EPS and (y >= P0.e_min - EPS or here + 1 < stops_per_visit) and (
+                                e >= floor or y >= floor):
                             rec(v, tj + (ws + (TY[s][j] - fx)), m + orc.money(s, pk, e, y), w + (SY[s][j] - sx), y,
                                 edges, levels, charges + [(len(edges), s, y, tj if tj > t else None)], here + 1)
 

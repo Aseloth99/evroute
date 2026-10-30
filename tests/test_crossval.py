@@ -1363,7 +1363,8 @@ def check_local_optimality(tally: Tally, P: PreparedScenario, plan: RoutePlan, n
 # I9: brute force on tiny digraphs
 # =============================================================================
 def _oracle_targets(P: PreparedScenario, s: int) -> list[float]:
-    """Target set re-derived from the scenario (``grid+breaks``), not from the planner code."""
+    """Target set re-derived from the scenario (``grid+breaks``), not from the planner code
+    (with a minimum stop SoC: plus the floor, unless a target within 1e-9 kWh of it exists)."""
     cap = P.e_charge_cap
     vals = [min(y, cap) for y in P.target_grid if y <= cap + 1e-9]
     vals += [b for b in P.cf[s].e_breaks[1:-1] if b <= cap]
@@ -1371,6 +1372,9 @@ def _oracle_targets(P: PreparedScenario, s: int) -> list[float]:
     for y in sorted(vals):
         if y > 0 and not (out and y - out[-1] <= 1e-9):
             out.append(y)
+    floor = P.e_stop_min
+    if floor > 0.0 and not any(abs(y - floor) <= 1e-9 for y in out):
+        out = sorted(out + [floor])
     return out
 
 
@@ -1385,8 +1389,10 @@ def brute_force(P: PreparedScenario, max_visits: int = 2, max_steps: int = 400_0
     than ``max_steps`` steps.  The only pruning: a partial route whose
     ``(t, money, wear)`` is weakly dominated by a complete route is dropped
     (every transition increases ``t`` strictly and never decreases money or
-    wear, and both objectives are monotone in the three criteria)."""
+    wear, and both objectives are monotone in the three criteria).  With a minimum stop SoC
+    (``P.e_stop_min > 0``) a stop that starts below it ends at it or above (the floor rule)."""
     net = P.net
+    floor = P.e_stop_min - 1e-9 if P.e_stop_min > 0.0 else -INF
     time_obj = P.objective == "time"
     tg = {s: _oracle_targets(P, s) for s in range(len(P.stations))}
     visits = [0] * net.num_nodes
@@ -1421,7 +1427,7 @@ def brute_force(P: PreparedScenario, max_visits: int = 2, max_steps: int = 400_0
                     continue
                 f = P.cf[s]
                 for y in tg[s]:
-                    if y > e + eps and (low_ok or y >= P.e_min - eps):
+                    if y > e + eps and (low_ok or y >= P.e_min - eps) and (e >= floor or y >= floor):
                         wt = P.wait_s(s, t)
                         ch = f.time_at(y) - f.time_at(e)
                         rec(v, t + (wt + P.setup_s[s] + ch), g + P.charge_cost(s, e, y, ch, wt),

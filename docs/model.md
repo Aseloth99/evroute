@@ -13,6 +13,7 @@ and simplify the rest away:
 |---|---|---|---|
 | Nonlinear charging | power drops sharply above ~50-80 % SoC | constant power | exact piecewise-linear charging functions per vehicle × charger |
 | Partial charging | stop at 54 %, not at 100 % | always charge to full / fixed target | continuous amounts (CFP) or a fine target grid (BLS) |
+| Worthwhile stops | nobody parks and plugs in for +2 % | any amount, however small | optional minimum stop SoC (a floor every stop reaches), exact in every planner |
 | Queues | 20-40 min at busy service areas in the afternoon | no waiting | Erlang-C M/M/c queues with hourly demand, time-dependent and FIFO-safe |
 | Terrain and regeneration | descents refill the battery | flat roads | physics model with grade, wind, stop-and-go, regeneration limit, full-battery clamp |
 | Temperature | −5 °C: smaller battery, heating, slower charging | 20 °C | usable capacity, HVAC load, cold-charging derating, preconditioning |
@@ -32,7 +33,8 @@ The model in one screen; the sections below state each part exactly.
   regeneration with efficiency and power limit; regeneration into a full
   battery is lost. Optional speed levels (e.g. 100/90/80 %).
 - **Battery** ([§3](#3-battery)) - usable capacity shrinks in the cold;
-  reserve SoC at every node, minimum arrival SoC, maximum charging SoC.
+  reserve SoC at every node, minimum arrival SoC, maximum charging SoC,
+  optional minimum stop SoC (no "+2 %" top-ups).
 - **Charging** ([§4](#4-charging)) - vehicle charging curves
   (piecewise-constant power over SoC bins) capped by the charger power, DC
   power derated for a cold battery without preconditioning → exact,
@@ -122,6 +124,31 @@ applies between consecutive stops at one node, so with several stations at
 the origin a stop may also end below the reserve when another stop follows
 (at every other node the arrival state already satisfies the reserve).  The
 departure state at the origin must satisfy it again.
+
+**Minimum stop SoC (the floor rule).**  Stopping costs parking, plugging in,
+the queue and the set-up time whatever the amount, so drivers do not stop for
+"+2 %": they charge at least to some comfortable level, or to well above the
+reserve when they are in a hurry.  `Preferences.min_stop_soc` $= \psi$ (default
+0: off) sets the floor $\varphi = \min(\psi, \mu)\,Q$ (`P.e_stop_min`).  A
+charging stop that starts at energy $x$ and ends at $y$ must satisfy
+
+$$ x \ge \varphi \quad\text{or}\quad y \ge \varphi : $$
+
+a stop that starts below the floor ends at it or above, and one that starts at
+or above it may add any amount (as without the rule).  A stop that starts below
+the floor and adds nothing is a violation too.  For consecutive stops at one
+node $x$ is the energy after the previous stop, so the rule binds only the
+first one.  Vehicles usually reach a stop near the reserve, so a floor of
+reserve + $\Delta$ means "charge at least about $\Delta$" (e.g. reserve + 10 %
+in a hurry, + 30-40 % otherwise).  Why a floor and not "add at least $\Delta$
+per stop": charging is slower at high SoC, so under a "$+\Delta$" rule a
+vehicle with *more* energy could be forced into a *longer* stop than one with
+less, and "more energy and no later" would no longer be better -- the property
+every exact planner relies on.  The floor keeps it (Lemma 1F in
+[`algorithms.md` §1](algorithms.md#1-the-battery-expanded-state-space)): BLS,
+Pareto and CFP stay exact with the rule, the heuristics raise every target to
+the floor, and `evaluate()` reports a stop that starts and ends below $\varphi$
+(up to `TOL_KWH`).  CLI: `--min-stop-soc`; API: `min_stop_soc`.
 
 ## 4. Charging
 
