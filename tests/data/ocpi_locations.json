@@ -1,0 +1,63 @@
+{
+  "status_code": 1000,
+  "status_message": "Success",
+  "timestamp": "2026-10-30T09:00:00Z",
+  "data": [
+    {
+      "country_code": "TR", "party_id": "ZES", "id": "LOC-1", "publish": true,
+      "name": "Fixture site near Çumra", "address": "Test road 1", "city": "Çumra", "country": "TUR",
+      "coordinates": {"latitude": "37.485500", "longitude": "32.704000"},
+      "operator": {"name": "ZES"},
+      "evses": [
+        {"uid": "E1", "evse_id": "TR*ZES*E1", "status": "AVAILABLE",
+         "connectors": [{"id": "1", "standard": "IEC_62196_T2_COMBO", "format": "CABLE", "power_type": "DC",
+                         "max_voltage": 920, "max_amperage": 400, "max_electric_power": 180000, "tariff_ids": ["T-DC"]}]},
+        {"uid": "E2", "evse_id": "TR*ZES*E2", "status": "CHARGING",
+         "connectors": [{"id": "1", "standard": "IEC_62196_T2_COMBO", "format": "CABLE", "power_type": "DC",
+                         "max_voltage": 920, "max_amperage": 400, "max_electric_power": 180000, "tariff_ids": ["T-DC"]},
+                        {"id": "2", "standard": "CHADEMO", "format": "CABLE", "power_type": "DC",
+                         "max_voltage": 500, "max_amperage": 125, "max_electric_power": 50000, "tariff_ids": ["T-DC"]}]},
+        {"uid": "E3", "evse_id": "TR*ZES*E3", "status": "OUTOFORDER",
+         "connectors": [{"id": "1", "standard": "IEC_62196_T2_COMBO", "format": "CABLE", "power_type": "DC",
+                         "max_voltage": 920, "max_amperage": 400, "max_electric_power": 180000}]},
+        {"uid": "E4", "evse_id": "TR*ZES*E4", "status": "AVAILABLE",
+         "connectors": [{"id": "1", "standard": "IEC_62196_T2", "format": "SOCKET", "power_type": "AC_3_PHASE",
+                         "max_voltage": 230, "max_amperage": 32, "tariff_ids": ["T-AC"]}]},
+        {"uid": "E5", "evse_id": "TR*ZES*E5", "status": "REMOVED",
+         "connectors": [{"id": "1", "standard": "IEC_62196_T2", "format": "SOCKET", "power_type": "AC_3_PHASE",
+                         "max_voltage": 230, "max_amperage": 32}]}
+      ],
+      "time_zone": "Europe/Istanbul", "last_updated": "2026-10-30T08:59:00Z"
+    },
+    {
+      "country_code": "TR", "party_id": "ZES", "id": "LOC-2", "publish": false,
+      "name": "Fixture private depot", "coordinates": {"latitude": "37.4860", "longitude": "32.7050"},
+      "evses": [{"uid": "P1", "status": "AVAILABLE",
+                 "connectors": [{"id": "1", "standard": "IEC_62196_T2_COMBO", "power_type": "DC", "max_electric_power": 50000}]}],
+      "last_updated": "2026-10-30T08:00:00Z"
+    },
+    {
+      "country_code": "TR", "party_id": "ZES", "id": "LOC-3", "publish": true,
+      "name": "Fixture site at sea", "coordinates": {"latitude": "35.0", "longitude": "33.0"},
+      "evses": [{"uid": "S1", "status": "AVAILABLE",
+                 "connectors": [{"id": "1", "standard": "IEC_62196_T2_COMBO", "power_type": "DC", "max_electric_power": 150000}]}],
+      "last_updated": "2026-10-30T08:00:00Z"
+    },
+    {
+      "country_code": "TR", "party_id": "XYZ", "id": "LOC-4", "publish": true,
+      "name": "Fixture household socket", "coordinates": {"latitude": "37.2598", "longitude": "32.9229"},
+      "evses": [{"uid": "H1", "status": "AVAILABLE",
+                 "connectors": [{"id": "1", "standard": "DOMESTIC_F", "power_type": "AC_1_PHASE",
+                                 "max_voltage": 230, "max_amperage": 16}]}],
+      "last_updated": "2026-10-30T08:00:00Z"
+    },
+    {
+      "country_code": "TR", "party_id": "TRG", "id": "LOC-5", "publish": true,
+      "name": "Fixture DC point", "coordinates": {"latitude": "37.2595", "longitude": "32.9225"},
+      "operator": {"name": "Trugo"},
+      "evses": [{"uid": "T1", "evse_id": "TR*TRG*T1", "status": "UNKNOWN",
+                 "connectors": [{"id": "1", "standard": "IEC_62196_T2_COMBO", "format": "CABLE", "power_type": "DC"}]}],
+      "last_updated": "2026-10-30T07:30:00Z"
+    }
+  ]
+}

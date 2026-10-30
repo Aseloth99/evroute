@@ -8,6 +8,8 @@ Examples::
     evroute plan turkey-karaman-istanbul --depart 14:00 --tariff 80 --objective cost
     evroute plan turkey-karaman-istanbul --peak 16-20 --peak-factor 1.2 --high-soc-factor 1.5
     evroute plan turkey-osm-karaman-istanbul --stations hybrid --from Konya
+    evroute plan turkey-osm-karaman-konya --stations-file locations.json --vehicle hatch51_lfp
+    evroute plan turkey-karaman-istanbul --vehicle hatch40_chademo --dc-max-kw 40
     evroute compare turkey-antalya-ankara --temp -5
     evroute viz turkey-karaman-istanbul -o karaman-istanbul.html
     evroute viz corridor -o corridor.html --no-animate --lang en
@@ -20,7 +22,11 @@ Examples::
 Commands that take a scenario accept a preset name or the path of a scenario
 ``.json`` file; ``serve`` takes preset names only.  ``--stations osm |
 synthetic | hybrid`` selects the charging stations of the real-data
-``turkey-osm-*`` presets (:mod:`evroute.generators.osm_turkey`).  On a
+``turkey-osm-*`` presets (:mod:`evroute.generators.osm_turkey`);
+``--stations-file FILE [--stations-format csv|ocpi|ocm]`` replaces the
+stations of any scenario by an operator or open-data file
+(:mod:`evroute.station_sources`), and ``--dc-max-kw KW`` caps the vehicle's
+DC charging power.  On a
 network of more than 20 000 nodes ``--algorithms all`` (``compare``, ``viz``,
 ``figures``) leaves out ``bls``, ``cfp`` and ``pareto``, which settle
 millions of labels there without the A* potential, and ``station-graph``,
@@ -90,6 +96,10 @@ def _load_scenario(args: argparse.Namespace):
             raise UsageError(exc.args[0]) from None
     if getattr(args, "stations", None) is not None and name.endswith(".json"):
         raise UsageError("--stations applies to the turkey-osm presets only, not to a scenario file")
+    if getattr(args, "stations_file", None):
+        if getattr(args, "stations", None) is not None:
+            raise UsageError("--stations and --stations-file exclude each other")
+        sc = _import_stations(sc, args.stations_file, getattr(args, "stations_format", None) or "auto")
     sc = _apply_overrides(sc, args)
     try:
         sc.validate()
@@ -98,6 +108,25 @@ def _load_scenario(args: argparse.Namespace):
     if sc.query.origin == sc.query.destination:
         raise UsageError("origin and destination must differ")
     return sc
+
+
+def _import_stations(sc, path: str, fmt: str):
+    """The scenario with the stations of ``path`` (:func:`evroute.station_sources.load_stations`)."""
+    from .station_sources import load_stations, with_stations
+
+    if not Path(path).is_file():
+        raise UsageError(f"no stations file {path}")
+    try:
+        imported = load_stations(path, sc.network, fmt)
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        raise UsageError(f"cannot import stations from {path}: {exc}") from None
+    s = imported.summary()
+    skipped = ", ".join(f"{n} {r}" for r, n in s["skipped_by_reason"].items())
+    print(f"stations: {s['stations']} from {path} ({imported.source}: {s['dc']} DC, {s['ac']} AC"
+          + (f"; skipped {skipped}" if skipped else "") + ")", file=sys.stderr)
+    if not imported.stations:
+        raise UsageError(f"no station of {path} could be imported")
+    return with_stations(sc, imported, label=f"file:{Path(path).name}")
 
 
 def _node(sc, value: str) -> int:
@@ -164,6 +193,11 @@ def _apply_overrides(sc, args: argparse.Namespace):
             sc = sc.with_(vehicle=get_vehicle(args.vehicle))
         except KeyError as exc:
             raise UsageError(exc.args[0]) from None
+    if getattr(args, "dc_max_kw", None) is not None:
+        try:
+            sc = sc.with_(vehicle=sc.vehicle.with_(dc_max_kw=args.dc_max_kw))
+        except ValueError as exc:
+            raise UsageError(f"--dc-max-kw: {exc}") from None
     return _apply_tariff(sc, args)
 
 
@@ -531,6 +565,13 @@ def _scenario_options(p: argparse.ArgumentParser) -> None:
     p.add_argument("--stations", choices=["osm", "synthetic", "hybrid"],
                    help="turkey-osm presets: OSM charging stations, the synthetic case-study stations, or OSM "
                         "stations plus synthetic DC gap-fillers")
+    p.add_argument("--stations-file", metavar="FILE",
+                   help="replace the scenario's stations by those of FILE: the generic CSV schema, OCPI 2.2.1 "
+                        "Locations (JSON) or Open Charge Map POIs (JSON); see evroute.station_sources")
+    p.add_argument("--stations-format", choices=["auto", "csv", "ocpi", "ocm"], default="auto",
+                   help="format of --stations-file (default: from the file name and content)")
+    p.add_argument("--dc-max-kw", type=float, metavar="KW",
+                   help="cap the vehicle's DC charging power at KW (e.g. a car limited to 50 kW)")
     g = p.add_argument_group(
         "charging tariff",
         "Prices per kWh by state of charge and time of day; a factor multiplies the station price. "

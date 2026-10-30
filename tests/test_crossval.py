@@ -93,7 +93,10 @@ from evroute.scenario import Conditions, Preferences, PreparedScenario, Query, S
 from evroute.vehicle import VEHICLES, get_vehicle
 
 INF = math.inf
-VEHICLE_KEYS = sorted(VEHICLES)
+#: the presets of 0.x: the random instances stay those of earlier releases (the 1.0 presets --
+#: LFP, AC only, CHAdeMO -- are cross-validated in test_vehicles.py)
+VEHICLE_KEYS = sorted(k for k in VEHICLES if k in {"city27", "compact50", "sedan75", "suv84_800v", "togg_t10x_lr",
+                                                     "van75"})
 SPEED_SETS = ((1.0,), (1.0, 0.85), (1.0, 0.9, 0.8))
 STEPS = (0.01, 0.02, 0.025, 0.03, 0.04, 0.05, 0.07, 0.1)
 #: departure times near the demand peaks of the queue model and around midnight

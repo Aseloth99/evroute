@@ -15,7 +15,9 @@ data tool chain without importing it at package import time:
     elevations, and convert it.
 :func:`stations_from_csv`
     Read charging stations (``lat, lon, power_kw, kind, plugs, price, name``)
-    from a CSV file and snap each to the nearest network node.
+    from a CSV file and snap each to the nearest network node.  (The station
+    data adapters of :mod:`evroute.station_sources` also read connectors,
+    operator prices, OCPI and Open Charge Map data.)
 :func:`scenario_from_osm`
     Glue: network + stations + origin/destination coordinates -> Scenario.
 

@@ -20,7 +20,8 @@ always departs from a station with exactly ``T`` kWh; it leaves the origin with
 ``P.e_init``.
 
 *Meta nodes*: the origin ``o``, the destination ``d`` and every station ``j``
-inside the detour ellipse (below).  *Meta edges* ``a -> b``: the **fastest
+the vehicle can plug into (``P.station_usable``) inside the detour ellipse
+(below).  *Meta edges* ``a -> b``: the **fastest
 battery-feasible path** without charging from the node of ``a`` (departing with
 ``P.e_init`` or ``T``) to the node of ``b`` -- computed by one run of
 :func:`~evroute.algorithms.labels.fastest_feasible_tree` per meta node, which
@@ -120,23 +121,26 @@ __all__ = ["StationGraphPlanner", "detour_candidates"]
 
 
 def detour_candidates(P: PreparedScenario, factor: float) -> list[int]:
-    """Stations inside the detour ellipse of the origin-destination pair.
+    """Usable stations inside the detour ellipse of the origin-destination pair.
 
-    ``s`` qualifies iff ``|o s| + |s d| <= factor * |o d|`` (Euclidean
-    distances in projected metres).  With ``factor = inf``, or when origin and
-    destination (almost) coincide and the ellipse degenerates, every station
-    qualifies.
+    ``s`` qualifies iff the vehicle can plug in there (``P.station_usable``)
+    and ``|o s| + |s d| <= factor * |o d|`` (Euclidean distances in projected
+    metres).  With ``factor = inf``, or when origin and destination (almost)
+    coincide and the ellipse degenerates, every usable station qualifies.
     """
     net = P.net
     xs, ys = net.x, net.y
     o, d = P.origin, P.destination
+    usable = P.station_usable
     d_od = math.hypot(xs[d] - xs[o], ys[d] - ys[o])
     if factor == INF or d_od < 1.0:
-        return list(range(len(P.stations)))
+        return [s for s in range(len(P.stations)) if usable[s]]
     limit = factor * d_od + 1e-6
     out = []
     for s, st in enumerate(P.stations):
         v = st.node
+        if not usable[s]:
+            continue
         if math.hypot(xs[v] - xs[o], ys[v] - ys[o]) + math.hypot(xs[v] - xs[d], ys[v] - ys[d]) <= limit:
             out.append(s)
     return out
@@ -336,7 +340,7 @@ class StationGraphPlanner(Planner):
             result = meta.shortest(cand)
             if result is not None:
                 break
-            if n_cand == len(P.stations):  # nothing left to widen
+            if n_cand == sum(P.station_usable):  # nothing left to widen
                 break
         stats = SearchStats(
             algorithm=self.name,
@@ -356,7 +360,7 @@ class StationGraphPlanner(Planner):
         )
         if result is None:
             msg = (
-                f"the meta graph over {n_cand} of {len(P.stations)} station(s) has no battery-feasible "
+                f"the meta graph over {n_cand} station(s) (of {P.stations_note()}) has no battery-feasible "
                 f"origin-destination path when every stop charges to {100.0 * target / P.capacity:.0f} % "
                 f"(start {P.e_init:.1f} kWh, reserve {P.e_min:.1f} kWh, arrival requirement {P.e_dest_min:.1f} kWh)"
             )

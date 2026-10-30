@@ -338,6 +338,21 @@ yolculuklarında kullanılacak hızlı şarj noktası yoktur.
 geldiğini kaydeder: OSM nesnesi, fiyatın kaynağı (`operator` ya da
 `default`), güç ve soket kaynağı ya da `synthetic` / `gap-filler`.
 
+**Konnektörler.** OSM'deki `socket:*` etiketleri istasyonlara konnektör
+standartlarını verir (`type2` → Type 2, `type2_combo` → CCS2, `chademo` →
+CHAdeMO, `type1_combo` → CCS1, `type1` → Type 1). 711 istasyondan yalnızca
+294'ünde soket etiketi vardır ve etiketler her zaman doğru değildir (Kuzey
+Amerika standardı CCS1'i belirten `type1_combo`, Türkiye'de DC şarj Avrupa
+standardı CCS2'yi kullandığı hâlde 7 çok standartlı şarj cihazında
+etiketlidir). Bu yüzden etiketin olmaması soketin olmadığı anlamına gelmez:
+her OSM istasyonu türünün varsayılan konnektörünü (AC'de Type 2, DC'de
+CCS2) ve etiketli soketlerini sunar. Type 2/CCS2'li bir araç - önceki
+sürümlerin bütün hazır araç profilleri - 711 istasyonun hepsini
+kullanabilir, dolayısıyla sonuçları değişmez; CHAdeMO'lu bir araç
+(`hatch40_chademo`) DC gücü yalnızca `chademo` etiketli 12 istasyonda, DC
+girişi olmayan bir araç (`city23_ac`) ise yalnızca 618 AC istasyonda bulur
+([model §10](model.md#10-vehicles-cell-chemistry-dc-power-limit-connectors)).
+
 ## Fiyatlar ve Mart 2026 yönetmeliği
 
 `prices.json`, 2026-10-27 tarihli, elle derlenmiş bir anlık görüntüdür:
@@ -499,6 +514,57 @@ Deney `real-data/results.csv` (plan başına bir satır; veri kümesi, ağ
 büyüklüğü, istasyon sayısı ve `gap_pct` ile), `summary.json`, `table.tex`
 ve tam koşuda OSM verisinde Karaman → İstanbul'un görüntüleyicisini ve
 grafiklerini (`karaman-istanbul/`) yazar.
+
+## Canlı ve operatör verisi
+
+### İstasyon verisini içe aktarmak: `evroute.station_sources`
+
+[`evroute.station_sources`](../src/evroute/station_sources.py) modülündeki
+bağdaştırıcılar, operatörlerin ve açık veri tabanlarının istasyonlarını
+yayımladığı biçimleri, paketle gelen ağın (ya da başka herhangi bir ağın)
+istasyonlarına dönüştürür; `evroute plan SENARYO --stations-file DOSYA` bir
+senaryonun istasyonlarını bunlarla değiştirir. Kütüphane hiçbir zaman
+internete bağlanmaz: veriler sağlayıcının API'si ve kullanıcının kendi
+erişim bilgileriyle indirilir, kaydedilir ve içe aktarılır.
+
+| bağdaştırıcı | biçim | okuduğu alanlar |
+|---|---|---|
+| `stations_from_csv` | belgelenmiş genel bir tablo (`CSV_COLUMNS`) | konum (`lat`/`lon`, `x`/`y` ya da `node`), `kind`, `power_kw`, `plugs`, `connectors`, `operator`, `name`, `price_per_kwh`, kuyruk alanları |
+| `stations_from_ocpi` | OCPI 2.2.1 `Location` nesneleri, isteğe bağlı `Tariff` nesneleri | `coordinates`, `operator`, `publish`; her EVSE için `status` ve konnektörleri (`standard`, `power_type`, `max_electric_power` ya da gerilim x akım, `tariff_ids`) |
+| `stations_from_ocm` | Open Charge Map POI'leri (API'sinin JSON çıktısı) | `AddressInfo`, `OperatorInfo`, `StatusType`; her bağlantı için `ConnectionTypeID`, `CurrentTypeID`, `PowerKW`, `Quantity`, `StatusType` |
+
+Kurallar üçü için de aynıdır:
+
+- bir kayıt 3 km içindeki (`max_snap_m`) en yakın düğüme bağlanır; OSM
+  istasyonlarının yarıçapı da budur. Daha uzaktaki kayıtlar, koordinatı
+  olmayan, modelin bildiği bir konnektör standardı bulunmayan ya da (OCPI'de)
+  hizmette EVSE'si olmayan kayıtlar gibi, nedenleriyle birlikte `skipped`
+  listesine yazılır;
+- DC ve AC şarj noktaları olan bir tesis aynı düğümde **tür başına bir
+  istasyon** olur; böylece DC girişi olmayan bir araç AC noktalarını yine
+  kullanabilir. Güç o türün en yüksek gücüdür, soket sayısı da aynı anda
+  araç şarj edebilen nokta sayısıdır (OCPI'de hizmetteki EVSE'ler);
+- fiyat dosyanın kendi fiyatıdır (CSV'de `price_per_kwh` ya da KDV
+  eklenmiş OCPI tarifesinin temel enerji fiyatı); yoksa `prices.json`'daki
+  doğrulanmış operatör liste fiyatı (operatör adı onu içerebilir, ör. "ZES
+  (Zorlu Energy Solutions)"), o da yoksa varsayılan fiyat (AC 9,99 / DC
+  14,24 TRY);
+- kuyruklar, OSM istasyonlarının EPDK verisine dayanan varsayımlarını alır
+  ([Kuyruklar](#kuyruklar-varsayımlar)).
+
+**Canlı müsaitlik.** OCPI verisinde `imported.availability[i]`, `i`
+istasyonunun anlık görüntüsüdür: `available` EVSE'ler (durumu
+`AVAILABLE`), hizmetteki `total`, `out_of_service` (`INOPERATIVE`,
+`OUTOFORDER`), duruma göre sayılar ve konumun `last_updated` zamanı;
+`with_stations` bunu `scenario.meta["station_info"]` içinde saklar.
+Planlayıcılar bunu henüz kullanmaz: kuyruk modeli beklemeleri hâlâ
+Erlang-C varsayımlarından alır.
+
+**Lisanslar.** İçe aktarılan veriler kaynaklarının lisansını korur: Open
+Charge Map verileri CC BY-SA 4.0'dır (`with_stations`, görüntüleyicinin
+gösterdiği atıf satırına "Open Charge Map" atfını ekler; başka bir veri
+sağlayıcısından gelen bir POI o sağlayıcının koşullarını taşıyabilir), OCPI
+akışları ise erişimi sağlayan anlaşmaya tabidir.
 
 ## Sınırlar
 

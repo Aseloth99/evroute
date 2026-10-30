@@ -1,0 +1,34 @@
+[
+  {"ID": 900001, "UUID": "fixture-1",
+   "OperatorInfo": {"ID": 1, "Title": "Eşarj"},
+   "StatusType": {"ID": 50, "IsOperational": true, "Title": "Operational"},
+   "AddressInfo": {"Title": "Fixture POI near Çumra", "Latitude": 37.4858, "Longitude": 32.7048},
+   "Connections": [
+     {"ConnectionTypeID": 33, "CurrentTypeID": 30, "PowerKW": 120.0, "Quantity": 2,
+      "StatusType": {"IsOperational": true}},
+     {"ConnectionTypeID": 2, "CurrentTypeID": 30, "PowerKW": 50.0, "Quantity": 1},
+     {"ConnectionTypeID": 25, "CurrentTypeID": 20, "Amps": 32, "Voltage": 400, "Quantity": 2}
+   ]},
+  {"ID": 900002, "UUID": "fixture-2",
+   "OperatorInfo": {"Title": "ZES"},
+   "StatusType": {"IsOperational": false, "Title": "Not Operational"},
+   "AddressInfo": {"Title": "Fixture closed POI", "Latitude": 37.4858, "Longitude": 32.7048},
+   "Connections": [{"ConnectionTypeID": 33, "CurrentTypeID": 30, "PowerKW": 120.0, "Quantity": 2}]},
+  {"ID": 900003, "UUID": "fixture-3",
+   "OperatorInfo": {"Title": "ZES (Zorlu Energy Solutions)"},
+   "AddressInfo": {"Title": "Fixture POI with a titled connection", "Latitude": 37.2597, "Longitude": 32.9230},
+   "Connections": [
+     {"ConnectionTypeID": 9999, "ConnectionType": {"ID": 9999, "Title": "CCS (Type 2)"}, "CurrentTypeID": 30,
+      "PowerKW": 60.0, "Quantity": 1}
+   ]},
+  {"ID": 900004, "UUID": "fixture-4",
+   "OperatorInfo": {"Title": "Unknown"},
+   "AddressInfo": {"Title": "Fixture POI out of order", "Latitude": 37.2597, "Longitude": 32.9230},
+   "Connections": [
+     {"ConnectionTypeID": 33, "CurrentTypeID": 30, "PowerKW": 60.0, "Quantity": 1,
+      "StatusType": {"IsOperational": false}}
+   ]},
+  {"ID": 900005, "UUID": "fixture-5",
+   "AddressInfo": {"Title": "Fixture POI at sea", "Latitude": 35.0, "Longitude": 33.0},
+   "Connections": [{"ConnectionTypeID": 33, "CurrentTypeID": 30, "PowerKW": 150.0, "Quantity": 1}]}
+]

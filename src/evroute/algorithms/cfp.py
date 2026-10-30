@@ -1879,7 +1879,9 @@ def _textbook_is_exact(P: PreparedScenario) -> bool:
     if P.time_dependent:
         return False
     lo = min(P.e_min, P.e_init)
-    for cf in P.cf:
+    for cf, usable in zip(P.cf, P.station_usable):
+        if not usable:  # never a stop
+            continue
         pw, eb = cf.power_kw, cf.e_breaks
         for i in range(1, len(pw)):
             if pw[i] > pw[i - 1] * (1.0 + 1e-12) and lo < eb[i] < P.e_charge_cap:
@@ -1907,11 +1909,11 @@ def _infeasibility_reason(
     if P.e_init < P.e_min - EPS and not P.is_station_node[o]:
         return (
             f"initial energy {P.e_init:.2f} kWh is below the reserve {P.e_min:.2f} kWh "
-            "and there is no charging station at the origin"
+            "and there is no charging station at the origin that the vehicle can use"
         )
     return (
         f"no battery-feasible route from {o} to {d}: the charging infrastructure "
-        f"({len(P.stations)} station(s)) cannot bridge the energy gaps "
+        f"({P.stations_note()}) cannot bridge the energy gaps "
         f"(start {P.e_init:.2f} kWh, reserve {P.e_min:.2f} kWh, required on arrival "
         f"{P.e_dest_min:.2f} kWh, max charge {P.e_charge_cap:.2f} kWh)"
     )

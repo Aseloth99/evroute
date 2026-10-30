@@ -78,7 +78,8 @@ for `serve`, the path of a scenario `.json` file.  `plan`, `compare`, `viz`,
 | `--soc 0.35` | initial state of charge |
 | `--depart 14:30` | departure time |
 | `--temp -5` | ambient temperature [°C] |
-| `--vehicle sedan75` | vehicle preset (`city27`, `compact50`, `sedan75`, `suv84_800v`, `togg_t10x_lr`, `van75`) |
+| `--vehicle sedan75` | vehicle preset (`city27`, `compact50`, `sedan75`, `suv84_800v`, `togg_t10x_lr`, `van75`; LFP: `hatch51_lfp`, `sedan60_lfp`, `suv60_lfp`; AC only: `city23_ac`; CHAdeMO: `hatch40_chademo`; [model §10](model.md#10-vehicles-cell-chemistry-dc-power-limit-connectors)) |
+| `--dc-max-kw 50` | cap the vehicle's DC charging power (a car or a charger contract limited to 50 kW) |
 | `--objective cost` | minimise generalised cost instead of time |
 | `--reserve 0.15`, `--arrive 0.2` | reserve SoC on the way, minimum SoC on arrival |
 | `--eco` | allow 100 / 90 / 80 % speeds |
@@ -86,6 +87,7 @@ for `serve`, the path of a scenario `.json` file.  `plan`, `compare`, `viz`,
 | `--step 0.01` | charging-target grid of BLS / Pareto (SoC fraction) |
 | `--safety 1.1` | plan with a consumption safety factor |
 | `--stations hybrid` | charging stations of a `turkey-osm-*` preset: `osm` (the OSM stations), `synthetic` (the case-study stations moved onto the OSM roads) or `hybrid` (OSM plus synthetic DC gap-fillers); [real data](#real-data-case-study-openstreetmap) |
+| `--stations-file FILE [--stations-format csv\|ocpi\|ocm]` | replace the stations by those of a file: the generic CSV schema, OCPI 2.2.1 Locations or Open Charge Map POIs ([station data](#station-data-from-operators-and-open-data)); the format is detected by default |
 | `--tariff 80`, `--tariff flat` | the illustrative demonstration tariff `DEMO_TARIFF` (×1.3 above 80 % SoC, 16:00-20:00 peak at ×1.15, ×2.3 above 80 % in the peak), or no tariff; applied before the single-value options below |
 | `--high-soc 0.8`, `--high-soc-factor 1.3` | price factor for every kWh stored above that SoC |
 | `--peak 16-20[,7-9]`, `--peak-factor 1.15` | daily peak hours (`22-6` wraps midnight, `none` clears them) and their price factor |
@@ -451,6 +453,12 @@ for name in ["naive", "bls-astar", "cfp"]:
 [cfp] 2 h 41 min | 260.43 km | 1 stop(s) | arrive 15.0% | 12.34 EUR
 ```
 
+Vehicles carry a cell chemistry, an optional DC power limit and their
+connector standards (`Vehicle(..., chemistry="LFP", dc_max_kw=80,
+connectors=("Type2", "CCS2"))`, stations their sockets
+(`Station(..., connectors=("CCS2", "CHAdeMO"))`); a planner only stops
+where the vehicle can plug in ([model §10](model.md#10-vehicles-cell-chemistry-dc-power-limit-connectors)).
+
 Real data: the OpenStreetMap network of Turkey is bundled
 ([above](#real-data-case-study-openstreetmap));
 `evroute.generators.osm.load_osm("Karaman, Turkey")` downloads any
@@ -460,6 +468,40 @@ OpenStreetMap network (needs the optional `osmnx`),
 `Scenario.load()` round-trip a scenario losslessly through JSON.  A variant
 with a second, slower road is
 [`examples/custom_network.py`](../examples/custom_network.py).
+
+### Station data from operators and open data
+
+`evroute.station_sources` turns the formats in which operators and open
+databases publish charging stations into stations of any network (no
+network access: fetch the data with the provider's API and your own
+credentials, then import the file):
+
+```python
+from evroute.generators.presets import get_scenario
+from evroute.station_sources import load_stations, stations_from_ocpi, with_stations
+
+sc = get_scenario("turkey-osm-karaman-konya")
+imported = load_stations("locations.json", sc.network)   # CSV, OCPI or Open Charge Map, detected
+print(imported.summary(), imported.skipped[:3])
+print(imported.availability[0])  # OCPI: {"available": 1, "total": 2, "out_of_service": 1, ...}
+sc = with_stations(sc, imported)
+```
+
+| function | input |
+|---|---|
+| `stations_from_csv(path_or_rows, network)` | the generic schema `CSV_COLUMNS`: `lat`/`lon` (or `x`/`y`, or `node`), `kind`, `power_kw`, `plugs`, `connectors`, `operator`, `name`, `price_per_kwh` ... |
+| `stations_from_ocpi(locations, network, tariffs=None)` | OCPI 2.2.1 `Location` objects (or a `{"data": [...]}` response): coordinates, EVSE `status`, connector `standard`, `power_type`, `max_electric_power`; OCPI `Tariff` objects price the stations; returns a live availability snapshot per station |
+| `stations_from_ocm(pois, network)` | Open Charge Map POIs: `AddressInfo`, `Connections[]` (`ConnectionTypeID`, `PowerKW`, `Quantity`, `CurrentTypeID`, `StatusType`), `OperatorInfo` |
+
+Each record is snapped to the nearest node within `max_snap_m` (3 km);
+a site with DC and AC points becomes one station per kind; prices come from
+the file, an OCPI tariff, the operator's verified list price in the Turkish
+price snapshot or a default; records that cannot be imported are listed
+with their reason.  On the command line: `evroute plan SCENARIO
+--stations-file FILE`.  Licences stay those of the source (Open Charge Map:
+CC BY-SA 4.0, credited automatically by `with_stations`; OCPI feeds: your
+agreement with the operator).  Details: the module documentation and
+[real data, Live and operator data](real-data.md#live-and-operator-data).
 
 ## Charging tariffs
 
@@ -610,6 +652,9 @@ measures each plan.  Model: [`model.md` §9](model.md#9-uncertainty-evaluation-o
 - **Plan JSON** (`evroute plan --json`, `RoutePlan.to_dict()`): route,
   stops (with `hold_s`, `hold_until_s` and `peak`), per-node times and
   energies, totals (with `hold_time_s`), statistics.
+- **Station files** (`--stations-file`, `evroute.station_sources`): the
+  generic CSV schema, OCPI 2.2.1 Locations (JSON, optionally `{"locations":
+  [...], "tariffs": [...]}`) or Open Charge Map POIs (JSON).
 - **Viewer payload** `evroute-viewer/1`: specified in
   [`DEV_SPEC.md` §3](DEV_SPEC.md#3-viewer-data-contract-evroute-viewer1).
 - **Results payload** `evroute-results/1`: produced by

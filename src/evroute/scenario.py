@@ -15,7 +15,7 @@ from __future__ import annotations
 import json
 import math
 from bisect import bisect_right
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Any, Literal
@@ -31,7 +31,7 @@ from .queueing import (
     station_wait_profile,
 )
 from .units import SECONDS_PER_DAY, SECONDS_PER_HOUR
-from .vehicle import Vehicle, get_vehicle
+from .vehicle import CONNECTORS, Vehicle, check_connectors, get_vehicle
 
 Objective = Literal["time", "cost"]
 
@@ -57,7 +57,9 @@ class Station:
     #: Parking, plugging in, authenticating and unplugging [s].
     setup_s: float = 180.0
     #: Connector standards offered (``"Type2"``, ``"CCS2"``, ``"CHAdeMO"``, ``"Type1"``,
-    #: ``"CCS1"``); empty: the default of the kind (AC ``Type2``, DC ``CCS2``).
+    #: ``"CCS1"``, ``"NACS"``; :data:`evroute.vehicle.CONNECTORS`); empty: the default of
+    #: the kind (AC ``Type2``, DC ``CCS2``).  Sockets of the other kind at the same site
+    #: (a Type 2 point next to a DC charger) may be listed; :meth:`usable_by` ignores them.
     connectors: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
@@ -67,6 +69,19 @@ class Station:
     def sockets(self) -> tuple[str, ...]:
         """Connector standards of the station (the kind's default if none are given)."""
         return self.connectors or (("Type2",) if self.kind == "AC" else ("CCS2",))
+
+    def usable_by(self, connectors: Iterable[str]) -> bool:
+        """Can a vehicle with these connector standards charge here?
+
+        The station is modelled as one charger of its :attr:`kind`, so the
+        vehicle needs a socket of that kind it can plug into: a standard that
+        is in :attr:`sockets`, in ``connectors`` and carries the station's kind
+        (:data:`evroute.vehicle.CONNECTORS`).  A Type 2 socket listed at a DC
+        station does not make it usable for a car without a DC inlet: the
+        charging function of the station is the DC one.
+        """
+        mine = set(connectors)
+        return any(c in mine and self.kind in CONNECTORS.get(c, ()) for c in self.sockets)
 
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)
@@ -339,7 +354,8 @@ class Scenario:
         1``, the departure time is finite, the temperature above absolute
         zero, the traffic factors ``> 0``, the cost weights ``>= 0``; a
         station has a power ``> 0``, at least one plug, a price, set-up time
-        and daily sessions ``>= 0`` and a mean session ``> 0``; and the
+        and daily sessions ``>= 0``, a mean session ``> 0``, the kind ``"AC"``
+        or ``"DC"`` and known connector names; and the
         tariff is valid (:meth:`Tariff.validate`).  Called by
         :meth:`prepare`, so an out-of-range value is never clamped or
         wrapped silently (it used to crash or hang a planner, or to void its
@@ -368,6 +384,9 @@ class Scenario:
             _check_number(f"station {st.id}: setup_s", st.setup_s, 0.0)
             _check_number(f"station {st.id}: daily_sessions", st.daily_sessions, 0.0)
             _check_number(f"station {st.id}: mean_service_min", st.mean_service_min, 0.0, open_lo=True)
+            if st.kind not in ("AC", "DC"):
+                raise ValueError(f"station {st.id}: kind must be 'AC' or 'DC', got {st.kind!r}")
+            check_connectors(f"station {st.id}: connectors", st.connectors)
         q, pref, cond = self.query, self.preferences, self.conditions
         _check_number("initial_soc", q.initial_soc, 0.0, 1.0)
         _check_number("departure_s", q.departure_s)
@@ -488,6 +507,14 @@ class PreparedScenario:
     ``k``; ``edge_options[e]`` lists the non-dominated ``(k, time, energy,
     drive_cost)`` tuples algorithms should iterate over.
 
+    Stations: ``stations``, ``cf``, ``setup_s``, ``wait_profiles`` ... hold
+    every station of the scenario (index = position in ``scenario.stations``),
+    but ``station_at`` and ``is_station_node`` only know the stations the
+    vehicle can plug into (``station_usable[s]``, :meth:`Station.usable_by`):
+    the planners find stations through them, so they never stop at a station
+    without a connector of the vehicle, and the bounds (``p_max``,
+    ``cf_variants`` ...) only cover the usable stations.
+
     Charging prices (:class:`Tariff`): ``cf[s]`` carries the money of
     station ``s`` outside its peak period (of its only period if it is in
     its peak period all day), so code that is not tariff-aware is right
@@ -569,9 +596,15 @@ class PreparedScenario:
 
         # ------------------------------------------------------- stations
         self.stations = sc.stations
+        #: can the vehicle charge at station ``i``?  (Station.usable_by; the indices of
+        #: ``stations``, ``cf`` ... keep counting every station, usable or not)
+        self.station_usable: list[bool] = [st.usable_by(veh.connectors) for st in sc.stations]
+        #: usable stations per node: the only way the planners find stations, so a
+        #: station without a connector of the vehicle is never a stop
         self.station_at: dict[int, list[int]] = {}
         for i, st in enumerate(sc.stations):  # nodes checked by Scenario.validate
-            self.station_at.setdefault(st.node, []).append(i)
+            if self.station_usable[i]:
+                self.station_at.setdefault(st.node, []).append(i)
         self.is_station_node = [False] * net.num_nodes
         for v in self.station_at:
             self.is_station_node[v] = True
@@ -594,6 +627,7 @@ class PreparedScenario:
         e_high = tariff.high_soc * q
 
         dc_factor = veh.dc_temperature_factor(cond.temperature_c, cond.preconditioning)
+        dc_curve = veh.dc_curve_effective  # capped at veh.dc_max_kw (the curve itself without a cap)
         aging = veh.aging
         ac_curve = (0.0, 0.95, 1.0)
         cache: dict[tuple, tuple[ChargingFunction, ChargingFunction]] = {}
@@ -606,7 +640,7 @@ class PreparedScenario:
                     p_ac = min(veh.ac_max_kw, st.power_kw)
                     soc_breaks, powers, eff, tf = ac_curve, (p_ac, p_ac * 0.5), veh.charge_eff_ac, 1.0
                 else:
-                    soc_breaks, powers = veh.dc_curve.soc_breaks, veh.dc_curve.power_kw
+                    soc_breaks, powers = dc_curve.soc_breaks, dc_curve.power_kw
                     eff, tf = veh.charge_eff_dc, dc_factor
                 temp = cond.temperature_c
 
@@ -635,9 +669,14 @@ class PreparedScenario:
             cf_peak.append(f_pk)
         #: charging functions with the peak money (``is self.cf`` when no peak price exists)
         self.cf_peak: list[ChargingFunction] = cf_peak if peak_money else self.cf
-        #: every charging function whose money can apply (bounds take the minimum over them)
-        self.cf_variants: list[ChargingFunction] = self.cf if self.cf_peak is self.cf else self.cf + [
-            f for f, ivs in zip(cf_peak, self.peak_intervals, strict=True) if ivs
+        # the bounds below only need the stations the vehicle can use (a minimum or maximum
+        # over fewer functions is still a valid bound, and a tighter one)
+        usable = self.station_usable
+        usable_cf = self.cf if all(usable) else [f for f, u in zip(self.cf, usable) if u]
+        #: every charging function whose money can apply at a usable station (bounds take
+        #: the minimum over them)
+        self.cf_variants: list[ChargingFunction] = usable_cf if self.cf_peak is self.cf else usable_cf + [
+            f for f, ivs, u in zip(cf_peak, self.peak_intervals, usable, strict=True) if ivs and u
         ]
         #: clock times [s of the day] at which the price of each station changes
         self.price_changes: list[tuple[float, ...]] = [
@@ -645,9 +684,9 @@ class PreparedScenario:
         ]
         #: ``True`` if the price of some station depends on the time of day
         self.tariff_time_dependent = any(self.price_changes)
-        self.p_max = max((f.max_power_kw for f in self.cf), default=1.0)
+        self.p_max = max((f.max_power_kw for f in usable_cf), default=1.0)
         self.min_money_rate = min((min(f.money_per_kwh) for f in self.cf_variants), default=0.0)
-        self.min_soh_rate = min((min(f.soh_pct_per_kwh) for f in self.cf), default=0.0)
+        self.min_soh_rate = min((min(f.soh_pct_per_kwh) for f in usable_cf), default=0.0)
         self.setup_s = [float(st.setup_s) for st in sc.stations]
 
         # ---------------------------------------------------------- waits
@@ -761,11 +800,18 @@ class PreparedScenario:
     def soc(self, energy_kwh: float) -> float:
         return energy_kwh / self.capacity
 
+    def stations_note(self) -> str:
+        """``"12 station(s)"``, or ``"12 station(s), 5 usable with the vehicle's
+        connectors"`` when the vehicle cannot plug in everywhere (for messages)."""
+        n, k = len(self.stations), sum(self.station_usable)
+        return f"{n} station(s)" if k == n else f"{n} station(s), {k} usable with the vehicle's connectors"
+
     def summary(self) -> dict[str, Any]:
         return {
             "nodes": self.net.num_nodes,
             "edges": self.net.num_edges,
             "stations": len(self.stations),
+            "stations_usable": sum(self.station_usable),
             "capacity_kwh": round(self.capacity, 3),
             "speed_levels": list(self.speed_factors),
             "p_max_kw": round(self.p_max, 1),

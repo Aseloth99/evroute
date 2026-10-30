@@ -243,17 +243,29 @@ with it (`check_objective` is only required of the exact planners).
   "animate": true,
   "live": false,
   "scenario": {"name": "", "description": "", "currency": "TRY",
-               "vehicle": {"key": "", "name": "", "battery_kwh": 0, "capacity_kwh": 0, "dc_peak_kw": 0},
+               "vehicle": {"key": "", "name": "", "battery_kwh": 0, "capacity_kwh": 0, "dc_peak_kw": 0,
+                           "ac_max_kw": 11, "mass_kg": 0, "chemistry": "NMC|NCA|LFP",
+                           "connectors": ["Type2", "CCS2"], "dc_max_kw": null},
                "query": {"origin": 0, "destination": 0, "initial_soc": 0.8, "departure_s": 28800},
                "conditions": {...}, "preferences": {...}},
   "network": {"x": [], "y": [], "elevation": [], "tail": [], "head": [], "road_class": [],
               "speed_kmh": [], "twin": [], "node_name": {"12": "Ankara"}, "lat": [], "lon": []},
   "stations": [{"id": 0, "node": 3, "name": "", "power_kw": 150, "kind": "DC", "plugs": 4,
-                "price_per_kwh": 0.5, "operator": "", "wait_profile": {"knots_s": [], "waits_s": []}}],
+                "price_per_kwh": 0.5, "operator": "", "wait_profile": {"knots_s": [], "waits_s": []},
+                "connectors": ["CCS2"], "usable": true}],
+  "vehicles": [{"key": "", "name": "", "battery_kwh": 0, "dc_peak_kw": 0, "ac_max_kw": 0,
+                "chemistry": "LFP", "connectors": ["Type2", "CCS2"], "notes": ""}],
   "results": [RoutePlan.to_dict() + {"color": "#hex", "title": "BLS-A*", "exact": "grid"}],
   "algorithms": [Planner.info()...]
 }
 ```
+
+`dc_peak_kw` is the *effective* DC peak (capped at `dc_max_kw`; 0 for a
+vehicle without a DC inlet).  A station's `connectors` are its connector
+standards (`Station.sockets`: the kind's default when none are given) and
+`usable` tells whether the scenario's vehicle can plug in there
+(`PreparedScenario.station_usable`; the planners never stop where it is
+`false`).
 
 `RoutePlan.to_dict()` contains `nodes`, `edges`, `levels`, `stops` (list of
 `ChargeStop` dicts), per-node `node_arrive_s`, `node_depart_s`,
@@ -287,8 +299,11 @@ planners ticked before the first plan (those of a request without
 `"algorithms"`: without greedy and the station graph on a network of more
 than 20 000 nodes).  `POST /api/plan` accepts
 `"tariff": "80"` (the demonstration tariff) or `"flat"` (no tariff; absent:
-the preset's own tariff) and answers with `results_payload(...)`:
-`{"scenario", "results", "wait_profiles"}` plus, for a tariff other than
+the preset's own tariff), `"min_stop_soc"` (0..0.95) and `"dc_max_kw"`
+(3..500, or `null` for the vehicle's own limit) and answers with
+`results_payload(...)`: `{"scenario", "results", "wait_profiles",
+"station_usable"}` (`station_usable` in station order, for the request's
+vehicle) plus, for a tariff other than
 `Tariff()`, `station_tariffs` (per station, in station order, the `peak_s`
 and `price_factors` above).
 

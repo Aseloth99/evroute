@@ -330,6 +330,20 @@ charger to use.
 come from: the OSM object, the source of its price (`operator` or
 `default`), power and plugs, or `synthetic` / `gap-filler`.
 
+**Connectors.**  The OSM `socket:*` tags give the stations their connector
+standards (`type2` → Type 2, `type2_combo` → CCS2, `chademo` → CHAdeMO,
+`type1_combo` → CCS1, `type1` → Type 1).  Only 294 of the 711 stations
+carry any socket tag, and not always the right one (`type1_combo`, the
+North-American CCS1, is tagged at 7 Turkish multi-standard chargers,
+although DC charging in Turkey uses the European CCS2).  A missing tag
+therefore does not mean a missing socket: every OSM station offers the
+default connector of its kind (Type 2 at AC, CCS2 at DC) plus its tagged
+sockets.  A Type 2/CCS2 car - every preset of earlier versions - can use all
+711 stations, so their results are unchanged; a CHAdeMO car
+(`hatch40_chademo`) finds DC power at the 12 stations tagged `chademo`, and
+a car without a DC inlet (`city23_ac`) only at the 618 AC stations
+([model §10](model.md#10-vehicles-cell-chemistry-dc-power-limit-connectors)).
+
 ## Prices and the March 2026 regulation
 
 `prices.json` is a hand-curated snapshot of 2026-10-27: the public list
@@ -490,6 +504,53 @@ The experiment writes `real-data/results.csv` (one row per plan, with the
 data set, the network size, the number of stations and `gap_pct`),
 `summary.json`, `table.tex` and, in a full run, the viewer and figures of
 Karaman → İstanbul on OSM data (`karaman-istanbul/`).
+
+## Live and operator data
+
+### Importing station data: `evroute.station_sources`
+
+The adapters of [`evroute.station_sources`](../src/evroute/station_sources.py)
+turn the formats in which operators and open databases publish their
+stations into stations of the bundled network (or of any other network);
+`evroute plan SCENARIO --stations-file FILE` replaces a scenario's stations
+with them.  The library never goes online: the data are fetched with the
+provider's API and the user's own credentials, saved, and imported.
+
+| adapter | format | what it reads |
+|---|---|---|
+| `stations_from_csv` | a documented generic table (`CSV_COLUMNS`) | position (`lat`/`lon`, `x`/`y` or `node`), `kind`, `power_kw`, `plugs`, `connectors`, `operator`, `name`, `price_per_kwh`, queue fields |
+| `stations_from_ocpi` | OCPI 2.2.1 `Location` objects, optional `Tariff` objects | `coordinates`, `operator`, `publish`; per EVSE its `status` and connectors (`standard`, `power_type`, `max_electric_power` or voltage x current, `tariff_ids`) |
+| `stations_from_ocm` | Open Charge Map POIs (the JSON of its API) | `AddressInfo`, `OperatorInfo`, `StatusType`; per connection `ConnectionTypeID`, `CurrentTypeID`, `PowerKW`, `Quantity`, `StatusType` |
+
+The rules are the same for all three:
+
+- a record is snapped to the nearest node within 3 km (`max_snap_m`), the
+  radius of the OSM stations; farther records are listed in `skipped` with
+  their reason, like records without coordinates, without a connector
+  standard of the model or (OCPI) without an EVSE in service;
+- a site with DC and AC charge points becomes **one station per kind** at
+  the same node, so a car without a DC inlet can still use the AC points;
+  the power is the largest of the kind, the plugs are the charge points
+  that can serve a car at the same time (OCPI: EVSEs in service);
+- the price is the file's own (CSV `price_per_kwh`, or the base energy
+  price of an OCPI tariff, VAT added), else the operator's verified list
+  price in `prices.json` (the operator name may contain it, e.g. "ZES
+  (Zorlu Energy Solutions)"), else the default (AC 9.99 / DC 14.24 TRY);
+- the queues get the EPDK-based assumptions of the OSM stations
+  ([Queues](#queues-assumptions)).
+
+**Live availability.**  For OCPI data `imported.availability[i]` is the
+snapshot of station `i`: `available` EVSEs (status `AVAILABLE`), `total` in
+service, `out_of_service` (`INOPERATIVE`, `OUTOFORDER`), the count per
+status and the location's `last_updated`; `with_stations` keeps it in
+`scenario.meta["station_info"]`.  The planners do not use it yet: the queue
+model still takes its waits from the Erlang-C assumptions.
+
+**Licences.**  Imported data keep the licence of their source: Open Charge
+Map data are CC BY-SA 4.0 (`with_stations` appends the credit "Open Charge
+Map" to the scenario's attribution, which the viewer shows; a POI from
+another data provider may carry that provider's terms), OCPI feeds are
+governed by the agreement that gives access to them.
 
 ## Limitations
 
