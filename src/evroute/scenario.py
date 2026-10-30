@@ -56,11 +56,26 @@ class Station:
     mean_service_min: float = 35.0
     #: Parking, plugging in, authenticating and unplugging [s].
     setup_s: float = 180.0
+    #: Connector standards offered (``"Type2"``, ``"CCS2"``, ``"CHAdeMO"``, ``"Type1"``,
+    #: ``"CCS1"``); empty: the default of the kind (AC ``Type2``, DC ``CCS2``).
+    connectors: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        self.connectors = tuple(self.connectors)
+
+    @property
+    def sockets(self) -> tuple[str, ...]:
+        """Connector standards of the station (the kind's default if none are given)."""
+        return self.connectors or (("Type2",) if self.kind == "AC" else ("CCS2",))
 
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)
         if not isinstance(self.demand_profile, str):  # a tuple of weights is written (and read) as a list
             d["demand_profile"] = [float(w) for w in self.demand_profile]
+        if self.connectors:
+            d["connectors"] = list(self.connectors)
+        else:  # the default is not written, so earlier instances keep their exact JSON form
+            del d["connectors"]
         return d
 
     @classmethod
@@ -118,6 +133,9 @@ class Preferences:
     min_arrival_soc: float = 0.10
     #: Highest SoC the planner may charge to.
     max_charge_soc: float = 1.0
+    #: Every charging stop ends at this SoC or above (capped at ``max_charge_soc``),
+    #: unless the vehicle arrives above it: no "+2 %" top-ups.  ``0`` disables the rule.
+    min_stop_soc: float = 0.0
     #: Allowed speed multipliers per edge (``(1.0, 0.9, 0.8)`` = eco driving).
     speed_factors: tuple[float, ...] = (1.0,)
     #: Include expected queueing delay at stations.
@@ -360,6 +378,7 @@ class Scenario:
         _check_number("reserve_soc", pref.reserve_soc, 0.0, 1.0)
         _check_number("min_arrival_soc", pref.min_arrival_soc, 0.0, 1.0)
         _check_number("max_charge_soc", pref.max_charge_soc, 0.0, 1.0, open_lo=True)
+        _check_number("min_stop_soc", pref.min_stop_soc, 0.0, 1.0)
         _check_number("safety_factor", pref.safety_factor, 1.0)
         _check_number("charge_step_soc", pref.charge_step_soc, 1e-3, 1.0)
         for f in pref.speed_factors:
@@ -404,6 +423,8 @@ class Scenario:
         """
         prefs = asdict(self.preferences)
         prefs["speed_factors"] = [float(f) for f in self.preferences.speed_factors]
+        if prefs["min_stop_soc"] == 0.0:  # not written when off: earlier instances keep their JSON form
+            del prefs["min_stop_soc"]
         d = {
             "format": "evroute-scenario/1",
             "name": self.name,
@@ -500,6 +521,8 @@ class PreparedScenario:
         self.capacity = q
         self.e_min = pref.reserve_soc * q
         self.e_charge_cap = pref.max_charge_soc * q
+        #: lowest energy a charging stop may end at (``0``: no minimum); see Preferences.min_stop_soc
+        self.e_stop_min = min(pref.min_stop_soc, pref.max_charge_soc) * q
         self.e_init = sc.query.initial_soc * q
         # arriving at the destination is still driving: the reserve applies too
         self.e_dest_min = max(pref.min_arrival_soc * q, self.e_min)

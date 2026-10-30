@@ -170,6 +170,12 @@ class Vehicle:
     min_cold_charge_factor: float = 0.35
     aging: AgingModel = field(default_factory=AgingModel)
     notes: str = ""
+    #: Cell chemistry: ``"NMC"``, ``"NCA"`` or ``"LFP"``.
+    chemistry: str = "NMC"
+    #: Highest DC charging power the vehicle accepts [kW] (``None``: the curve's peak).
+    dc_max_kw: float | None = None
+    #: Connector standards the vehicle can use (see :attr:`Station.connectors`).
+    connectors: tuple[str, ...] = ("Type2", "CCS2")
 
     # ------------------------------------------------------------ derived
     def usable_capacity_kwh(self, temperature_c: float) -> float:
@@ -196,6 +202,11 @@ class Vehicle:
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)
         d["dc_curve"] = self.dc_curve.to_dict()
+        d["connectors"] = list(self.connectors)
+        # defaults of the fields added in 1.0 are not written: earlier instances keep their JSON form
+        for key, default in _V1_DEFAULTS.items():
+            if d[key] == default:
+                del d[key]
         return d
 
     @classmethod
@@ -203,7 +214,12 @@ class Vehicle:
         d = dict(d)
         d["dc_curve"] = ChargingCurve.from_dict(d["dc_curve"])
         d["aging"] = AgingModel(**d.get("aging", {}))
+        if "connectors" in d:
+            d["connectors"] = tuple(d["connectors"])
         return cls(**d)
+
+
+_V1_DEFAULTS: dict[str, Any] = {"chemistry": "NMC", "dc_max_kw": None, "connectors": ["Type2", "CCS2"]}
 
 
 def _v(key: str, name: str, curve: list[tuple[float, float]], **kw: Any) -> Vehicle:
