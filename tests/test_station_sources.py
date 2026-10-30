@@ -127,6 +127,14 @@ def test_csv_errors_name_the_row(net, row, msg):
     assert "row 1" in str(exc.value)
 
 
+def test_csv_semicolons_and_decimal_commas(net, tmp_path):
+    f = tmp_path / "stations.csv"
+    f.write_text("Lat;Lon;Power_kW;Connectors;Price\n37,4862;32,7055;50;CCS2|CHAdeMO;12,5\n;;;;\n", encoding="utf-8")
+    r = stations_from_csv(f, net)
+    assert len(r) == 1 and r.stations[0].node == CUMRA_NODE
+    assert (r.stations[0].price_per_kwh, r.stations[0].connectors) == (12.5, ("CCS2", "CHAdeMO"))
+
+
 def test_csv_kind_inference(net):
     rows = [{"node": "1", "power_kw": "22"}, {"node": "1", "power_kw": "50"},
             {"node": "1", "power_kw": "11", "connectors": "CHAdeMO"}, {"node": "1", "power_kw": "7", "connectors": "Type2"}]

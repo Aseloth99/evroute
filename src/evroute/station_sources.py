@@ -120,10 +120,11 @@ CSV_COLUMNS: dict[str, str] = {
     "kind": "AC or DC (default: DC if a connector is DC-only or power_kw > 22, else AC)",
     "power_kw": "largest charging power [kW] (required)",
     "plugs": "vehicles served at the same time (default 1)",
-    "connectors": "standards separated by ';' or '|', e.g. 'CCS2;CHAdeMO' (default: the kind's)",
+    "connectors": "standards separated by ';' or '|' ('|' in a ';'-delimited file), e.g. 'CCS2;CHAdeMO' "
+                  "(default: the kind's)",
     "operator": "operator name (prices.json lookup; default 'unknown')",
     "name": "station name (default: operator and kind)",
-    "price_per_kwh": "price per kWh (default: operator price, else default_price)",
+    "price_per_kwh": "price per kWh, or 'price' (default: operator price, else default_price)",
     "id": "your identifier, kept in the import info",
     "setup_s, daily_sessions, mean_service_min, demand_profile": "optional Station fields",
 }
@@ -396,16 +397,25 @@ def stations_from_csv(
 ) -> ImportedStations:
     """Stations from a table in the generic schema :data:`CSV_COLUMNS`.
 
-    ``source`` is a CSV file (UTF-8, comma-separated, header row) or rows
-    as mappings (e.g. from :class:`csv.DictReader`).  Every row is one
-    station.  A row needs a position (``lat``/``lon``, ``x``/``y`` or
-    ``node``) and ``power_kw``; values are validated, and a bad value raises
-    :class:`ValueError` naming the row (a typo never passes silently).  Rows
-    farther than ``max_snap_m`` from every node are skipped.
+    ``source`` is a CSV file (UTF-8, header row; the delimiter ``,``, ``;``
+    or tab is taken from the header, and ``1,5`` reads as 1.5 when the
+    delimiter is not a comma) or rows as mappings (e.g. from
+    :class:`csv.DictReader`).  Every row is one station; empty rows are
+    ignored.  A row needs a position (``lat``/``lon``, ``x``/``y`` or
+    ``node``) and ``power_kw``; ``price`` is accepted for ``price_per_kwh``.
+    Values are validated, and a bad value raises :class:`ValueError` naming
+    the row (a typo never passes silently).  Rows farther than
+    ``max_snap_m`` from every node are skipped.
+
+    (:func:`evroute.generators.osm.stations_from_csv`, the reader of 0.x for
+    networks loaded with ``load_osm``, stays as it was: it returns a plain
+    list with its own defaults and knows no connectors.)
     """
     if isinstance(source, (str, Path)):
         text = Path(source).read_text(encoding="utf-8-sig")
-        rows: list[Mapping[str, Any]] = list(csv.DictReader(io.StringIO(text)))
+        head = text.splitlines()[0] if text else ""
+        delimiter = max((",", ";", "\t"), key=head.count)
+        rows: list[Mapping[str, Any]] = list(csv.DictReader(io.StringIO(text), delimiter=delimiter))
     else:
         rows = list(source)
     snap = _Snapper(network, max_snap_m)
@@ -414,6 +424,10 @@ def stations_from_csv(
     for n, raw in enumerate(rows, start=1):
         row = {str(k).strip().lower(): (v.strip() if isinstance(v, str) else v)
                for k, v in raw.items() if k is not None}
+        if not any(v not in (None, "") for v in row.values()):
+            continue
+        if row.get("price_per_kwh") in (None, "") and row.get("price") not in (None, ""):
+            row["price_per_kwh"] = row["price"]
         where = f"row {n}"
 
         def num(key: str, *, required: bool = False, lo: float = -math.inf) -> float | None:
@@ -422,6 +436,8 @@ def stations_from_csv(
                 if required:
                     raise ValueError(f"{where}: {key} is required")
                 return None
+            if isinstance(v, str) and v.count(",") == 1 and "." not in v:
+                v = v.replace(",", ".")  # decimal comma
             try:
                 x = float(v)
             except (TypeError, ValueError):
