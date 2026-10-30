@@ -10,17 +10,18 @@ that runs in your browser and prebuilt [examples](https://aseloth99.github.io/ev
 
 | document | what is in it |
 |---|---|
-| [`guide.md`](guide.md) ([Türkçe](guide.tr.md)) | **start here**: a gentle guide to the algorithms -- why plain A\* is not enough, labels and dominance, BLS, A\*, CFP, Pareto, the baselines, tariffs and "which planner should I use?" |
-| [`model.md`](model.md) | the optimisation problem, equation by equation, with the module that implements each part |
-| [`real-data.md`](real-data.md) ([Türkçe](real-data.tr.md)) | the real-data case study: Turkey on OpenStreetMap roads with SRTM elevations, OSM charging stations and operator list prices -- sources, build, validation against the official KGM distances, charging coverage, prices and the March 2026 regulation, queue assumptions, results, limitations, licences |
-| [`algorithms.md`](algorithms.md) | the algorithms and their correctness arguments: BLS, the consistent A\* potentials, CFP, the Pareto search, charging tariffs and voluntary holds, the baselines, verification |
-| [`DEV_SPEC.md`](DEV_SPEC.md) | the developer contract: `PreparedScenario`, the semantics every planner must respect, the viewer data format |
+| [`guide.md`](guide.md) ([Türkçe](guide.tr.md)) | **start here**: a gentle guide to the algorithms -- why plain A\* is not enough, labels and dominance, BLS, A\*, CFP, Pareto, the baselines, tariffs, "which planner should I use?", the minimum stop SoC (floor rule) and the everyday mode of the web app |
+| [`model.md`](model.md) | the optimisation problem, equation by equation, with the module that implements each part; vehicles (cell chemistry, DC power limit, connectors) in §10 |
+| [`real-data.md`](real-data.md) ([Türkçe](real-data.tr.md)) | the real-data case study: Turkey on OpenStreetMap roads with SRTM elevations, OSM charging stations and operator list prices -- sources, build, validation against the official KGM distances, charging coverage, prices and the March 2026 regulation, queue assumptions, results, live and operator data (EPDK's Şarj@TR, OCPI, Open Charge Map, the station importers), limitations, licences |
+| [`algorithms.md`](algorithms.md) | the algorithms and their correctness arguments: BLS, the consistent A\* potentials, CFP, the Pareto search, the floor rule (Lemma 1F, Lemma 3F), charging tariffs and voluntary holds, the baselines, verification |
+| [`DEV_SPEC.md`](DEV_SPEC.md) | the developer contract: `PreparedScenario`, the semantics every planner must respect, the viewer data format and the API |
+| [`release-notes-v1.0.0.md`](release-notes-v1.0.0.md) | what version 1.0.0 contains, in English and Turkish |
 | [`PLAN.tr.md`](PLAN.tr.md) | the original project plan (Turkish) |
 | [`../tests/fuzz_report.md`](../tests/fuzz_report.md) | what the cross-validation suite checks, its coverage and the bugs it found |
 | [`../CONTRIBUTING.md`](../CONTRIBUTING.md) | how to set up, test and extend the project |
 | [`demo/index.html`](demo/index.html) | the animated viewer for Karaman → İstanbul with every planner (one offline file; `#tr` opens it in Turkish) |
 | [`demo/tariff.html`](demo/tariff.html) | the same trip leaving at 14:00 under the demonstration tariff (80 % rule + peak 16:00-20:00), cost objective: the cost-optimal plan waits 2.4 min at İnegöl for the off-peak price (built with `--step 0.05` so the Pareto front fits the viewer's label budget) |
-| [`demo/results.html`](demo/results.html) | the results dashboard of a full run of all twelve experiments, including `tariffs` and `real-data` (the recorded real-data run, made before its 10-minute budget per heuristic run) |
+| [`demo/results.html`](demo/results.html) | the results dashboard of a full run of all twelve experiments, including `tariffs` and `real-data` (the recorded real-data run, made before its 10-minute budget per heuristic run; `vehicles` with the six presets of that run) |
 
 On this page: [install](#install) · [command line](#command-line) ·
 [Python API](#python-api) · [web viewer](#web-viewer) ·
@@ -82,6 +83,7 @@ for `serve`, the path of a scenario `.json` file.  `plan`, `compare`, `viz`,
 | `--dc-max-kw 50` | cap the vehicle's DC charging power (a car or a charger contract limited to 50 kW) |
 | `--objective cost` | minimise generalised cost instead of time |
 | `--reserve 0.15`, `--arrive 0.2` | reserve SoC on the way, minimum SoC on arrival |
+| `--min-stop-soc 0.4` | minimum stop SoC: every charging stop that starts below 40 % ends at 40 % or above, no "+2 %" top-ups ([guide §13](guide.md#13-a-minimum-charge-at-each-stop-the-floor-rule)); `plan` shows it in its summary |
 | `--eco` | allow 100 / 90 / 80 % speeds |
 | `--no-queue` | ignore charging queues |
 | `--step 0.01` | charging-target grid of BLS / Pareto (SoC fraction) |
@@ -114,6 +116,8 @@ evroute plan turkey-karaman-istanbul-tariff --objective cost     # waits 2 min f
 evroute plan turkey-karaman-istanbul --depart 14:00 --peak 16-20 --peak-factor 1.2 --high-soc-factor 1.5
 evroute robustness turkey-izmir-erzurum -n 2000 --safety 1.1
 evroute plan turkey-osm-karaman-istanbul --stations hybrid --from Konya   # real data: OSM roads and stations
+evroute plan turkey-osm-karaman-istanbul --min-stop-soc 0.4   # no short top-up stops: 1 min longer, see the guide
+evroute plan turkey-karaman-istanbul --vehicle hatch51_lfp --dc-max-kw 80  # an LFP hatchback on an 80 kW limit
 evroute compare turkey-osm-karaman-konya --algorithms naive,greedy,station-graph,genetic,bls,bls-astar,cfp,cfp-astar   # every planner on a short real-data trip
 ```
 
@@ -133,10 +137,11 @@ route = get_planner("bls-astar", potential="basic").plan(sc, trace=True)
   immutable values (`prepare()` notices in-place changes, but the `with_*`
   helpers are the intended way) and are serialisable: `with_query(origin=..., initial_soc=..., departure_s=...)`,
   `with_conditions(temperature_c=..., wind_speed_ms=..., preconditioning=...)`,
-  `with_preferences(objective=..., reserve_soc=..., speed_factors=...,
-  charge_step_soc=..., safety_factor=...)`, `with_tariff(high_soc=...,
+  `with_preferences(objective=..., reserve_soc=..., min_stop_soc=...,
+  speed_factors=..., charge_step_soc=..., safety_factor=...)`, `with_tariff(high_soc=...,
   high_soc_factor=..., peak_hours=..., peak_factor=..., busy_utilisation=...)`,
-  `with_(vehicle=..., tariff=Tariff(...))`;
+  `with_(vehicle=..., tariff=Tariff(...))` (a vehicle preset with a DC
+  limit: `VEHICLES["sedan60_lfp"].with_(dc_max_kw=80)`);
   `save(path)` / `Scenario.load(path)`; `prepare()` builds the
   `PreparedScenario` every planner works on (edge times and energies, exact
   charging functions, waits).
@@ -162,7 +167,8 @@ route = get_planner("bls-astar", potential="basic").plan(sc, trace=True)
   `evroute/algorithms/*.py` document every option.
 - **Evaluation**: `evaluate(prepared, PlanDecision(edges, levels, charges))`
   replays any decision from first principles and returns a `RoutePlan`
-  with violations listed - also for plans you construct yourself
+  with violations listed (reserve, arrival SoC, the floor rule, a stop
+  where the vehicle cannot plug in, ...) - also for plans you construct yourself
   (`ChargeDecision(position, station, target_kwh, hold_until_s=None)`; a
   hold until a trip time waits there before joining the queue).
 
@@ -186,6 +192,8 @@ and JavaScript with no third-party code.
 - **Map**: hill-shaded terrain, roads by class, charging stations (AC, DC,
   HPC ≥ 250 kW), place names, the route of every algorithm; zoom, pan, fit.
   Hover a station for its 24-hour queue profile; click a route to select it.
+  Stations the vehicle cannot plug into (no matching connector) are drawn
+  hollow and grey; the planners never stop there.
 - **Animation switch** (key `A`): with animation on, the car drives the
   selected route on a simulated clock - queueing, plugging in and charging
   with the exact charging curve - while the HUD (clock, SoC, speed,
@@ -203,8 +211,34 @@ and JavaScript with no third-party code.
 - **Charts**: SoC over distance with the elevation profile, time breakdown,
   queue profile, time-vs-money Pareto front (click a point to show that
   route) and a sortable comparison table.
-- Turkish / English, light / dark / system theme, keyboard accessible,
-  mobile layout.  `F` fits the map, `+` / `-` zoom.
+- **Two levels of detail.**  The default is the *research* view described
+  above, with the details of every quantity the model computes: per stop the
+  SoC and energy in and out, the energy charged and the grid energy behind
+  it, average and peak power against the station's and the vehicle's limit,
+  C-rate, waiting, set-up, hold and charging time, price period, money and
+  battery wear; per route the energy and wear totals and the generalised
+  cost; the vehicle's chemistry, charging curve and connectors.  The
+  **Everyday use** switch next to *Animation* (off whenever a page opens;
+  `#everyday` in the address turns it on) turns the app into a trip planner
+  for drivers: from, to, vehicle, current charge, departure, minimum arrival
+  charge, a charging style (*Hurry* / *Balanced* / *Relaxed*: the minimum
+  stop SoC) and a priority (*Fastest* / *Cheapest*) in, planned with
+  BLS-A\* alone; a trip plan out (totals, then every leg and stop) to copy,
+  print or, on the Turkey presets with real coordinates, open in Google
+  Maps.  It hides the research quantities (battery wear, generalised cost,
+  search statistics, C-rates, losses, algorithm names).  In a static page it
+  shows the trip plan of the selected route
+  ([guide §14](guide.md#14-everyday-mode)).
+- **Searchable pickers and tooltips.**  Origin, destination, vehicle and
+  scenario are searchable lists (type to filter; case, accents and Turkish
+  letters are ignored, so `istanbul`, `ISTANBUL` and `Istanbul` all find
+  İstanbul; keyboard, mouse and touch).  The vehicle list shows battery, DC
+  power and cell chemistry, and a card under it the AC power and the
+  connectors.  Tooltips (hover, keyboard focus, long press) explain the
+  controls, algorithms, KPIs, charts and technical terms in both languages.
+- Turkish / English, light / dark / system theme, keyboard accessible, from
+  phones to wide monitors (the layout uses the width of 2560 and 3440 px
+  screens).  `F` fits the map, `+` / `-` zoom.
 
 ## Live planning server
 
@@ -213,15 +247,20 @@ evroute serve turkey-karaman-istanbul --open      # http://127.0.0.1:8765/
 ```
 
 The same viewer in *live mode*: click the map or use the place pickers to set
-origin and destination, change vehicle, initial SoC, temperature, reserve,
-objective, value of time, eco speeds, queue awareness and departure, tick
-algorithms and press *Plan*; a switch turns the demonstration tariff on and
-off.  On the real-data presets (more than 20 000 nodes) only BLS-A\* and
+origin and destination, change vehicle (and, optionally, cap its DC
+charging power), initial SoC, temperature, reserve, minimum arrival charge,
+the minimum charge at each stop (a slider with the quick choices *Hurry*,
+*Balanced* and *Relaxed*: the reserve + 10, 30 or 40 %), objective, value of
+time, eco speeds, queue awareness and departure, tick algorithms and press
+*Plan*; a switch turns the demonstration tariff on and off (on at first).  On the real-data presets (more than 20 000 nodes) only BLS-A\* and
 CFP-A\* are ticked at first, about half a minute of planning: greedy and the
 station graph take minutes there.  The server uses only the standard library
 (`http.server`) and exposes a small JSON API: `GET /api/health`,
 `GET /api/scenarios`, `GET /api/scenario?name=...`, `POST /api/plan`
-(documented in [`server.py`](../src/evroute/server.py)).  It binds to
+(documented in [`server.py`](../src/evroute/server.py) and
+[`DEV_SPEC.md` §3](DEV_SPEC.md#3-viewer-data-contract-evroute-viewer1); the
+plan request takes `min_stop_soc`, a fraction up to 0.95, and `dc_max_kw`,
+3-500 kW or `null` for the vehicle's own limit).  It binds to
 `127.0.0.1` by default; it is a research tool, not a hardened web service.
 
 **In the browser.**  The [live planner of the web site](https://aseloth99.github.io/evroute/live/) is the
@@ -241,7 +280,9 @@ these five label-setting planners and 60 s for any planner (on
 station graph take tens of seconds there in a browser).  The fast exact
 planners run first, a long run shows its results so far and can be stopped;
 a run stopped by a limit is marked *possibly incomplete*, with the commands
-that repeat it locally.  `python
+that repeat it locally.  Apart from Pyodide the page loads nothing from
+elsewhere; the *Open in Google Maps* button of the everyday mode is a link
+that the visitor follows, and the app sends nothing anywhere.  `python
 tools/build_site.py -o _site` builds the whole site (landing page, live
 planner, examples); `.github/workflows/pages.yml` deploys it on every push to
 `main`.
@@ -268,7 +309,7 @@ adds `<out>/report.json` and the interactive dashboard `<out>/results.html`
 | `pareto` | time / money / wear trade-off | 2 cases, exact fronts |
 | `robustness` | P(strand) and P(reserve breach) versus the planning safety factor | 6 factors × 2 000 Monte Carlo runs |
 | `eco-speed` | when does driving slower shorten the trip? | 80 trips |
-| `vehicles` | the flagship trip with every vehicle preset | 6 vehicles |
+| `vehicles` | the flagship trip with every vehicle preset | 11 vehicles |
 | `tariffs` | what do the 80 % rule and peak hours cost, and when does waiting for a cheaper price pay? | 2 trips × 9 departures (06:00-22:00) × 4 tariffs |
 | `real-data` | what changes on real OpenStreetMap roads with the chargers mapped in OSM? ([real-data.md](real-data.md#results-the-real-data-experiment)) | 6 trips × 3 data sets (approximate, OSM, hybrid) × 5 planners |
 
@@ -304,7 +345,7 @@ made before the budget, took 6.8 hours, 6.4 of them in the station graph):
 | `pareto` | Antalya → Ankara: 495 Pareto-optimal routes; the cheapest saves 33.07 TRY (−5.6 %) for 34 more minutes than the fastest |
 | `robustness` | İzmir → Erzurum, 2 000 Monte Carlo runs: P(strand) 1.25 % and P(reserve breach) 56 % at safety factor 1.0; 0 % and 9.7 % at 1.1 (+21 min), 0 % and 0.4 % at 1.2 (+36 min) |
 | `eco-speed` | allowing 90 / 80 % speeds shortens 24 of 80 trips, by up to 2.8 min: driving a leg slower can save more charging time than it costs |
-| `vehicles` | Karaman → İstanbul: 7 h 50 min (75 kWh sedan, 2 stops) to 10 h 57 min (27 kWh city car, 5 stops) |
+| `vehicles` | Karaman → İstanbul: 7 h 50 min (75 kWh sedan, 2 stops) to 10 h 57 min (27 kWh city car, 5 stops) with a CCS2 inlet; the LFP cars 8 h 01 min to 8 h 34 min; without a usable DC inlet 20 h 35 min (AC-only city car, 6 stops) and 20 h 21 min (CHAdeMO hatchback: the synthetic stations have CCS2 only, so it charges at AC chargers for 12 h 37 min) |
 | `tariffs` | Karaman → İstanbul and Antalya → Ankara, departures 06:00-22:00 every 2 h: under the demonstration tariff (80 % tier + 16:00-20:00 peak) the fastest plan pays 2.6 % more than at flat prices on average (up to 10.5 %, Karaman leaving at 12:00); the cost-optimal plan pays 76.73 TRY (7.6 %) less than the fastest for 6.3 min more and waits for the cheaper period in 2 of 18 trips (up to 2.4 min); the 80 % tier alone moves the cost-optimal plans below 80 % (energy charged above it: Karaman 2.34 → 0.47 kWh, Antalya 0.94 → 0 kWh on average); (time, money) fronts of 55-202 plans on a 5 % grid, 14 of 72 stopped by the 1-million-label budget |
 | `scalability` | synthetic countries of 1 000-40 000 nodes, 8 trips each: BLS-A\* answers in 0.03 s → 1.7 s and CFP-A\* in 0.03 s → 2.5 s on average; Dijkstra-order BLS and CFP are already 20× and 35× slower at 10 000 nodes and run out of their label budgets on 3 / 4 of 8 trips at 20 000 nodes (CFP: 6 of 8 at 40 000); the station graph needs 8 minutes per trip at 40 000 nodes to build its meta-graph |
 | `real-data` | six trips on the approximate network and on OpenStreetMap roads (44 673 nodes) with the OSM stations or the hybrid set: the exact planners solve 5 of 6 trips with OSM stations (İzmir → Erzurum runs into the label limit: no DC charger in the east) and 6 of 6 with the hybrid set; the median runtime over the six trips with OSM stations is 4.0 s (BLS-A\*) and 9.9 s (CFP-A\*); with OSM stations the optimum takes 7.0 % longer on average, almost all of it slower driving; the heuristics lose their footing: mean gap greedy 6.4 % → 153.0 % (OSM) → 103.5 % (hybrid), genetic 0.2 % → 9.3 % → 0.9 %, and the station graph needed up to 3 h 46 min per trip (before the 10-minute budget) ([details](real-data.md#results-the-real-data-experiment)) |
@@ -499,8 +540,10 @@ the file, an OCPI tariff, the operator's verified list price in the Turkish
 price snapshot or a default; records that cannot be imported are listed
 with their reason.  On the command line: `evroute plan SCENARIO
 --stations-file FILE`.  Licences stay those of the source (Open Charge Map:
-CC BY-SA 4.0, credited automatically by `with_stations`; OCPI feeds: your
-agreement with the operator).  Details: the module documentation and
+CC BY 4.0, credited by `with_stations`, plus the attribution of a POI's
+own data provider; OCPI feeds: your agreement with the operator).  Where
+such data come from in Turkey - EPDK's Şarj@TR platform under the March 2026
+regulation, OCPI, Open Charge Map, research agreements - and what not to do:
 [real data, Live and operator data](real-data.md#live-and-operator-data).
 
 ## Charging tariffs
@@ -668,6 +711,24 @@ route with continuous charging amounts; `pareto` for the trade-off between
 time, money and wear.  The baselines are there to be beaten.  The
 [guide](guide.md#12-which-planner-should-i-use) has a table.
 
+**Why does a plan stop for only a few per cent?**  Because that is optimal:
+a short stop that adds just what the next leg needs can beat a longer one
+later.  If you would not leave the motorway for 12 %, set a minimum stop SoC
+(`--min-stop-soc 0.4`, `min_stop_soc=0.4`, the charging-style chips in the
+web app): every stop that starts below it ends at it or above, and the
+exact planners stay exact ([guide §13](guide.md#13-a-minimum-charge-at-each-stop-the-floor-rule)).
+
+**Why does my car never stop at some stations?**  It cannot plug in there:
+a station is usable only if one of its sockets matches one of the vehicle's
+connectors and carries the station's kind (AC or DC).  An AC-only car never
+fast-charges, a CHAdeMO car finds DC power only where a CHAdeMO socket is
+listed ([model §10](model.md#10-vehicles-cell-chemistry-dc-power-limit-connectors)).
+
+**Can it use live charger availability?**  Not yet for planning: OCPI
+imports report the availability of every station, and the queues still come
+from the Erlang-C assumptions
+([real data](real-data.md#from-snapshots-to-live-planning-future-work)).
+
 **Why does the cost-optimal plan wait at a station?**  Under a tariff with
 peak hours the price of a session is fixed when the car joins the queue; a
 few minutes of waiting for the end of the peak can be worth more than they
@@ -725,7 +786,10 @@ and incomplete charger coverage - see [`real-data.md`](real-data.md).
 - Contraction hierarchies or ALT landmarks for continental networks.
 - Chance-constrained planning: optimise P(arrive with reserve) directly
   instead of through a safety factor.
-- Live data: real-time charger availability and prices, traffic speeds.
+- Live data: station queues calibrated from observed occupancy (OCPI EVSE
+  status, EPDK's Şarj@TR once it offers machine-readable access), a nightly
+  station snapshot for the web site, traffic speeds
+  ([real data](real-data.md#from-snapshots-to-live-planning-future-work)).
 - Fleets and multi-day trips: overnight AC charging, driver breaks.
 
 Contributions are welcome - see [`CONTRIBUTING.md`](../CONTRIBUTING.md).
