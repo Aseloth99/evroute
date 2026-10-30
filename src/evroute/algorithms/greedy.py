@@ -30,6 +30,8 @@ charging stop:
    because charging power falls steeply above it) and 100 % at AC
    chargers -- capped by ``P.e_charge_cap``.  Go back to step 1.
 
+A nominal target below the minimum stop SoC (``Preferences.min_stop_soc``) is
+raised to it, so every stop obeys the floor rule of the exact planners.
 The target is raised to full (``P.e_charge_cap``) when the nominal one would
 not allow to **make progress**, i.e. neither to finish nor to reach another
 unused station; a station that cannot make progress even with a full charge
@@ -140,7 +142,8 @@ class GreedyRun:
 
 
 def target_energy(P: PreparedScenario, station: int, charge_to_soc: float | Mapping[str, float] | None) -> float:
-    """Nominal charging target [kWh] at ``station`` for the ``charge_to_soc`` option."""
+    """Nominal charging target [kWh] at ``station`` for the ``charge_to_soc`` option,
+    raised to the minimum stop energy ``P.e_stop_min`` (``Preferences.min_stop_soc``)."""
     kind = P.stations[station].kind
     if charge_to_soc is None:
         frac = DEFAULT_CHARGE_TO_SOC[kind]
@@ -150,7 +153,9 @@ def target_energy(P: PreparedScenario, station: int, charge_to_soc: float | Mapp
         frac = charge_to_soc
     if not 0.0 < frac <= 1.0:
         raise ValueError(f"charge_to_soc must lie in (0, 1], got {frac!r}")
-    return min(frac * P.capacity, P.e_charge_cap)
+    y = min(frac * P.capacity, P.e_charge_cap)
+    # floor rule: never stop for less than the minimum stop SoC (P.e_stop_min <= e_charge_cap)
+    return y if y >= P.e_stop_min else P.e_stop_min
 
 
 def run_greedy(

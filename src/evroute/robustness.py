@@ -71,6 +71,15 @@ The route and the stations are fixed; only the charging *targets* react.
 Neither policy re-routes or adds unplanned stops; the analysis measures the
 robustness of the *plan*, not of an online re-planning strategy.
 
+*Minimum stop SoC.*  Both policies keep the floor rule
+(``Preferences.min_stop_soc``) in every sampled world: a plan that obeys it
+has every target at the floor ``P.e_stop_min`` or above (a stop either ends
+there or starts above it, and ``RoutePlan.stops`` records the departure
+energy), charging maps ``e -> max(e, target)`` and the adaptive target is
+never lower.  A hand-made decision with a lower target is replayed with
+the target raised to the floor (targets within :data:`TOL_KWH` of it are
+kept, so a zero-noise replay stays bit-identical to the evaluator).
+
 **Guarantee (pathwise dominance).**  Energy evolution does not depend on
 time, driving maps ``e -> min(e - c, capacity)`` and charging
 ``e -> max(e, target)``, both non-decreasing, and the adaptive target is never
@@ -386,6 +395,7 @@ class _Route:
 
         stops_at: list[list[tuple[int, float, Any, float, int, float]]] = [[] for _ in nodes]
         visits: dict[int, int] = {}
+        floor_lim = P.e_stop_min - TOL_KWH if P.e_stop_min > 0.0 else -math.inf
         ordered: list[ChargeDecision] = []
         for c in decision.charges:  # sorted by position (stable) like the evaluator
             if not 0 <= c.position < len(nodes):
@@ -396,6 +406,8 @@ class _Route:
             occ = visits.get(s, 0)
             visits[s] = occ + 1
             target = min(c.target_kwh, P.e_charge_cap)
+            if target < floor_lim:
+                target = P.e_stop_min  # floor rule (module docs, "Driver policies")
             offset = _stream_offset(wait_base + occ * n_st + s)
             hold = -math.inf if c.hold_until_s is None else c.hold_until_s
             stops_at[c.position].append((s, target, P.cf[s], P.setup_s[s], offset, hold))

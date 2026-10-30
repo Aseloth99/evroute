@@ -99,6 +99,22 @@ exactly the set of plans `evaluate()` accepts (up to its float tolerance, see
 below); earlier versions allowed one stop per node visit and missed such
 routes (BUG-3 of the cross-validation suite).
 
+*Minimum stop SoC (the floor rule).*  Drivers do not stop for "+2 %":
+parking, plugging in and paying cost the same for a small top-up as for a real
+charge.  `Preferences.min_stop_soc` sets a floor
+$\varphi = \min(\texttt{min\_stop\_soc}, \mu)\,Q$ (`P.e_stop_min`; $\varphi = 0$
+switches the rule off) and restricts the charging transition: a stop at
+$(v, x)$ may end at $y$ only if
+
+$$ x \ge \varphi \quad\text{or}\quad y \ge \varphi, $$
+
+i.e. a stop that starts below the floor ends at it or above, one that starts at
+or above it may add any amount.  Consecutive stops at a node are tested one by
+one; since every stop ends at $\varphi$ or above, the rule binds only the first
+stop of a node visit.  `evaluate()` reports a stop that starts *and* ends below
+$\varphi - $ `TOL_KWH`.  Vehicles usually reach a stop near the reserve, so a floor
+of "reserve + $\Delta$" behaves like "charge at least $\Delta$" in practice.
+
 *Feasibility tolerance.*  The guarantees below are stated for exact
 arithmetic.  `evaluate()` accepts an energy shortfall of up to
 `TOL_KWH` $= 10^{-6}$ kWh at every reserve, arrival, cap and empty-battery
@@ -142,6 +158,36 @@ the Turkey presets with their time-dependent queues, the cost objective can
 exceed the default label budget), so `max_labels` and the A\* potential matter
 more there.
 
+**Lemma 1F (the floor keeps monotonicity).**  Lemma 1 and its cost versions
+hold under the floor rule: if $t_1 \le t_2$ and $x_1 \ge x_2$ (and $m_1 \le m_2$
+or $g_1 \le g_2$), every completion of the second partial route that obeys the
+rule is matched by one of the first that obeys it, arrives no later and costs no
+more.
+
+*Proof.* Follow the second route's decisions.  Energies stay ordered
+($x_1 \ge x_2$ at every later event, by Lemma 1).  At a stop of the second route
+to a target $y$: if $y \le x_1$ the first route skips it.  Otherwise, if
+$x_1 \ge \varphi$ every target above $x_1$ is allowed; if $x_1 < \varphi$ then
+$x_2 \le x_1 < \varphi$, so the second route's stop was bound by the floor and
+$y \ge \varphi$ -- allowed for the first route too.  Charging from the higher
+energy to the same $y$ takes no longer and costs no more money and wear (the
+cumulative functions telescope), and with FIFO queues it starts no later.
+$\square$
+
+The floor is the strongest rule of this kind that keeps the lemma.  A rule
+"add at least $\Delta$ per stop" breaks it: a label with 70 % that needs 75 % for
+the rest of the trip must then charge 70 → 90 %, which in the slow top range of
+the charging curve can take longer than 20 → 75 % in the fast range for a label
+with 20 % -- more energy at the same time would no longer dominate, and every
+label-setting argument below would fail.  With the floor, every exact planner
+keeps its guarantee: the target sets of BLS and Pareto contain $\varphi$
+(Section 2), CFP folds the mandatory part of a stop into its label (Section 4),
+and all lower bounds and A\* potentials stay valid because they bound the
+relaxation without the floor (the floor only removes transitions, so a potential
+that is consistent on every transition of the relaxation is consistent on the
+remaining ones).  With $\varphi = 0$ every planner runs its earlier code path and
+the results are bit-identical.
+
 ## 2. BLS — battery-constrained label setting
 
 BLS restricts charging targets to a finite set $\mathcal Y_j$ (the
@@ -153,13 +199,19 @@ stop at $j$ next: if $A$ dominates a label $B$, a stop of $B$ at $j$ to a
 target $y > x_A$ is matched by $A$'s parent $C$ (which just stopped at $j$)
 charging directly to $y$ ($t_C + W_j(t_C) + \sigma_j + F_j(y) - F_j(x_C) = t_A - F_j(x_A) +
 F_j(y) \le t_B + W_j(t_B) + \sigma_j + F_j(y) - F_j(x_B)$, likewise for money
-and wear), and one to $y \le x_A$ by $A$ itself.  Energies are kept *continuous* — consumption is never rounded, so
+and wear), and one to $y \le x_A$ by $A$ itself.  With a floor $\varphi > 0$ the
+target set also contains $\varphi$ itself (unless a target lies within
+$10^{-9}$ kWh of it), a stop from $x < \varphi$ only goes to targets
+$y \ge \varphi$, and the matching still works: if $x_C < \varphi$ then $A$'s own
+stop was bound by the floor, $x_A \ge \varphi$ and $y > x_A$ is allowed for $C$
+(Lemma 1F).  Energies are kept *continuous* — consumption is never rounded, so
 there is no accumulated discretisation error along long paths (a classic
 problem of SoC-bucket formulations).
 
 **Theorem 1.** BLS returns a route of minimum trip time among all routes whose
 charging targets lie in $\mathcal Y$ (consecutive stops at different stations
-of a node included).
+of a node included; with a minimum stop SoC, among those that obey the floor
+rule).
 
 *Proof sketch.* Every transition has non-negative duration, so labels are
 settled in non-decreasing time.  By Lemma 1 a label dominated by a settled
@@ -352,7 +404,8 @@ cold two-charger line of BUG-3 (16 s faster than the best single stop).
 
 **Theorem 3.** With static waits, CFP returns a fastest feasible route with
 arbitrary (continuous) charging amounts and any number of consecutive stops
-at different stations of a node, i.e. over all plans that are feasible in
+at different stations of a node (with a minimum stop SoC: every stop obeying
+the floor rule, by Lemma 1F and Lemma 3F below), i.e. over all plans that are feasible in
 exact arithmetic -- the plans `evaluate()` accepts, up to its float
 tolerance (Section 1); a second stop at the same station right after the
 first is never useful (Section 1).  *Sketch:* every label operation is monotone
@@ -375,6 +428,41 @@ number of stops.  CFP and CFP-A\* match it on every random instance
 (`test_consecutive_stops_match_an_exact_dynamic_programme`; in a 6000-instance
 run 236 optima had two or more stops at the node, up to five alternating
 stops with a non-monotone charging curve).
+
+**The floor rule in CFP.**  A stop label at $j'$ created at the switch time
+$t_j$ with $b = B(t_j) < \varphi$ stands only for the stops that end at
+$\varphi$ or above, so it is *folded*: it starts at
+
+$$ b' = \varphi,\qquad t_0' = t_0 + F_{j'}(\varphi) - F_{j'}(b), $$
+
+and its function for $t \ge t_0'$ is unchanged
+($F_{j'}^{-1}(F_{j'}(b) + t - t_0) = F_{j'}^{-1}(F_{j'}(b') + t - t_0')$).  Keys,
+dominance, sibling pruning (the offset $t_0 - F_{j'}(b)$ is the same, and
+$t_0' = \max(t_0, t_0 - F_{j'}(b) + F_{j'}(\varphi))$ is non-decreasing in
+$t_j$) and the reconstruction of the plan work on the folded parameters
+unchanged.  A folded label has charged at $j'$ at its own $t_0'$, so its switch
+candidate there is kept (the rule "skip the candidate at $t_0$" refers to the
+start of charging).
+
+**Lemma 3F (the candidates stay complete).**  For every final time $t$, the
+best energy over all switch times that obey the floor is attained at a
+candidate of Lemma 3 (or by not stopping at $j'$), and if no switch time obeys
+it, none does.  *Proof.*  With $B(t') \ge \varphi$ a switch at $t'$ is always
+allowed and then $\Phi(t') \ge B(t') \ge \varphi$; with $B(t') < \varphi$ it is
+allowed iff the stop ends at the floor, $\Phi(t') \ge \varphi$.  The allowed
+switch times are therefore exactly the upper level set
+$\{t' : \Phi(t') \ge \varphi\}$ of the function Lemma 3 maximises: if its
+maximum is at least $\varphi$, a maximiser at a candidate is allowed; if not, no
+switch time is.  $\square$  In particular the earliest time at which the
+vehicle can leave $j'$ with exactly $\varphi$ -- the route that dominates all
+others leaving with $\varphi$ -- is reached by a candidate label (apply the
+lemma at that time), so the crossing of $B$ with $\varphi$ needs no candidate of
+its own.  The test-suite checks the lemma against a dense scan of switch times
+and CFP against the dynamic programme above extended by the floor (the
+constraint $y_1 \ge \varphi$ on the first stop is one more interval bound of the
+chain, so with $\varphi$ among the energies a vertex solution is still optimal),
+against a dense scan of departure energies on line networks, and against BLS
+(never slower on any grid, converging from above as the grid is refined).
 
 With time-dependent waits CFP evaluates $W_{j'}$ at each concrete switch time.
 With the breakpoints alone (option `exact_switching=False`) plans remain
@@ -633,6 +721,13 @@ exact planners trade speed for energy.
    objective never holding, monotonicity in the prices, and the brute force
    of item 3 with holds until every price change (on the smallest instances
    until every 5-minute step of the next 24 hours, Section 6).
+6. **Minimum stop SoC** (`tests/test_min_stop.py`): every planner's plans obey
+   the floor rule (the evaluator and an independent check); the brute force of
+   items 3 and 5 with the floor (holds included) equals BLS and the Pareto
+   front; the whole battery of item 2 runs with random floors; CFP with the
+   floor matches the dynamic programme of item 4 extended by the floor and a
+   dense scan of departure energies, Lemma 3F is checked against a dense scan of
+   switch times, and a higher floor never gives a better optimum.
 
 The random instances are seeded grids, random geometric graphs, mountain
 corridors and tiny digraphs with every vehicle, −15 … 40 °C, 1-3 speed
