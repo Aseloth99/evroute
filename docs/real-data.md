@@ -644,12 +644,12 @@ status and the location's `last_updated`; `with_stations` keeps it in
 `scenario.meta["station_info"]`.  The planners do not use it yet: the queue
 model still takes its waits from the Erlang-C assumptions.
 
-**Licences.**  Imported data keep the licence of their source: Open Charge
-Map data are CC BY 4.0 ([above](#what-exists-october-2026); `with_stations`
+**Licences.**  Imported data keep the licence of their source.  Open Charge
+Map data are CC BY 4.0 ([above](#what-exists-october-2026)): `with_stations`
 appends an "Open Charge Map" credit to the scenario's attribution, which the
 viewer shows; a POI from another data provider carries that provider's
-terms and attribution, `DataProvider` in the POI, which you must show as
-well), OCPI feeds are governed by the agreement that gives access to them.
+terms and attribution (`DataProvider` in the POI), which you must show as
+well.  OCPI feeds are governed by the agreement that gives access to them.
 
 ### From snapshots to live planning (future work)
 
