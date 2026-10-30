@@ -65,10 +65,11 @@ Licences
 ========
 
 Data keep the licence of their source; the adapters do not change it.
-**Open Charge Map** data are published under CC BY-SA 4.0: credit "Open
-Charge Map" (openchargemap.org) and share adapted data under the same
-licence; a POI imported from another data provider may carry that provider's
-terms (``DataProvider.License`` in the POI).  **OCPI** feeds are governed by
+**Open Charge Map** data contributed by its users are published under
+CC BY 4.0 (since 1 April 2022): credit "Open Charge Map" (openchargemap.org).
+A POI imported from another data provider stays under that provider's terms
+(``DataProvider.License`` in the POI), and the provider must be credited to
+end users as well.  The OCM API needs a free API key.  **OCPI** feeds are governed by
 the agreement with the operator or roaming hub that gives you access.
 Scraping apps or web sites against their terms is not a data source.
 :func:`with_stations` appends the credit of the source to
@@ -112,7 +113,7 @@ FORMATS = ("csv", "ocpi", "ocm")
 #: Default snapping radius [m] (the bundled OSM stations use the same).
 DEFAULT_MAX_SNAP_M = 3000.0
 #: Credit line of Open Charge Map data.
-OCM_ATTRIBUTION = "Charging stations: Open Charge Map (openchargemap.org), CC BY-SA 4.0"
+OCM_ATTRIBUTION = "Charging stations: Open Charge Map (openchargemap.org), CC BY 4.0"
 #: Default power of a charge point whose power is not given [kW] (the defaults of the OSM build).
 DEFAULT_POWER_KW: dict[str, float] = {"AC": 22.0, "DC": 120.0}
 
@@ -741,7 +742,7 @@ def stations_from_ocm(
     phases), ``Quantity`` (default 1) and its own ``StatusType``
     (non-operational connections are left out).  One station per kind, as
     for OCPI.  OCM has no live status: ``availability`` stays ``None``.
-    Licence: CC BY-SA 4.0 (module docs, :data:`OCM_ATTRIBUTION`).
+    Licence: CC BY 4.0, third-party POIs their provider's (module docs, :data:`OCM_ATTRIBUTION`).
     """
     snap = _Snapper(network, max_snap_m)
     prices = _Prices(operator_prices, default_price)
