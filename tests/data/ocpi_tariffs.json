@@ -1,0 +1,20 @@
+{
+  "status_code": 1000,
+  "timestamp": "2026-10-30T09:00:00Z",
+  "data": [
+    {"country_code": "TR", "party_id": "ZES", "id": "T-DC", "currency": "TRY",
+     "elements": [{"price_components": [{"type": "ENERGY", "price": 12.5, "vat": 20.0, "step_size": 1}]}],
+     "last_updated": "2026-10-01T00:00:00Z"},
+    {"country_code": "TR", "party_id": "ZES", "id": "T-AC", "currency": "TRY",
+     "elements": [
+       {"price_components": [{"type": "ENERGY", "price": 8.0, "vat": 20.0, "step_size": 1}],
+        "restrictions": {"start_time": "00:00", "end_time": "06:00"}},
+       {"price_components": [{"type": "PARKING_TIME", "price": 1.0, "step_size": 60},
+                             {"type": "ENERGY", "price": 8.5, "vat": 20.0, "step_size": 1}]}
+     ],
+     "last_updated": "2026-10-01T00:00:00Z"},
+    {"country_code": "DE", "party_id": "ABC", "id": "T-EUR", "currency": "EUR",
+     "elements": [{"price_components": [{"type": "ENERGY", "price": 0.59, "step_size": 1}]}],
+     "last_updated": "2026-10-01T00:00:00Z"}
+  ]
+}

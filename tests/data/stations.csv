@@ -1,0 +1,5 @@
+id,lat,lon,node,kind,power_kw,plugs,connectors,operator,name,price_per_kwh
+csv-1,37.4862,32.7055,,DC,180,4,CCS2;Type2,ZES,Fixture DC hub near Çumra,
+csv-2,37.2600,32.9231,,AC,22,2,Type 2,Unknown Operator Ltd,Fixture AC point,8.5
+csv-3,35.0000,33.0000,,DC,150,2,CCS2,ZES,Fixture station at sea,
+csv-4,,,7673,DC,50,1,chademo,Trugo,Fixture CHAdeMO charger,
