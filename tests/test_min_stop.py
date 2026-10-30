@@ -277,7 +277,8 @@ def test_cross_validation_battery_with_a_floor_fast(block):
 
 @pytest.mark.slow
 @pytest.mark.parametrize("block", range(10))
-def test_cross_validation_battery_with_a_floor_slow(block):
+def test_cross_validation_battery_with_a_floor_slow(block, request):
+    cv._require_slow(request)
     _random_battery(range(block, block + 1), 30, "slow", cv.SLOW)
 
 
@@ -314,7 +315,8 @@ def test_brute_force_with_a_floor_fast(block):
 
 @pytest.mark.slow
 @pytest.mark.parametrize("block", range(10))
-def test_brute_force_with_a_floor_slow(block):
+def test_brute_force_with_a_floor_slow(block, request):
+    cv._require_slow(request)
     _brute_force_battery(range(1000 + block * 60, 1000 + (block + 1) * 60))
 
 
@@ -350,7 +352,8 @@ def test_tariff_brute_force_with_a_floor_fast():
 
 @pytest.mark.slow
 @pytest.mark.parametrize("block", range(4))
-def test_tariff_brute_force_with_a_floor_slow(block):
+def test_tariff_brute_force_with_a_floor_slow(block, request):
+    cv._require_slow(request)
     _tariff_battery(range(100 + 20 * block, 120 + 20 * block), tiniest=False)
     _tariff_battery(range(10 + 12 * block, 22 + 12 * block), tiniest=True)
 
@@ -539,7 +542,8 @@ def test_cfp_with_a_floor_matches_an_exact_dynamic_programme(block):
 
 @pytest.mark.slow
 @pytest.mark.parametrize("block", range(8))
-def test_cfp_with_a_floor_matches_an_exact_dynamic_programme_slow(block):
+def test_cfp_with_a_floor_matches_an_exact_dynamic_programme_slow(block, request):
+    cv._require_slow(request)
     _stack_battery(19300 + block, 400)
 
 
@@ -603,7 +607,8 @@ def test_cfp_bounds_and_grid_convergence_with_a_floor():
 
 
 @pytest.mark.slow
-def test_cfp_bounds_and_grid_convergence_with_a_floor_slow():
+def test_cfp_bounds_and_grid_convergence_with_a_floor_slow(request):
+    cv._require_slow(request)
     _grid_battery(tc._configs(24, seed=611) + tc._configs(12, static=False, seed=612), floors=(0.1, 0.3, 0.5, 0.7))
 
 
