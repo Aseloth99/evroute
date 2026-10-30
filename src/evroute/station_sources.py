@@ -444,10 +444,6 @@ def stations_from_csv(
             hit = (int(node), 0.0)
         else:
             raise ValueError(f"{where}: needs lat/lon, x/y or node")
-        ident = row.get("id") or str(n)
-        if hit is None:
-            out.skipped.append({"record": ident, "reason": "too far from the network", "max_snap_m": max_snap_m})
-            continue
         # ------------------------------------------------ charger
         power = num("power_kw", required=True, lo=0.0)
         assert power is not None
@@ -489,6 +485,11 @@ def stations_from_csv(
             if prof not in ("highway", "urban"):
                 raise ValueError(f"{where}: demand_profile must be 'highway' or 'urban', got {prof!r}")
             extra["demand_profile"] = prof
+        # every value is checked before the row may be skipped: a typo never hides behind the distance
+        ident = row.get("id") or str(n)
+        if hit is None:
+            out.skipped.append({"record": ident, "reason": "too far from the network", "max_snap_m": max_snap_m})
+            continue
         name = _site_name(str(row.get("name") or ""), operator, kind)
         st = _station(hit[0], kind, power, int(plugs or 1), price, name, operator, conns, **extra)
         out._add(st, {"source": "csv", "record": ident, "snap_m": round(hit[1], 1), "price": price_src})
