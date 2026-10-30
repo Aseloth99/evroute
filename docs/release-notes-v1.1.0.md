@@ -6,6 +6,12 @@ A release about real data: the trips of the Turkey case study now also run
 on the OpenStreetMap road network of Turkey, with the charging stations
 mapped in OSM and the prices the operators publish.
 
+- **Website and live demo**: https://aseloth99.github.io/evroute/ — try
+  the planner in the browser without installing anything (all nine
+  planners on the synthetic networks, run by Pyodide in the visitor's
+  browser; about 6 MB on the first visit) and open the prebuilt
+  examples: Karaman → İstanbul, the tariff scenario, the OpenStreetMap
+  network and the results dashboard.
 - **Real-data case study, bundled** (1.5 MB, no extra package): 44 673
   OpenStreetMap nodes and 75 393 km of motorway, trunk and primary roads
   with OSM speed limits or the legal defaults, SRTM elevations at every
@@ -50,6 +56,11 @@ Gerçek veri üzerine bir sürüm: Türkiye vaka çalışmasının yolculukları
 Türkiye'nin OpenStreetMap yol ağında, OSM'de işaretlenmiş şarj
 istasyonları ve operatörlerin yayımladığı fiyatlarla da çalışıyor.
 
+- **Web sitesi ve canlı demo**: https://aseloth99.github.io/evroute/ —
+  hiçbir şey kurmadan planlayıcıyı tarayıcıda deneyin (sentetik ağlarda
+  dokuz planlayıcının hepsi, ziyaretçinin tarayıcısında Pyodide ile;
+  ilk ziyarette yaklaşık 6 MB) ve hazır örnekleri açın: Karaman →
+  İstanbul, tarife senaryosu, OpenStreetMap ağı ve sonuç paneli.
 - **Paketle gelen gerçek veri vaka çalışması** (1,5 MB, ek paket
   gerekmez): 44 673 OpenStreetMap düğümü ve OSM hız sınırları ya da yasal
   varsayılanlarla 75 393 km otoyol, ana yol ve birincil yol; her düğümde
