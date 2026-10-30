@@ -91,6 +91,20 @@ Charging stations (``stations=``)
     price.  No :class:`~evroute.scenario.Station` field is added, so the
     JSON of every other scenario stays unchanged.
 
+**Connectors.**  The ``sockets`` column of ``stations.csv.gz`` lists the
+OSM ``socket:*`` tags of a station (``type:count@kW``); they become
+:attr:`~evroute.scenario.Station.connectors` through :data:`OSM_SOCKETS`
+(``type2``/``type2_cable`` -> Type2, ``type2_combo`` -> CCS2, ``chademo`` ->
+CHAdeMO, ``type1_combo`` -> CCS1, ``type1`` -> Type1).  The tags are sparse
+(294 of the 711 stations have any) and not always right (``type1_combo``,
+the North-American CCS1, is tagged at 7 Turkish multi-standard chargers,
+although DC charging in Turkey uses the European CCS2), so a missing socket
+does not mean that the station lacks it: every OSM station offers the
+**default connector of its kind** (Type 2 for AC, CCS2 for DC) plus its tagged
+sockets.  A Type 2/CCS2 vehicle can therefore use every station, as before
+1.0, while a CHAdeMO car finds DC power only where ``chademo`` is tagged (12
+stations) and a car without a DC inlet only at AC stations.
+
 ``scenario.meta["station_info"]`` records, per station id, where its data
 come from: the OSM object (``"osm": "node/123"``), the price source
 (``"operator"`` or ``"default"``), the power and plug sources of the build
@@ -154,7 +168,7 @@ from ..data import read_bytes, read_text
 from ..network import RoadNetwork
 from ..scenario import Conditions, Preferences, Query, Scenario, Station
 from ..units import haversine_m, project_equirectangular
-from ..vehicle import get_vehicle
+from ..vehicle import CONNECTORS, get_vehicle
 from .osm import OSM_ATTRIBUTION
 from .synthetic import GridIndex, copy_stations, parse_clock, split_overrides
 from .turkey import DEFAULT_PREFERENCES, REF_LAT, REF_LON, _norm, turkey_network, turkey_stations
@@ -166,6 +180,7 @@ __all__ = [
     "DEFAULT_PRICE_TRY",
     "DEMAND_PROFILE",
     "OSMPlace",
+    "OSM_SOCKETS",
     "QUEUE_MODEL",
     "STATION_SOURCES",
     "find_osm_place",
@@ -177,6 +192,7 @@ __all__ = [
     "osm_turkey_stations",
     "osm_turkey_summary",
     "osm_turkey_validation",
+    "osm_connectors",
     "osm_place_node",
     "station_price",
 ]
@@ -213,6 +229,20 @@ GAP_KM = 75.0
 GAP_PLACE_RADIUS_M = 20_000.0
 #: Road classes whose nodes the hybrid gap-fillers must cover.
 MAIN_CLASSES = ("motorway", "trunk", "primary")
+#: OSM ``socket:*`` types -> connector standards (:data:`evroute.vehicle.CONNECTORS`);
+#: other socket types (household plugs, ...) are not vehicle connectors of the model.
+OSM_SOCKETS: dict[str, str] = {
+    "type2": "Type2",
+    "type2_cable": "Type2",
+    "type2_combo": "CCS2",
+    "ccs": "CCS2",
+    "ccs2": "CCS2",
+    "tesla_supercharger_ccs": "CCS2",
+    "chademo": "CHAdeMO",
+    "type1_combo": "CCS1",
+    "ccs1": "CCS1",
+    "type1": "Type1",
+}
 #: A synthetic station moves to the nearest node of its road class, unless that
 #: node is more than this much farther away than the nearest main-road node [m].
 SYNTHETIC_SNAP_SLACK_M = 5_000.0
@@ -477,8 +507,33 @@ def station_price(operator: str, kind: str) -> tuple[float, str]:
     return DEFAULT_PRICE_TRY["AC" if kind == "AC" else "DC"], "default"
 
 
+def osm_connectors(kind: str, sockets: str) -> tuple[str, ...]:
+    """Connector standards of an OSM station of ``kind`` from its ``sockets``
+    column (``"type2:3;type2_combo:2@180"``; module docs).
+
+    The default of the kind (Type2 for AC, CCS2 for DC) plus the tagged
+    sockets, in the order of :data:`~evroute.vehicle.CONNECTORS`; ``()``
+    when that is the default alone (:attr:`Station.sockets` then supplies it,
+    and the station's JSON has no ``connectors`` key).  Sockets tagged with a
+    count of 0 are ignored.
+    """
+    found = {"Type2" if kind == "AC" else "CCS2"}
+    for item in filter(None, (s.strip() for s in sockets.split(";"))):
+        typ, _, rest = item.partition(":")
+        count = rest.split("@", 1)[0]
+        if count.strip() == "0":
+            continue
+        std = OSM_SOCKETS.get(typ.strip())
+        if std is not None:
+            found.add(std)
+    if len(found) == 1:
+        return ()
+    return tuple(c for c in CONNECTORS if c in found)
+
+
 def _queue_station(
-    sid: int, node: int, *, kind: str, power_kw: float, plugs: int, price: float, name: str, operator: str
+    sid: int, node: int, *, kind: str, power_kw: float, plugs: int, price: float, name: str, operator: str,
+    connectors: tuple[str, ...] = (),
 ) -> Station:
     q = QUEUE_MODEL[kind]
     return Station(
@@ -494,6 +549,7 @@ def _queue_station(
         demand_profile=list(DEMAND_PROFILE),
         mean_service_min=q["mean_service_min"],
         setup_s=SETUP_S[kind],
+        connectors=connectors,
     )
 
 
@@ -530,7 +586,7 @@ def _osm_stations() -> tuple[tuple[Station, ...], tuple[dict[str, Any], ...]]:
         sid = len(stations)
         stations.append(
             _queue_station(sid, node, kind=kind, power_kw=float(r["power_kw"]), plugs=int(r["plugs"]), price=price,
-                           name=name, operator=op)
+                           name=name, operator=op, connectors=osm_connectors(kind, r.get("sockets") or ""))
         )
         info.append({"osm": f"{r['osm_type']}/{r['osm_id']}", "price": price_src, "power": r["power_source"],
                      "plugs": r["plugs_source"], "snap_m": float(r["snap_m"])})
