@@ -5,7 +5,7 @@
 
     python tools/build_site.py -o _site                 # the whole site
     python tools/build_site.py -o _site --quick         # small examples (tests, previews)
-    python tools/build_site.py -o _site --wheel dist/evroute-1.1.0-py3-none-any.whl
+    python tools/build_site.py -o _site --wheel dist/evroute-1.0.0-py3-none-any.whl
     python -m http.server -d _site 8000                 # look at it: http://127.0.0.1:8000/
 
 The site (``.github/workflows/pages.yml`` builds and deploys it on every push

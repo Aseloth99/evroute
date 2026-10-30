@@ -416,7 +416,7 @@ EVRoute araştırmanıza katkı sağladıysa lütfen atıf yapın
   author  = {Açık, Mustafa},
   title   = {{EVRoute}: exact, battery-, queue- and degradation-aware route planning
              for electric vehicles with charging stations},
-  version = {1.1.0},
+  version = {1.0.0},
   year    = {2026},
   url     = {https://github.com/Aseloth99/evroute},
   license = {MIT (code), ODbL-1.0 (bundled real data)}
