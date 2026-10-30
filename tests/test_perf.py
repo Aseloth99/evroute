@@ -237,6 +237,11 @@ BUDGETS = [
      "bls-astar", 11_000, 16_500),
     (dict(rows=9, cols=9, seed=21, initial_soc=0.3, speed_factors=ECO), "cfp", 15_000, 35_000),
     (dict(rows=14, cols=14, seed=5, initial_soc=0.35), "bls-astar", 300, 350),
+    # a binding minimum stop SoC (the potentials do not know the floor: a few times more labels)
+    (dict(rows=12, cols=12, seed=3, initial_soc=0.3, speed_factors=ECO, min_stop_soc=0.7), "bls-astar", 4_000, 5_500),
+    (dict(rows=12, cols=12, seed=3, initial_soc=0.3, speed_factors=ECO, min_stop_soc=0.7), "cfp-astar", 4_000, 5_500),
+    (dict(rows=12, cols=12, seed=3, initial_soc=0.3, speed_factors=ECO, objective="cost",
+          time_dependent_waits=False, min_stop_soc=0.7), "bls-astar", 9_000, 14_000),
 ]
 
 

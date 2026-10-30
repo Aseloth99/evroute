@@ -290,10 +290,12 @@ def _brute_force_battery(seeds: range) -> None:
     for seed in seeds:
         base = cv.sample_tiny(seed)
         rng = random.Random(f"evroute-floor-tiny-{seed}")
+        if rng.random() < 0.5:  # more instances that have to charge
+            base = replace(base, initial_soc=round(rng.uniform(0.0, 0.35), 3))
         prefs = dict(base.prefs)
-        # a floor near or above the initial SoC, so that it binds at the first stop
-        floor = round(min(prefs["max_charge_soc"], rng.choice((base.initial_soc + 0.05, prefs["reserve_soc"] + 0.1,
-                                                                 0.3, 0.5, rng.uniform(0.1, 0.8)))), 3)
+        # a floor above the initial SoC, so that it binds at the first stop
+        floor = round(min(prefs["max_charge_soc"], rng.choice((base.initial_soc + rng.uniform(0.05, 0.5),
+                                                                 prefs["reserve_soc"] + 0.1, rng.uniform(0.1, 0.8)))), 3)
         inst = _with_floor(base, floor)
         cv.check_brute_force(inst, tally)
         P = cv.build_scenario(inst).prepare()
@@ -302,12 +304,12 @@ def _brute_force_battery(seeds: range) -> None:
         binding += p.feasible and _binding(P, p)
     _assert_clean(tally)
     assert tally.checked["I9"] >= len(seeds)
-    assert binding >= len(seeds) // 6
+    assert binding >= len(seeds) // 8
 
 
 @pytest.mark.parametrize("block", range(3))
 def test_brute_force_with_a_floor_fast(block):
-    _brute_force_battery(range(block * 16, (block + 1) * 16))
+    _brute_force_battery(range(block * 24, (block + 1) * 24))
 
 
 @pytest.mark.slow
@@ -354,19 +356,23 @@ def test_tariff_brute_force_with_a_floor_slow(block):
 
 
 def test_demo_tariff_with_holds_and_a_floor():
-    """The tariff preset under the cost objective with a floor: BLS = BLS-A* = the cheapest
-    Pareto member, every plan obeys the rule, and a higher floor never makes it cheaper."""
+    """The tariff preset under the cost objective: without a floor the cheapest plan ends with a
+    +3 % top-up; with one it does not, it still holds for the cheaper price period where that
+    pays, every plan obeys the rule, and a higher floor never makes the trip cheaper.  (BLS-A*
+    against the enumeration with holds: the tiny instances above.)"""
     sc = get_scenario("turkey-karaman-istanbul-tariff").with_preferences(objective="cost", charge_step_soc=0.05)
     last = -INF
     for floor in (0.0, 0.3, 0.5, 0.7):
         P = sc.with_preferences(min_stop_soc=floor).prepare()
         assert P.tariff_time_dependent
         a = _run(P, "bls-astar")
-        b = _run(P, "bls")
-        assert a.feasible and not _floor_breaches(P, a)
-        assert a.internal_objective == pytest.approx(b.internal_objective, rel=1e-9)
+        assert a.feasible and not _floor_breaches(P, a) and check_objective(a)
         assert a.internal_objective >= last - 1e-9
         last = a.internal_objective
+        small = [s for s in a.stops if s.soc_out - s.soc_in < 0.1 and s.energy_in_kwh < 0.3 * P.capacity]
+        assert bool(small) == (floor == 0.0), floor  # the "+2 %" kind of stop
+        if floor in (0.3, 0.5):
+            assert a.hold_time_s > 0.0
         if floor >= 0.5:
             assert _binding(P, a)
 

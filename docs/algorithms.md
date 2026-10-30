@@ -721,6 +721,13 @@ exact planners trade speed for energy.
    objective never holding, monotonicity in the prices, and the brute force
    of item 3 with holds until every price change (on the smallest instances
    until every 5-minute step of the next 24 hours, Section 6).
+6. **Minimum stop SoC** (`tests/test_min_stop.py`): every planner's plans obey
+   the floor rule (the evaluator and an independent check); the brute force of
+   items 3 and 5 with the floor (holds included) equals BLS and the Pareto
+   front; the whole battery of item 2 runs with random floors; CFP with the
+   floor matches the dynamic programme of item 4 extended by the floor and a
+   dense scan of departure energies, Lemma 3F is checked against a dense scan of
+   switch times, and a higher floor never gives a better optimum.
 
 The random instances are seeded grids, random geometric graphs, mountain
 corridors and tiny digraphs with every vehicle, −15 … 40 °C, 1-3 speed

@@ -124,7 +124,9 @@ programme over stop sequences and breakpoint energies.)
 
 *Stops below the reserve.*  The evaluator checks the reserve on arrival and
 departure only, so at the origin with ``e_init < e_min`` a stop may end below
-the reserve if another stop at the same node follows.  At a node with several
+the reserve if another stop at the same node follows (with a minimum stop SoC
+below the reserve it still ends at the floor or above, see "The floor rule"
+below; with one at or above the reserve a folded label is never below it).  At a node with several
 stations a station label with ``b < e_min`` is therefore *extended*: its
 function, its dominance tests and its switch candidates start at ``(t0, b)``
 instead of at ``t_feas`` (it can switch from ``t0`` on, it can only drive from
@@ -410,7 +412,10 @@ Implementation notes
   station's target is ``x`` at the stored switch time, and so on.  A stop that
   adds nothing is kept (the evaluator charges its wait and setup, and so does
   the label), so the internal objective equals the evaluated trip time up to
-  float rounding.
+  float rounding.  A folded stop label (floor rule) stores ``(t0', F(phi))``,
+  which give the same ``x(t)``; the leave time is at least ``t0'``, so its
+  target is the floor or above (up to float rounding, far inside the
+  evaluator's tolerance).
 * The potentials and ``need`` come from :mod:`evroute.search` and
   :mod:`evroute.algorithms.labels` (:class:`~evroute.algorithms.labels.AStarPotential`,
   :func:`~evroute.algorithms.labels.completion_energy`); nodes that cannot
