@@ -29,6 +29,8 @@
   const I = EVR.i18n;
 
   const DEFAULT_ALGOS = ['greedy', 'station-graph', 'bls-astar', 'cfp-astar'];
+  /** The planner of everyday use (exact on its charging grid, handles cost, tariffs and holds; fast), then fallbacks. */
+  const EVERYDAY_ALGOS = ['bls-astar', 'bls', 'cfp-astar'];
   /** Order in which the in-browser planner runs the ticked planners: usually fastest first. */
   const RUN_ORDER = ['naive', 'greedy', 'cfp-astar', 'bls-astar', 'station-graph', 'genetic', 'cfp', 'bls', 'pareto'];
 
@@ -566,11 +568,25 @@
       return true;
     }
 
+    /** Everyday use: one planner, BLS-A* (else the first of EVERYDAY_ALGOS the page offers). */
+    everydayAlgorithm() {
+      const offered = (this.app.payload.algorithms || []).map((a) => a.name);
+      return EVERYDAY_ALGOS.find((a) => offered.includes(a)) || offered[0];
+    }
+
+    /** The research view and everyday use show different parts of the form and the note. */
+    onViewChanged() {
+      this._syncPrio();
+      this._renderNote();
+    }
+
     request() {
       const el = this.el, app = this.app;
       const q = app.currentQuery();
       const [hh, mm] = (el.depart.value || '08:00').split(':').map(Number);
-      const algorithms = U.$$('input[type=checkbox]', el.algos).filter((c) => c.checked).map((c) => c.value);
+      const everyday = app.everyday;
+      const algorithms = everyday ? [this.everydayAlgorithm()].filter(Boolean)
+        : U.$$('input[type=checkbox]', el.algos).filter((c) => c.checked).map((c) => c.value);
       return {
         scenario: app.payload.scenario_preset || (app.model.scenario.meta || {}).preset || app.model.scenario.name,
         origin: q.origin,
@@ -586,7 +602,7 @@
         objective: el.objective.value,
         value_of_time_per_h: Math.max(0, +el.vot.value || 0),
         speed_factors: el.eco.checked ? [1.0, 0.9, 0.8] : [1.0],
-        queue_aware: el.queue.checked,
+        queue_aware: everyday ? true : el.queue.checked,   // everyday use: expected queues always count
         departure_s: ((hh || 0) * 3600 + (mm || 0) * 60),
         // on: the preset's own tariff, else the demonstration tariff ("80"); off: "flat"
         tariff: el.fieldTariff.hidden ? undefined : el.tariff.checked ? ((app.payload.scenario || {}).tariff ? undefined : '80') : 'flat',
@@ -628,6 +644,7 @@
         let shown = 0;
         const data = await this.transport.plan(body, (p) => {
           const a = titles.get(p.algorithm) || p.algorithm;
+          if (this.app.everyday) { this.setBusy(true, I.t('planning')); return; }   // no planner names in everyday use
           this.setBusy(true, p.restarting ? I.t('restarting', { a }) : I.t('planning_algo', { a, i: p.index + 1, n: p.total }));
         }, (partial) => {
           // a long run shows its results so far (a quick one only its final answer)
@@ -650,7 +667,10 @@
         this.fill();
         const errs = (data.errors || []).filter((e) => !e.budget).map((e) => `${titles.get(e.algorithm) || e.algorithm}: ${e.message}`);
         this.showError(errs.length ? errs.join(' · ') : null);
-        if (data.results.length) this.app.toast(I.t('toast_planned', { n: data.results.length, ms: I.num(performance.now() - t0, 0) }));
+        if (data.results.length) {
+          this.app.toast(this.app.everyday ? I.t('toast_plan_ready')
+            : I.t('toast_planned', { n: data.results.length, ms: I.num(performance.now() - t0, 0) }));
+        }
       } catch (err) {
         this.running = null;
         if (this.transport.kind === 'worker' && !this.transport.started) this._bootFailed(err);
@@ -702,6 +722,11 @@
         if (x.kind === 'skipped') return I.t('budget_skipped');
         return x.labels ? I.t('budget_labels', { n: I.num(x.labels, 0) }) : I.t('g_incomplete');
       };
+      if (this.app.everyday) {
+        // everyday use: that the plan may be incomplete, without planner names or commands
+        U.setChildren(box, U.el('p', {}, U.el('b', { text: I.t('budget_title') }), ' ', Array.from(new Set(n.items.map(what))).join(' · ')));
+        return;
+      }
       const code = [n.install, n.cmd].filter(Boolean).join('\n');
       const copy = U.el('button', { type: 'button', class: 'btn-copy', text: I.t('copy') });
       copy.addEventListener('click', () => {

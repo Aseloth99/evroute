@@ -8,6 +8,13 @@
  *
  * Keyboard: Space play/pause · A animation on/off · R race · S search
  * replay · ←/→ scrub (Shift: larger steps) · F fit route · +/- zoom.
+ *
+ * Two levels of detail: the research view (default) and "everyday use"
+ * (the top-bar switch, off on every load; a link with #everyday turns it
+ * on): a trip planner for drivers -- one planner (BLS-A*), the selected
+ * route only, a trip plan instead of the research panels.  The switch sets
+ * #app[data-view]; the stylesheet hides [data-research] / [data-everyday]
+ * parts.
  */
 (function (EVR) {
   'use strict';
@@ -21,6 +28,8 @@
       this.payload = payload;
       this.live = !!payload.live;
       I.setLang(App.initialLang(payload));
+      this.everyday = App.initialEveryday();   // never remembered: research view unless the link asks
+      U.$('#app').dataset.view = this.everyday ? 'everyday' : 'research';
       this.model = new EVR.model.Model(payload);
       this.layers = { terrain: true, stations: true, labels: true, others: true };
       this.visible = new Set(this.model.results.map((r, i) => i));
@@ -71,7 +80,7 @@
       const ok = (x) => (x === 'tr' || x === 'en' ? x : null);
       let lang = null;
       try {
-        lang = ok(new URLSearchParams(window.location.search).get('lang')) || ok(window.location.hash.slice(1).toLowerCase());
+        lang = ok(new URLSearchParams(window.location.search).get('lang')) || App.hashTokens().map(ok).find(Boolean) || null;
       } catch (e) { /* no location (embedded) */ }
       lang = lang || ok(U.storage.get('evroute.lang', null));
       if (!lang && payload.lang_auto) {
@@ -82,6 +91,16 @@
         } catch (e) { /* no navigator */ }
       }
       return lang || (payload.lang === 'en' ? 'en' : 'tr');
+    }
+
+    /** Words of the page's #hash: "#en", "#everyday", "#en&everyday". */
+    static hashTokens() {
+      try { return window.location.hash.slice(1).toLowerCase().split(/[&,;+]/).filter(Boolean); } catch (e) { return []; }
+    }
+
+    /** Everyday use only when the link asks for it (#everyday); the default is the research view. */
+    static initialEveryday() {
+      return App.hashTokens().includes('everyday');
     }
 
     /* ------------------------------------------------------------ selection */
@@ -103,8 +122,12 @@
       return this.model.results[s.ri] || null;
     }
 
-    /** Visible routes in result order (a selected Pareto alternative is appended). */
+    /** Visible routes in result order (a selected Pareto alternative is appended); everyday use: the selected one. */
     visibleRoutes() {
+      if (this.everyday) {
+        const r = this.selectedRoute();
+        return r ? [r] : [];
+      }
       const out = this.model.results.filter((r, i) => this.visible.has(i));
       if (this.selection.ai >= 0) {
         const a = this.selectedRoute();
@@ -305,6 +328,35 @@
       this._toastT = setTimeout(() => t.classList.remove('show'), 1800);
     }
 
+    /* ---------------------------------------------------- level of detail */
+    /** Switch between the research view and everyday use (`user`: from the switch, with a toast). */
+    setEveryday(on, user) {
+      on = !!on;
+      const changed = on !== this.everyday;
+      this.everyday = on;
+      const t = U.$('#everyday-toggle');
+      t.checked = on;
+      t.setAttribute('aria-checked', String(on));
+      U.$('#everyday-state').textContent = on ? 'ON' : 'OFF';
+      U.$('#app').dataset.view = on ? 'everyday' : 'research';
+      if (!changed) return;
+      if (on) {
+        // one route: the flagship planner's (BLS-A*), driven in trip mode
+        const ri = this._defaultSelection();
+        if (this.model.results[ri]) this.selection = { ri, ai: -1 };
+        if (this.anim.mode !== 'trip') {
+          if (this.anim.enabled) this.anim.setMode('trip', false); else this.anim.mode = 'trip';
+        }
+      }
+      this.panels.renderAll();
+      if (this.liveCtl) this.liveCtl.onViewChanged();
+      this.anim.buildTimeline();
+      if (this.anim.enabled) this.anim.restart();
+      this.redrawAll();
+      this.anim.frame();
+      if (user) this.toast(I.t(on ? 'toast_everyday_on' : 'toast_everyday_off'));
+    }
+
     /* ------------------------------------------------------ theme and lang */
     _applyThemeAttr() {
       let dark = this.themePref === 'dark';
@@ -459,6 +511,9 @@
       this._siteLinks();
       for (const b of U.$$('#lang-seg button')) b.addEventListener('click', () => this.setLang(b.dataset.lang));
       for (const b of U.$$('#theme-seg button')) b.addEventListener('click', () => this.setTheme(b.dataset.themeChoice));
+      const ev = U.$('#everyday-toggle');
+      ev.addEventListener('change', () => this.setEveryday(ev.checked, true));
+      this.setEveryday(this.everyday, false);
       try {
         window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { if (this.themePref === 'auto') this.setTheme('auto'); });
       } catch (e) { /* old browsers */ }
@@ -498,6 +553,8 @@
           this.anim.togglePlay();
         } else if (k === 'a' || k === 'A') {
           this.anim.setEnabled(!this.anim.enabled, true);
+        } else if ((k === 'r' || k === 'R' || k === 's' || k === 'S') && this.everyday) {
+          // no race or search replay in everyday use
         } else if (k === 'r' || k === 'R') {
           this.anim.setMode(this.anim.enabled && this.anim.mode === 'race' ? 'trip' : 'race', true);
         } else if (k === 's' || k === 'S') {

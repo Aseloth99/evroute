@@ -204,7 +204,7 @@ h1, h2, h3, p { margin: 0; }
   }
   .topbar { flex-wrap: wrap; padding-top: 10px; gap: 10px; }
   .brand { flex: 1 1 100%; }
-  .topbar-actions { flex: 1 1 100%; justify-content: space-between; }
+  .topbar-actions { flex: 1 1 100%; flex-wrap: wrap; justify-content: space-between; row-gap: 8px; }
   .brand-text h1 { font-size: 16px; }
   .chart-soc, .chart-wait, .chart-time, .chart-pareto, .table-card,
   .bottom.no-pareto .chart-time { grid-column: span 12; }

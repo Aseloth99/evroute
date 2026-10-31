@@ -471,6 +471,65 @@ select.combo-native {
 .app:not([data-view="everyday"]) [data-everyday] { display: none !important; }
 .app[data-view="everyday"] [data-research] { display: none !important; }
 
+/* ------------------------------------------- everyday use: the trip plan */
+.itin-card .card-head { align-items: center; flex-wrap: wrap; row-gap: 8px; }
+.itin-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-left: auto; }
+.btn-sm { height: 30px; padding: 0 10px; font-size: 12.5px; border-radius: 9px; gap: 6px; }
+.btn-sm svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 2; }
+a.btn-sm { color: var(--text); }
+a.btn-sm:hover { text-decoration: none; }
+.itin-totals { display: grid; grid-template-columns: repeat(auto-fill, minmax(118px, 1fr)); gap: 8px; margin-bottom: 14px; }
+.itin-total { padding: 8px 10px; border-radius: 12px; background: var(--surface-2); border: 1px solid var(--border); min-width: 0; }
+.itin-total small { display: block; font-size: 11px; color: var(--text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.itin-total b { display: block; font-size: 15.5px; font-weight: 750; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.itin-total b small { display: inline; font-size: 11.5px; font-weight: 600; color: var(--text-3); }
+.itin-total.good { background: var(--ok-soft); border-color: transparent; }
+.itin-total.good b { color: var(--ok); }
+.itin-steps { list-style: none; margin: 0; padding: 0; position: relative; }
+.itin-step { position: relative; display: grid; grid-template-columns: 28px minmax(0, 1fr); gap: 10px; padding: 0 0 12px; }
+.itin-step::before { content: ""; position: absolute; left: 13px; top: 22px; bottom: -2px; width: 2px; background: var(--border-strong); }
+.itin-step.itin-end::before { display: none; }
+.itin-step.itin-drive::before { background: repeating-linear-gradient(to bottom, var(--text-3) 0 4px, transparent 4px 8px); opacity: .7; top: 0; bottom: 0; }
+.itin-mark { display: grid; place-items: center; width: 28px; min-height: 22px; position: relative; z-index: 1; }
+.itin-mark .od-dot { width: 22px; height: 22px; }
+.itin-mark > i { display: none; }
+.itin-num {
+  width: 24px; height: 24px; border-radius: 50%;
+  display: grid; place-items: center;
+  background: var(--c-charge); color: #fff; font-weight: 800; font-size: 12px;
+  box-shadow: 0 0 0 3px var(--surface);
+}
+.itin-body { min-width: 0; }
+.itin-title { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.itin-title b { font-size: 13.5px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.itin-clock { font-variant-numeric: tabular-nums; font-weight: 650; color: var(--text-2); white-space: nowrap; }
+.itin-sub { font-size: 12px; color: var(--text-2); font-variant-numeric: tabular-nums; margin-top: 2px; }
+.itin-drive .itin-body { padding: 3px 0 2px; color: var(--text-3); }
+.itin-soc { font-size: 12.5px; font-weight: 650; font-variant-numeric: tabular-nums; margin-top: 3px; }
+.itin-notes { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 5px; }
+.itin-warn { padding: 2px 7px; border-radius: 6px; background: var(--warn-soft); color: var(--warn); font-size: 11.5px; font-weight: 650; }
+.itin-note { margin-top: 4px; font-size: 11.5px; color: var(--text-3); }
+.trip-veh { font-size: 13px; margin-bottom: 8px; }
+#trip-card .veh-card { margin: 0 0 10px; }
+.app[data-view="everyday"] .field-row { grid-template-columns: minmax(0, 1fr); }
+.switch-state { display: inline-block; text-align: left; }
+
+/* print the trip plan only (everyday use: "Print") */
+@media print {
+  body.print-itinerary { background: #fff !important; }
+  body.print-itinerary .app { display: block; padding: 0; }
+  body.print-itinerary .app > :not(#panel-right), body.print-itinerary #panel-right > :not(#itinerary-card),
+  body.print-itinerary .skip-link, body.print-itinerary .ui-tip, body.print-itinerary .fatal,
+  body.print-itinerary .combo-list, body.print-itinerary .itin-actions { display: none !important; }
+  body.print-itinerary #panel-right { display: block; overflow: visible; margin: 0; padding: 0; }
+  body.print-itinerary #itinerary-card {
+    --surface: #fff; --surface-2: #f4f6f9; --border: #d8dde5; --border-strong: #b9c1cc;
+    --text: #000; --text-2: #222; --text-3: #555; --ok: #15803d; --ok-soft: #e6f4ea; --warn: #92400e; --warn-soft: #fdf1dc;
+    background: #fff; color: #000; box-shadow: none; border: 0; padding: 0;
+  }
+  body.print-itinerary .itin-step { break-inside: avoid; }
+}
+
 /* ------------------------------------------------- tooltip (tooltip.js) */
 .ui-tip {
   position: fixed; z-index: 80; left: 0; top: 0;

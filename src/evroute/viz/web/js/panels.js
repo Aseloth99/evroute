@@ -65,6 +65,168 @@
       U.isNum(min) ? U.el('small', { text: ` (${I.t('arrival_min', { p: I.pct(min, 0) })})` }) : null);
   }
 
+  /* ------------------------------------------------------------ itinerary */
+  /** Connector a stop uses: one the station has and the vehicle takes (a DC one at a DC station). */
+  function stopConnector(app, s) {
+    const st = app.model.stations[s.station] || {};
+    const veh = ((app.model.scenario || {}).vehicle || {}).connectors;
+    const socks = Array.isArray(st.connectors) ? st.connectors : [];
+    const both = Array.isArray(veh) ? socks.filter((c) => veh.includes(c)) : socks;
+    const dc = both.filter((c) => DC_CONNECTORS.has(c));
+    const c = (s.station_kind === 'AC' ? both.find((x) => !DC_CONNECTORS.has(x)) : dc[0]) || both[0];
+    return c ? (CONNECTOR_LABEL[c] || c) : '';
+  }
+
+  /** The most-driven named roads of a leg (edges i0 .. i1 - 1 of route r), longest first. */
+  function legRoads(app, r, i0, i1) {
+    const m = app.model, len = new Map();
+    for (let i = i0; i < i1; i++) {
+      const e = r.edges[i];
+      const nm = m.edgeName[e] !== undefined ? m.edgeName[e] : m.edgeName[String(e)];
+      if (nm) len.set(nm, (len.get(nm) || 0) + (m.length[e] || 0));
+    }
+    return Array.from(len.entries()).sort((a, b) => b[1] - a[1]).slice(0, 2).map((x) => x[0]);
+  }
+
+  /**
+   * The trip plan of a feasible route: {totals, steps}; a step is
+   * {kind: 'start' | 'drive' | 'stop' | 'end', ...} with clock times in
+   * seconds after midnight.
+   */
+  function itinerary(app, r) {
+    const m = app.model, dep = m.departure;
+    const q = app.currentQuery(), prefs = app.currentPrefs();
+    const L = r.nodes.length;
+    const steps = [{ kind: 'start', place: m.nodeLabel(r.nodes[0] ?? q.origin), clock: dep, soc: r.node_energy_depart[0] / r._cap }];
+    let pos = 0;
+    let charging = 0;
+    const leg = (to) => {
+      if (to <= pos) return;
+      const dist = (r.node_dist_m[to] || 0) - (r.node_dist_m[pos] || 0);
+      steps.push({ kind: 'drive', dist, dur: r.node_arrive_s[to] - r.node_depart_s[pos], roads: legRoads(app, r, pos, to) });
+      pos = to;
+    };
+    for (const s of r._stops) {
+      leg(s.position);
+      const st = m.stations[s.station] || {};
+      const end = EVR.model.stopEnd(s);
+      charging += end - s.arrival_s;
+      steps.push({
+        kind: 'stop', num: s._num, name: s.station_name || st.name || `#${s.station}`, operator: st.operator || '',
+        acdc: s.station_kind || st.kind || '', power: s.station_power_kw, connector: stopConnector(app, s),
+        arrive: dep + s.arrival_s, leave: dep + end, socIn: s.soc_in, socOut: s.soc_out,
+        kwh: s.energy_out_kwh - s.energy_in_kwh, wait: s.wait_s + s.setup_s, charge: s.charge_s, hold: s.hold_s || 0,
+        holdUntil: dep + s.arrival_s + (s.hold_s || 0), money: s.money, peak: !!s.peak, longQueue: s.wait_s >= 15 * 60,
+        waitOnly: s.wait_s, stop: s,
+      });
+    }
+    leg(L - 1);
+    steps.push({ kind: 'end', place: m.nodeLabel(r.nodes[L - 1] ?? q.destination), clock: dep + r.total_time_s, soc: r.arrival_soc });
+    return {
+      steps,
+      totals: {
+        arrival: dep + r.total_time_s, total: r.total_time_s, drive: r.drive_time_s, charging, stops: r._stops.length,
+        money: r.money, arrivalSoc: r.arrival_soc, minArrival: prefs.min_arrival_soc, dist: r.distance_m,
+      },
+    };
+  }
+
+  /** Text lines of a stop step (shared by the card and the plain-text copy). */
+  function stopLines(app, st) {
+    const cur = app.model.currency;
+    const head = [st.name, st.operator].filter(Boolean).join(' · ');
+    const kind = [`${st.acdc} ${I.num(st.power, 0)} kW`, st.connector].filter(Boolean).join(' · ');
+    const times = `${I.clock(st.arrive)} ${I.pct(st.socIn, 0)} → ${I.clock(st.leave)} ${I.pct(st.socOut, 0)}`;
+    const work = [st.wait > 0 ? I.t('it_wait', { m: I.minutes(st.wait) }) : null, I.t('it_charge_min', { m: I.minutes(st.charge) }),
+      `${I.num(st.kwh, 1)} kWh`, I.money(st.money, cur, 0)].filter(Boolean).join(' · ');
+    const notes = [];
+    if (st.hold > 0) notes.push(I.t(st.peak ? 'stop_hold' : 'stop_hold_offpeak', { m: I.minutes(st.hold), c: I.clock(st.holdUntil, false) }));
+    if (st.peak) notes.push(I.t('warn_peak'));
+    if (st.longQueue) notes.push(I.t('warn_queue', { m: I.minutes(st.waitOnly) }));
+    return { head, kind, times, work, notes };
+  }
+
+  function driveText(st) {
+    return [`${I.km(st.dist, 0)} · ${I.duration(st.dur)}`, st.roads.length ? I.t('it_via', { r: st.roads.join(', ') }) : null].filter(Boolean).join(' · ');
+  }
+
+  function itinStep(app, st) {
+    if (st.kind === 'start' || st.kind === 'end') {
+      const which = st.kind === 'start' ? 'A' : 'B';
+      return U.el('li', { class: `itin-step itin-${st.kind}` },
+        U.el('span', { class: 'itin-mark' }, U.odDot(which)),
+        U.el('div', { class: 'itin-body' },
+          U.el('div', { class: 'itin-title' }, U.el('b', { text: st.place }), U.el('span', { class: 'itin-clock', text: I.clock(st.clock) })),
+          U.el('div', { class: 'itin-sub', text: `${I.t(st.kind === 'start' ? 'initial_soc' : 'arrival_soc')} ${I.pct(st.soc, 0)}` })));
+    }
+    if (st.kind === 'drive') {
+      return U.el('li', { class: 'itin-step itin-drive' }, U.el('span', { class: 'itin-mark' }, U.el('i')),
+        U.el('div', { class: 'itin-body itin-sub', text: `${I.t('it_drive')} · ${driveText(st)}` }));
+    }
+    const t = stopLines(app, st);
+    return U.el('li', { class: 'itin-step itin-stop' },
+      U.el('span', { class: 'itin-mark' }, U.el('span', { class: 'itin-num', text: String(st.num) })),
+      U.el('div', { class: 'itin-body' },
+        U.el('div', { class: 'itin-title' }, U.el('b', { text: t.head }), U.el('span', { class: 'itin-clock', text: I.clock(st.arrive) })),
+        U.el('div', { class: 'itin-sub' }, U.el('span', { class: `kind-pill kind-${st.acdc === 'AC' ? 'AC' : st.power >= 250 ? 'HPC' : 'DC'}`, text: st.acdc }), ` ${t.kind}`),
+        U.el('div', { class: 'itin-soc' }, `${I.t('it_charge')}: ${t.times}`),
+        U.el('div', { class: 'itin-sub', text: t.work }),
+        t.notes.length ? U.el('div', { class: 'itin-notes' }, t.notes.map((n) => U.el('span', { class: 'itin-warn', text: n }))) : null));
+  }
+
+  /** The trip plan as plain text (Copy). */
+  function itineraryText(app, r, it) {
+    const t = it.totals, cur = app.model.currency;
+    const veh = ((app.model.scenario || {}).vehicle || {}).name;
+    const start = it.steps[0], end = it.steps[it.steps.length - 1];
+    const out = [`EVRoute · ${I.t('trip_plan')}: ${start.place} → ${end.place}`];
+    if (veh) out.push(`${I.t('it_vehicle')}: ${veh}`);
+    out.push('');
+    for (const st of it.steps) {
+      if (st.kind === 'start') out.push(`A  ${I.t('it_depart')} ${st.place} ${I.clock(st.clock)} · ${I.pct(st.soc, 0)}`);
+      else if (st.kind === 'end') out.push(`B  ${I.t('it_dest')} ${st.place} ${I.clock(st.clock)} · ${I.t('arrival_soc')} ${I.pct(st.soc, 0)}`);
+      else if (st.kind === 'drive') out.push(`   ${I.t('it_drive')}: ${driveText(st)}`);
+      else {
+        const l = stopLines(app, st);
+        out.push(`${String(st.num).padEnd(2)} ${l.head} · ${l.kind}`);
+        out.push(`   ${I.t('it_charge')}: ${l.times}`);
+        out.push(`   ${l.work}`);
+        for (const n of l.notes) out.push(`   ! ${n}`);
+      }
+    }
+    out.push('');
+    out.push(`${I.t('total_time')} ${I.duration(t.total)} · ${I.t('it_drive')} ${I.duration(t.drive)} · ${I.t('it_charging')} ${I.duration(t.charging)} · ${I.km(t.dist, 0)}`);
+    out.push(`${I.t('it_cost')} ${I.money(t.money, cur)} · ${I.t('arrival_soc')} ${I.pct(t.arrivalSoc, 0)} (${I.t('arrival_min', { p: I.pct(t.minArrival, 0) })})`);
+    out.push(I.t('it_note'));
+    return out.join('\n');
+  }
+
+  /**
+   * Google Maps directions with the stops as waypoints -- only for a
+   * scenario with real coordinates (network lat/lon, the Turkey presets).
+   * The app only builds the link; nothing is sent unless the user follows it.
+   */
+  function mapsUrl(app, r) {
+    const lat = app.model.lat, lon = app.model.lon;
+    if (!lat || !lon || !r._ok) return null;
+    const ll = (v) => (U.isNum(lat[v]) && U.isNum(lon[v]) ? `${lat[v].toFixed(5)},${lon[v].toFixed(5)}` : null);
+    const o = ll(r.nodes[0]), d = ll(r.nodes[r.nodes.length - 1]);
+    if (!o || !d) return null;
+    const way = r._stops.map((s) => ll(s.node)).filter(Boolean).slice(0, 9);
+    let url = `${GMAPS_DIR}&origin=${encodeURIComponent(o)}&destination=${encodeURIComponent(d)}&travelmode=driving`;
+    if (way.length) url += `&waypoints=${encodeURIComponent(way.join('|'))}`;
+    return url;
+  }
+
+  /** Print the trip plan only (print stylesheet: body.print-itinerary). */
+  function printItinerary() {
+    document.body.classList.add('print-itinerary');
+    const done = () => { document.body.classList.remove('print-itinerary'); window.removeEventListener('afterprint', done); };
+    window.addEventListener('afterprint', done);
+    try { window.print(); } catch (e) { /* no printing */ }
+    setTimeout(done, 1000);
+  }
+
   /** Tooltip of a summary metric `k` (tip_m_<k>, or the arrival-charge explanation). */
   function metricTip(k) {
     if (k === 'arrival_soc') return I.t('tip_arrival_soc');
@@ -135,6 +297,9 @@
   }
 
   /* ------------------------------------------------- vehicles and connectors */
+  /** Google Maps directions ("Maps URLs", api=1): a link the user may follow. */
+  const GMAPS_DIR = 'https://www.google.com/maps/dir/?api=1';
+
   /** Display names of the connector standards (Station.sockets / Vehicle.connectors). */
   const CONNECTOR_LABEL = { Type2: 'Type 2', Type1: 'Type 1', CCS2: 'CCS2', CCS1: 'CCS1', CHAdeMO: 'CHAdeMO', NACS: 'NACS' };
   /** Connectors that carry DC (fast charging). */
@@ -229,6 +394,7 @@
         list: U.$('#algo-list'), summary: U.$('#summary-card'), stops: U.$('#stops'), stopsCount: U.$('#stops-count'),
         table: U.$('#cmp-table'), kv: U.$('#scenario-kv'), disclaimer: U.$('#disclaimer'),
         legendSoc: U.$('#legend-soc'), legendTime: U.$('#legend-time'),
+        itinerary: U.$('#itinerary-card'), tripCard: U.$('#trip-card'), tripFacts: U.$('#trip-facts'),
       };
     }
 
@@ -239,6 +405,79 @@
       this.renderTable();
       this.renderScenario();
       this.renderLegends();
+      this.renderItinerary();
+      this.renderTripFacts();
+    }
+
+    /* ------------------------------------------------- everyday: trip plan */
+    /**
+     * The itinerary of the selected route ("Trip plan"): totals, the steps
+     * from A to B (drive legs and stops) and Copy / Print / Google Maps.
+     * Only what a driver needs: times, distances, charge, kWh, money,
+     * stations and warnings -- no wear, generalised cost or planner names.
+     */
+    renderItinerary() {
+      const app = this.app, box = this.el.itinerary;
+      if (!box) return;
+      const r = app.selectedRoute();
+      const head = U.el('div', { class: 'card-head' }, U.el('h2', { text: I.t('trip_plan') }));
+      if (!r || !r.feasible || !r._ok) {
+        const msg = !r ? noRouteText(app) : r._strand ? I.t('stranded_at', { km: I.km(r._strand.dist, 0) }) : (r.message || I.t('no_route'));
+        U.setChildren(box, head, U.el('p', { class: r ? 'summary-warn' : 'muted', text: msg }));
+        return;
+      }
+      const it = itinerary(app, r);
+      const actions = U.el('div', { class: 'itin-actions' });
+      const copy = U.el('button', { type: 'button', class: 'btn btn-sm', 'data-tip': I.t('tip_copy') },
+        U.svg('M9 9h10v12H9zM5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1'), U.el('span', { text: I.t('copy') }));
+      copy.addEventListener('click', () => {
+        const text = itineraryText(app, r, it);
+        const done = () => { U.$('span', copy).textContent = I.t('copied'); setTimeout(() => { U.$('span', copy).textContent = I.t('copy'); }, 1600); };
+        try { navigator.clipboard.writeText(text).then(done, () => app.toast(I.t('err_generic', { m: 'clipboard' }))); } catch (e) { app.toast(I.t('err_generic', { m: 'clipboard' })); }
+      });
+      const print = U.el('button', { type: 'button', class: 'btn btn-sm', 'data-tip': I.t('tip_print') },
+        U.svg('M6 9V3h12v6M6 18H4a1 1 0 0 1-1-1v-6a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v6a1 1 0 0 1-1 1h-2M6 14h12v7H6z'), U.el('span', { text: I.t('btn_print') }));
+      print.addEventListener('click', () => printItinerary());
+      actions.append(copy, print);
+      const maps = mapsUrl(app, r);
+      if (maps) {
+        // a link the driver follows: the app itself sends nothing anywhere
+        actions.append(U.el('a', { class: 'btn btn-sm', href: maps, target: '_blank', rel: 'noopener noreferrer', 'data-tip': I.t('tip_gmaps') },
+          U.svg('M12 21s-7-6.2-7-11.5A7 7 0 0 1 19 9.5C19 14.8 12 21 12 21zM12 12a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5z'), U.el('span', { text: I.t('btn_gmaps') })));
+      }
+      head.append(actions);
+      const t = it.totals;
+      const tile = (k, v, tip, cls) => U.el('div', { class: `itin-total${cls ? ' ' + cls : ''}`, 'data-tip': tip || null, tabindex: tip ? '0' : null },
+        U.el('small', { text: I.t(k) }), U.el('b', {}, v));
+      const totals = U.el('div', { class: 'itin-totals' },
+        tile('it_arrival', I.clock(t.arrival)),
+        tile('total_time', I.duration(t.total)),
+        tile('it_drive', I.duration(t.drive)),
+        tile('it_charging', I.duration(t.charging), I.t('tip_it_charging')),
+        tile('stops', I.num(t.stops, 0)),
+        tile('it_cost', I.money(t.money, app.model.currency)),
+        tile('arrival_soc', [I.pct(t.arrivalSoc, 0), U.isNum(t.minArrival) ? U.el('small', { text: ` (${I.t('arrival_min', { p: I.pct(t.minArrival, 0) })})` }) : null],
+          I.t('tip_arrival_soc'), 'good'));
+      const steps = U.el('ol', { class: 'itin-steps' }, it.steps.map((st) => itinStep(app, st)));
+      U.setChildren(box, head, totals, steps, U.el('p', { class: 'itin-note', text: I.t('it_note') }));
+    }
+
+    /** Static pages in everyday mode: the trip's assumptions (vehicle, departure, charge). */
+    renderTripFacts() {
+      const app = this.app, card = this.el.tripCard;
+      if (!card) return;
+      card.hidden = app.live;
+      if (app.live) return;
+      const sc = app.model.scenario || {};
+      const v = sc.vehicle || {};
+      const q = app.currentQuery(), p = app.currentPrefs();
+      const kids = [U.el('div', { class: 'trip-veh' }, U.el('b', { text: v.name || v.key || '–' }))];
+      kids.push(U.el('div', { class: 'veh-card' }, vehicleCard(app, v)));
+      const rows = [['departure', I.clock(q.departure_s || 0)], ['initial_soc', I.pct(q.initial_soc, 0)],
+        ['min_arrival', I.pct(p.min_arrival_soc, 0)]];
+      if (p.min_stop_soc > 0) rows.push(['kv_min_stop', I.pct(p.min_stop_soc, 0)]);
+      kids.push(U.el('dl', { class: 'kv' }, rows.flatMap(([k, val]) => [U.el('dt', { text: I.t(k) }), U.el('dd', { text: val })])));
+      U.setChildren(this.el.tripFacts, kids);
     }
 
     /* ----------------------------------------------------------- route list */
@@ -592,7 +831,7 @@
   }
 
   EVR.panels = {
-    Panels, guaranteeBadge, budgetStopped, stoppedText, tariffText, tariffFactors, arrivalSoc,
+    Panels, guaranteeBadge, budgetStopped, stoppedText, tariffText, tariffFactors, arrivalSoc, itinerary, itineraryText, mapsUrl, GMAPS_DIR,
     vehicleCard, connectorChips, chemBadge, algoTip, CONNECTOR_LABEL, DC_CONNECTORS,
   };
 })(window.EVR = window.EVR || {});

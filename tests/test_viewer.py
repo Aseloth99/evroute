@@ -301,13 +301,19 @@ def test_cli_entry_point(tmp_path, scenario):
     assert data["animate"] is False and data["lang"] == "en"
 
 
+#: The one external URL of the viewer's code: the trip plan's "Open in Google Maps" link (everyday
+#: use, real-data scenarios only).  It is a link the user may follow; the page never fetches it.
+GMAPS_LINK = "https://www.google.com/maps/dir/?api=1"
+
+
 def test_web_assets_exist_and_are_inlinable():
     for name in CSS_FILES:
         assert "</style" not in (WEB_DIR / "css" / name).read_text(encoding="utf-8").lower()
     for name in JS_FILES:
         js = (WEB_DIR / "js" / name).read_text(encoding="utf-8")
         assert "</script" not in js.lower() and "<!--" not in js
-        assert "http://" not in js.replace("http://www.w3.org/2000/svg", "") and "https://" not in js
+        rest = js.replace("http://www.w3.org/2000/svg", "").replace(GMAPS_LINK, "")
+        assert "http://" not in rest and "https://" not in rest, name
     tpl = (WEB_DIR / "index.html").read_text(encoding="utf-8")
     for name in JS_FILES:
         assert f'src="js/{name}"' in tpl  # the template loads the same files in the same order

@@ -31,7 +31,7 @@
 </head>
 <body>
 <a class="skip-link" href="#map-wrap" data-i18n="skip_to_map">Haritaya geç</a>
-<div class="app" id="app" data-mode="static">
+<div class="app" id="app" data-mode="static" data-view="research">
 
   <!-- ============================================================ header -->
   <header class="topbar" id="topbar">
@@ -45,6 +45,12 @@
       </div>
     </div>
     <div class="topbar-actions">
+      <label class="switch switch-everyday" id="everyday-switch" data-i18n-tip="tip_everyday">
+        <input type="checkbox" id="everyday-toggle" role="switch" aria-checked="false">
+        <span class="switch-track" aria-hidden="true"><span class="switch-thumb"></span></span>
+        <span class="switch-label" data-i18n="everyday">Günlük kullanım</span>
+        <span class="switch-state" id="everyday-state" aria-hidden="true">OFF</span>
+      </label>
       <label class="switch switch-anim" id="anim-switch" data-i18n-tip="tip_animation">
         <input type="checkbox" id="anim-toggle" role="switch" aria-checked="false">
         <span class="switch-track" aria-hidden="true"><span class="switch-thumb"></span></span>
@@ -175,7 +181,12 @@
       <div class="form-note" id="plan-note" role="status" hidden></div>
     </section>
 
-    <section class="card" id="algo-card">
+    <section class="card" id="trip-card" data-everyday hidden>
+      <div class="card-head"><h2 data-i18n="trip">Yolculuk</h2></div>
+      <div id="trip-facts"></div>
+    </section>
+
+    <section class="card" id="algo-card" data-research>
       <div class="card-head"><h2 data-i18n="routes" data-i18n-tip="tip_routes" tabindex="0">Rotalar</h2><span class="hint" data-i18n="routes_hint">seçmek için tıklayın</span></div>
       <ul class="algo-list" id="algo-list" role="listbox" data-i18n-aria="routes"></ul>
     </section>
@@ -186,7 +197,7 @@
         <label class="check"><input type="checkbox" id="layer-terrain" checked><span data-i18n="layer_terrain">Arazi gölgelendirme</span></label>
         <label class="check"><input type="checkbox" id="layer-stations" checked><span data-i18n="layer_stations">Şarj istasyonları</span></label>
         <label class="check"><input type="checkbox" id="layer-labels" checked><span data-i18n="layer_labels">Yer adları</span></label>
-        <label class="check"><input type="checkbox" id="layer-others" checked><span data-i18n="layer_others">Diğer rotalar</span></label>
+        <label class="check" data-research><input type="checkbox" id="layer-others" checked><span data-i18n="layer_others">Diğer rotalar</span></label>
       </div>
       <div class="legend-stations">
         <span data-i18n-tip="tip_leg_ac" tabindex="0"><i class="st-ico st-ac"></i>AC</span>
@@ -196,7 +207,7 @@
       </div>
     </section>
 
-    <section class="card" id="scenario-card">
+    <section class="card" id="scenario-card" data-research>
       <div class="card-head"><h2 data-i18n="scenario">Senaryo</h2></div>
       <dl class="kv" id="scenario-kv"></dl>
       <p class="disclaimer" id="disclaimer" hidden></p>
@@ -288,7 +299,7 @@
             <option value="20">1 h = 20 s</option>
           </select>
         </label>
-        <div class="seg seg-sm mode-seg" role="group" id="mode-seg" data-i18n-aria="mode">
+        <div class="seg seg-sm mode-seg" role="group" id="mode-seg" data-i18n-aria="mode" data-research>
           <button type="button" data-mode="trip" aria-pressed="true" data-i18n-tip="mode_trip_title"><span data-i18n="mode_trip">Yolculuk</span></button>
           <button type="button" data-mode="race" aria-pressed="false" data-i18n-tip="mode_race_title"><span data-i18n="mode_race">Yarış</span><kbd>R</kbd></button>
           <button type="button" data-mode="search" aria-pressed="false" data-i18n-tip="mode_search_title"><span data-i18n="mode_search">Arama</span><kbd>S</kbd></button>
@@ -307,8 +318,9 @@
   <aside class="panel panel-right" id="panel-right" data-i18n-aria="trip">
     <!-- live mode on a phone: the form comes after the trip panels; this leads to it -->
     <a class="btn btn-block plan-own" id="plan-own" href="#live-card" hidden><span data-i18n="plan_own">Kendi yolculuğunuzu planlayın</span><span aria-hidden="true">↓</span></a>
-    <section class="card summary-card" id="summary-card" aria-live="polite"></section>
-    <section class="card" id="stops-card">
+    <section class="card itin-card wide-span" id="itinerary-card" data-everyday aria-live="polite"></section>
+    <section class="card summary-card" id="summary-card" aria-live="polite" data-research></section>
+    <section class="card" id="stops-card" data-research>
       <div class="card-head"><h2 data-i18n="charging_stops">Şarj durakları</h2><span class="hint" id="stops-count"></span></div>
       <ol class="stops" id="stops"></ol>
     </section>
@@ -323,28 +335,28 @@
       </div>
       <div class="chart" id="chart-soc"></div>
     </article>
-    <article class="card chart-card chart-wait">
+    <article class="card chart-card chart-wait" data-research>
       <div class="card-head">
         <h2 data-i18n="chart_wait" data-i18n-tip="tip_chart_wait" tabindex="0">Kuyruk profili (24 saat)</h2>
         <span class="hint" id="wait-station"></span>
       </div>
       <div class="chart" id="chart-wait"></div>
     </article>
-    <article class="card chart-card chart-time">
+    <article class="card chart-card chart-time" data-research>
       <div class="card-head">
         <h2 data-i18n="chart_time" data-i18n-tip="tip_chart_time" tabindex="0">Süre dağılımı</h2>
         <div class="chart-legend" id="legend-time"></div>
       </div>
       <div class="chart" id="chart-time"></div>
     </article>
-    <article class="card chart-card chart-pareto" id="pareto-card" hidden>
+    <article class="card chart-card chart-pareto" id="pareto-card" data-research hidden>
       <div class="card-head">
         <h2 data-i18n="chart_pareto" data-i18n-tip="tip_chart_pareto" tabindex="0">Pareto cephesi: süre ve ücret</h2>
         <span class="hint" data-i18n="pareto_hint">nokta boyutu = batarya yıpranması · tıklayın</span>
       </div>
       <div class="chart" id="chart-pareto"></div>
     </article>
-    <article class="card table-card">
+    <article class="card table-card" data-research>
       <div class="card-head">
         <h2 data-i18n="comparison" data-i18n-tip="tip_comparison" tabindex="0">Algoritma karşılaştırması</h2>
         <span class="hint" data-i18n="table_hint">sıralamak için başlığa, seçmek için satıra tıklayın</span>

@@ -287,19 +287,28 @@ def test_live_page_config(site, live_payload):
 _URL = re.compile(r"""https?://[^\s"'<>`)\\]+""")
 
 
+#: The trip plan's "Open in Google Maps" button (everyday use, scenarios with real coordinates).
+GMAPS_LINK = "https://www.google.com/maps/dir/?api=1"
+
+
 def test_live_app_has_no_external_url_but_pyodide(site):
     """The live app loads nothing from outside the site but the pinned Pyodide files.
 
-    The only other URLs are the SVG namespace (an identifier, never fetched)
-    and the repository in the install hint (shown to the reader)."""
+    The only other URLs are the SVG namespace (an identifier, never fetched),
+    the repository in the install hint (shown to the reader) and the Google
+    Maps directions link of the trip plan: an <a href> the user may follow
+    (rel="noopener noreferrer", opened only on click) -- the app itself sends
+    nothing there."""
     out, _ = site
-    allowed_text = {"http://www.w3.org/2000/svg", f"git+{bs.REPO}"}
+    allowed_text = {"http://www.w3.org/2000/svg", f"git+{bs.REPO}", GMAPS_LINK}
     for rel in ("live/index.html", "live/worker.js"):
         text = (out / rel).read_text(encoding="utf-8")
         for url in _URL.findall(text):
             if url.startswith(bs.PYODIDE_URL):
                 continue
             assert url in allowed_text or url == bs.REPO, (rel, url)
+    live = (out / "live/index.html").read_text(encoding="utf-8")
+    assert live.count(GMAPS_LINK) == 1  # one constant, used only to build that link
     worker = (out / "live" / "worker.js").read_text(encoding="utf-8")
     assert not _URL.findall(worker)  # the worker gets the CDN URL from the page
     # it loads the CDN scripts only after checking their digests, and refuses any other CDN file

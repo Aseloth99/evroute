@@ -102,6 +102,7 @@
 
     setMode(mode, user) {
       if (!['trip', 'race', 'search'].includes(mode)) return;
+      if (this.app.everyday && mode !== 'trip') return;   // everyday use: one route, no race or search replay
       if (mode === 'search' && !this._hasTrace()) { this.app.toast(I.t('toast_no_trace')); return; }
       if (!this.enabled) this.setEnabled(true, false);
       const prev = this.mode;
