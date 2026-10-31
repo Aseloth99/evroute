@@ -50,12 +50,15 @@ P.e_min                    # reserve: energy at every node (arrival AND departur
 P.e_charge_cap             # charging targets must be <= this
 P.e_init                   # energy at departure
 P.e_dest_min               # required energy at the destination (already >= e_min)
+P.e_stop_min               # the floor: min(min_stop_soc, max_charge_soc) * capacity (0: off); §1.2 item 9
 P.speed_factors            # e.g. (1.0,) or (1.0, 0.9, 0.8)
 P.edge_options[e]          # tuple of (k, time_s, energy_kwh, drive_cost) non-dominated speed levels
 P.edge_time[k][e], P.edge_energy[k][e]
-P.stations                 # list[Station];  station index s = position in this list
-P.station_at[node]         # -> list of station indices at that node
-P.is_station_node[node]    # bool
+P.stations                 # list[Station];  station index s = position in this list (every station)
+P.station_usable[s]        # can the vehicle charge at s? (Station.usable_by: a socket of the station's
+                           #   kind that the vehicle has)
+P.station_at[node]         # -> list of the indices of the USABLE stations at that node
+P.is_station_node[node]    # bool: the node has a usable station
 P.cf[s]                    # ChargingFunction of station s (energy units, exact); money: off-peak price
                            #   (the only price of a station in its peak period all day)
 P.wait_s(s, trip_s)        # expected queueing delay when arriving trip_s seconds after departure
@@ -78,6 +81,12 @@ P.money_cf(s, trip_s)      # P.cf[s] or P.cf_peak[s]: the money of a session joi
 P.hold_candidates(s, t)    # sorted trip times in (t, t + 24 h] at which the price of s changes
                            #   (nudged by a few ulps so that P.is_peak already reports the new period)
 ```
+
+`P.stations`, `P.cf`, `P.cf_peak`, `P.setup_s`, ... keep every station of the
+scenario, so station indices are the same for every vehicle; only
+`station_at` and `is_station_node` leave out the stations the vehicle cannot
+plug into.  Find stations through `station_at`, never by scanning
+`P.stations` or `P.cf` directly.
 
 With an active high-SoC tier every charging function has a breakpoint at
 `high_soc x capacity` (same power on both sides, so charging times are
@@ -124,6 +133,16 @@ consider is [`algorithms.md` §6](algorithms.md#6-charging-tariffs-price-periods
    For exact algorithms they should be equal up to float rounding.
 8. When `trace=True`, record `trace.visit(node, key)` every time a label is
    settled (`SearchTrace` keeps only the first visit per node).
+9. **Connectors.**  A stop at a station `s` with `P.station_usable[s]` false
+   is a violation (the vehicle has no socket of that station's kind).
+10. **The floor** (`Preferences.min_stop_soc`, `P.e_stop_min > 0`): a stop
+   that starts below `P.e_stop_min` must end at or above it (tolerance
+   `TOL_KWH`); a stop that starts at or above it is not constrained.  BLS
+   and Pareto add `P.e_stop_min` to their charging targets
+   (`labels.charging_targets`) and skip targets below it for a stop that
+   starts below it, CFP restricts the stop to end at or above it, and the
+   heuristics raise their targets to it.  Model: `model.md` §3; proofs:
+   `algorithms.md` §1.
 
 ## 2. Algorithms (registry names)
 
@@ -156,7 +175,8 @@ is settled, for every station `s` at the node except the one whose stop
 created the label (consecutive stops at *other* stations of a node are
 allowed, any number of times) and every target `y` in
 `targets = P.target_grid ∪ {interior breakpoints of P.cf[s] ≤ e_charge_cap}`
-with `y > e`, push a charged label (targets below the reserve only at a node
+(∪ `{P.e_stop_min}` when the floor is on) with `y > e` (and `y >= P.e_stop_min`
+when `e < P.e_stop_min`), push a charged label (targets below the reserve only at a node
 with several stations, i.e. at the origin with `e_init < e_min`).  With the
 cost objective and `P.tariff_time_dependent` the same targets are also
 pushed after a voluntary hold until each `P.hold_candidates(s, t)` (money of
@@ -304,8 +324,10 @@ planners ticked before the first plan (those of a request without
 `"algorithms"`: without greedy and the station graph on a network of more
 than 20 000 nodes).  `POST /api/plan` accepts
 `"tariff": "80"` (the demonstration tariff) or `"flat"` (no tariff; absent:
-the preset's own tariff), `"min_stop_soc"` (0..0.95) and `"dc_max_kw"`
-(3..500, or `null` for the vehicle's own limit) and answers with
+the preset's own tariff), `"min_stop_soc"` (0..0.95), `"dc_max_kw"`
+(3..500, or `null` for the vehicle's own limit) and `"charge_step_soc"`
+(0.01..0.25, the charging-target grid step; everyday use re-plans with 0.05
+when BLS-A* stops at its label budget on the preset's grid) and answers with
 `results_payload(...)`: `{"scenario", "results", "wait_profiles",
 "station_usable"}` (`station_usable` in station order, for the request's
 vehicle) plus, for a tariff other than

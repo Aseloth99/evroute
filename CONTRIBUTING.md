@@ -46,6 +46,7 @@ evroute/
 │   ├── generators/      # basic grids, turkey, osm_turkey (real data), synthetic, osm, presets
 │   ├── data/            # Turkey places and roads (CSV); osm_turkey/: the real-data network (ODbL)
 │   ├── robustness.py    # Monte Carlo reliability, safety-factor sweeps
+│   ├── station_sources.py  # station import: CSV, OCPI locations, Open Charge Map
 │   ├── viz/             # export.py + web/ (viewer), results.py (dashboard), figures.py + style.py (seaborn)
 │   ├── experiments/     # runner, plots, figures for the paper
 │   ├── server.py        # live planning server (http.server)
