@@ -294,13 +294,11 @@ input[type="range"]:focus-visible::-webkit-slider-thumb { box-shadow: var(--focu
 /* ---------------------------------------------------------- live form */
 .od-grid { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: end; gap: 6px; }
 .btn-swap { margin-bottom: 11px; width: 30px; height: 36px; }
-.od-dot {
-  display: inline-grid; place-items: center;
-  width: 16px; height: 16px; border-radius: 50%;
-  font-size: 10px; font-weight: 800; color: #fff;
-}
-.od-a { background: var(--pin-a); }
-.od-b { background: var(--pin-b); }
+/* origin / destination circles: an SVG whose letter is centred by construction (EVR.util.odDot) */
+.od-dot { flex: none; display: inline-block; width: 16px; height: 16px; vertical-align: middle; }
+.od-dot circle { fill: var(--pin-a); }
+.od-dot.od-b circle { fill: var(--pin-b); }
+.od-dot path { fill: #fff; }
 .pick-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: -3px 0 12px; }
 .pick-row .hint { font-size: 11.5px; line-height: 1.3; }
 .algo-picks { border: 0; padding: 0; margin: 8px 0 14px; }

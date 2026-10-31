@@ -376,9 +376,7 @@
     ctx.strokeStyle = th.surface;
     ctx.stroke();
     ctx.fillStyle = '#fff';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText(text, x, y + 0.5);
+    U.fillTextCentered(ctx, text, x, y);
     ctx.restore();
   }
 

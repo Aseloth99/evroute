@@ -43,6 +43,9 @@
       };
       this.panels = new EVR.panels.Panels(this);
       this.tipEl = U.$('#map-tip');
+      this.tooltip = EVR.tooltip.install();
+      // origin / destination circles of the static markup (letters centred by construction)
+      for (const slot of U.$$('[data-od]')) slot.replaceWith(U.odDot(slot.dataset.od));
       this._wireHeader();
       this._wireMapTools();
       this._wireKeyboard();
@@ -358,6 +361,7 @@
       this.anim.buildTimeline();
       this.anim.frame();
       this.redrawAll();
+      if (this.tooltip) this.tooltip.refresh();
     }
 
     /** "1 h = 5 s" (wide screens) or "5 s/h" (phones). */

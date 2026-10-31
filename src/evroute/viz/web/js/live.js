@@ -378,7 +378,8 @@
         value_of_time_per_h: prefs.value_of_time_per_h ?? 15,
         speed_factors: prefs.speed_factors || [1],
         queue_aware: prefs.queue_aware !== false,
-        tariff_on: !!sc.tariff,
+        // the charging tariff starts switched on; after a plan the switch shows what was planned
+        tariff_on: this.app.model.results.length ? !!sc.tariff : true,
       };
     }
 

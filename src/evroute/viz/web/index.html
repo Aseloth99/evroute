@@ -80,14 +80,14 @@
       </div>
       <div class="od-grid">
         <div class="field">
-          <label for="in-origin"><span class="od-dot od-a">A</span><span data-i18n="origin">Başlangıç</span></label>
+          <label for="in-origin"><span><span data-od="A"></span><span data-i18n="origin">Başlangıç</span></span></label>
           <select id="in-origin"></select>
         </div>
         <button type="button" class="btn-icon btn-swap" id="btn-swap" data-i18n-aria="swap" data-i18n-title="swap">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4v14M7 18l-3-3M7 18l3-3M17 20V6M17 6l-3 3M17 6l3 3"/></svg>
         </button>
         <div class="field">
-          <label for="in-destination"><span class="od-dot od-b">B</span><span data-i18n="destination">Varış</span></label>
+          <label for="in-destination"><span><span data-od="B"></span><span data-i18n="destination">Varış</span></span></label>
           <select id="in-destination"></select>
         </div>
       </div>
@@ -344,6 +344,8 @@
 <!-- evroute:scripts -->
 <script src="js/util.js"></script>
 <script src="js/i18n.js"></script>
+<script src="js/combo.js"></script>
+<script src="js/tooltip.js"></script>
 <script src="js/model.js"></script>
 <script src="js/terrain.js"></script>
 <script src="js/map.js"></script>

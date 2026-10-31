@@ -102,6 +102,8 @@ CSS_FILES: tuple[str, ...] = ("theme.css", "layout.css", "components.css")
 JS_FILES: tuple[str, ...] = (
     "util.js",
     "i18n.js",
+    "combo.js",
+    "tooltip.js",
     "model.js",
     "terrain.js",
     "map.js",

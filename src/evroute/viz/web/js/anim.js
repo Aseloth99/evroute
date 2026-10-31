@@ -515,9 +515,7 @@
         ctx.stroke();
         ctx.fillStyle = '#fff';
         ctx.font = `800 12px ${th.font}`;
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        ctx.fillText(String(s._num), x, y + 0.5);
+        U.fillTextCentered(ctx, String(s._num), x, y);
       }
     }
 

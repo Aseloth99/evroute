@@ -870,8 +870,15 @@
     return Math.hypot(px - (ax + t * dx), py - (ay + t * dy));
   }
 
-  /** Teardrop map pin whose tip is at (x, y). */
+  /**
+   * Teardrop map pin whose tip is at (x, y).  The pin is snapped to the
+   * device-pixel grid, so its circle and letter are drawn the same way
+   * wherever it sits (the letter stays visibly centred).
+   */
   function drawPin(ctx, x, y, color, letter) {
+    const dpr = U.dpr();
+    x = Math.round(x * dpr) / dpr;
+    y = Math.round(y * dpr) / dpr;
     const r = 10.5, cy = y - 19;
     ctx.save();
     ctx.shadowColor = 'rgba(0,0,0,.28)';
@@ -889,12 +896,23 @@
     ctx.lineWidth = 2;
     ctx.strokeStyle = '#fff';
     ctx.stroke();
+    // the letter as an outline whose ink is centred on the circle's centre
+    // (U.GLYPH), not as text: a font's glyph sits higher or lower
     ctx.fillStyle = '#fff';
-    ctx.font = '800 11.5px system-ui, sans-serif';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText(letter, x, cy + 0.5);
+    const k = PIN_GLYPH_SCALE;
+    ctx.translate(x - 8 * k, cy - 8 * k);
+    ctx.scale(k, k);
+    ctx.fill(glyphPath(letter), 'evenodd');
     ctx.restore();
+  }
+
+  /** Scale of the 16 x 16 glyph box in a pin (letter height 8 * k px). */
+  const PIN_GLYPH_SCALE = 1.1;
+  const _glyphs = {};
+  function glyphPath(letter) {
+    const key = letter === 'B' ? 'B' : 'A';
+    if (!_glyphs[key]) _glyphs[key] = new Path2D(U.GLYPH[key]);
+    return _glyphs[key];
   }
 
   EVR.map = { MapView, drawPin, segDist };
