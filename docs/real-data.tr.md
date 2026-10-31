@@ -29,6 +29,7 @@ Bu sayfada: [bir bakışta](#bir-bakışta) · [deneyin](#deneyin) ·
 [istasyon kümeleri](#üç-istasyon-kümesi-osm-synthetic-hybrid) ·
 [fiyatlar ve 2026 yönetmeliği](#fiyatlar-ve-mart-2026-yönetmeliği) ·
 [kuyruklar](#kuyruklar-varsayımlar) · [sonuçlar](#sonuçlar-real-data-deneyi) ·
+[canlı ve operatör verisi](#canlı-ve-operatör-verisi) ·
 [sınırlar](#sınırlar) · [yeniden oluşturma](#veriyi-yeniden-oluşturmak) ·
 [lisanslar](#lisanslar)
 
@@ -144,7 +145,7 @@ başlığı bu atfı yazar.
 | KGM (Karayolları Genel Müdürlüğü), *İller arası mesafeler* ([`ilmesafe.xlsx`](https://www.kgm.gov.tr/SiteCollectionDocuments/KGMdocuments/Root/Uzakliklar/ilmesafe.xlsx)) | 2026-03-03 tarihli tablo | yalnızca doğrulama |
 | EPDK, *Şarj Hizmeti Piyasası Aylık İstatistikleri* ([istatistik sayfası](https://www.epdk.gov.tr/Detay/Icerik/3-0-222/enerji-donusumusarj-hizmeti-piyasasi--istatistik)) | Eylül 2026, yayım 16.10.2026 | kapsam, kuyruk varsayımları |
 | operatörlerin kendi fiyat sayfaları | erişim 2026-10-27 | `prices.json` |
-| Resmî Gazete 23.03.2026, Sayı 33202: Şarj Hizmeti Yönetmeliği'nde değişiklik ([metin](https://www.resmigazete.gov.tr/eskiler/2026/03/20260323-4.htm)) | Mart 2026'dan beri yürürlükte | fiyat kuralları |
+| Resmî Gazete 23.03.2026, Sayı 33202: Şarj Hizmeti Yönetmeliği'nde değişiklik ([metin](https://www.resmigazete.gov.tr/eskiler/2026/03/20260323-4.htm)) | Mart 2026'dan beri yürürlükte | fiyat kuralları; işletmecilerin veri yükümlülükleri ([canlı veri](#canlı-ve-operatör-verisi)) |
 | Karayolları Trafik Yönetmeliği, Md. 100 | | varsayılan hızlar |
 
 ## Ağ nasıl oluşturuldu
@@ -302,7 +303,8 @@ En çok işaretlenen operatör Sharz.net'tir (129 istasyon, çoğu otel ve
 işletmelerde AC); ardından ZES (91) ve Trugo (84) gelir; 108 istasyonun
 operatör etiketi yoktur. EPDK istasyon koordinatlarını açık veri olarak
 yayımlamaz (Şarj@TR uygulaması istasyonları gösterir, lisans sicili
-yalnızca adres verir); konumları veren açık kaynak OSM'dir. Kapsam bu vaka
+yalnızca adres verir); konumları veren açık kaynak OSM'dir
+([canlı ve operatör verisi](#canlı-ve-operatör-verisi)). Kapsam bu vaka
 çalışmasının asıl sınırıdır: yalnızca OSM istasyonlarıyla uzun doğu
 yolculuklarında kullanılacak hızlı şarj noktası yoktur.
 
@@ -517,6 +519,110 @@ grafiklerini (`karaman-istanbul/`) yazar.
 
 ## Canlı ve operatör verisi
 
+Bu vaka çalışmasının zayıf noktası yollar değil, şarj noktalarıdır. OSM,
+EPDK'nin saydığı soketlerin yaklaşık %3'ünü bilir, istasyon güçlerinin
+%64'ü varsayılandır ve bir şarj noktasının boş mu, dolu mu, arızalı mı
+olduğunu hiçbir veri söylemez ([kapsam](#şarj-kapsamı-osm-ve-epdk)).
+İşletmeciler ise (Eşarj, Trugo, ZES, Tesla ve çok sayıdaki küçük lisans
+sahibi) kendi ağlarını eksiksiz bilir: her tesisi, her soketi ve gücünü,
+fiyatı ve her şarj noktasının o anki durumunu. Onların verisiyle
+planlayıcılar ağın haritalanmış kısmı yerine gerçek şarj ağı üzerinde
+optimize eder; anlık müsaitlik de varsayılan kuyrukların
+([Kuyruklar](#kuyruklar-varsayımlar)) yerine gözlenenleri koyabilir.
+Planlayıcılar her istasyon listesini kabul ettiği için bu bir algoritma
+değil, veri sorunudur. Bu bölüm 30 Ekim 2026 itibarıyla Türkiye'de neyin
+bulunduğunu, neyin yapılmaması gerektiğini ve EVRoute'un bu veriyi nasıl
+aldığını anlatır.
+
+### Neler var (Ekim 2026)
+
+**EPDK'nin Şarj@TR platformu.** Şarj Hizmeti Yönetmeliği'ndeki değişiklik
+(Resmî Gazete 23.03.2026, Sayı 33202,
+[metin](https://www.resmigazete.gov.tr/eskiler/2026/03/20260323-4.htm);
+burada anılan maddeler yayımı tarihinde, iki başka hüküm 1 Temmuz 2026'da
+yürürlüğe girdi) 30. maddeyi yeniden yazdı: EPDK, bütün şarj ağlarındaki
+halka açık her şarj istasyonunun konumunu, şarj ünitelerini, soket
+türlerini, sayılarını ve güçlerini, müsaitliğini, ödeme yöntemlerini ve
+fiyatlarını yayımlayan, ücretsiz erişimli bir platform kurar ve işletir;
+her şarj ağı işletmecisi de konum, ünite ve soketler, istasyon numarası ve
+adı, ödeme yöntemleri ve çalışma saatleri, ünite ve soket başına fiyatlar,
+planlı bakım ve arızalar, müsaitlik ve verilen enerji bilgilerini EPDK'nin
+belirlediği biçimde ve aralıklarla Kuruma sunmakla yükümlüdür (değişiklik
+yönetmeliğinin 19. maddesi). Yeni 28. maddenin birinci fıkrası ayrıca her
+işletmeciye, ağındaki tüm istasyon ve soketlerin kullanım durumlarını,
+müsaitliklerini ve fiyatlarını internet sitesinde ya da mobil
+uygulamasında anlık olarak gösterme yükümlülüğü getirir (18. madde).
+Platform bugün EPDK'nin iOS ve Android için Şarj@TR mobil uygulamasıdır:
+bütün halka açık istasyonlar bir haritada, bir istasyonun soketleri
+müsaitlik ve rezervasyon bilgileriyle, ödeme seçenekleri, güncel fiyat ve
+soket gücü
+([EPDK sayfası](https://www.epdk.gov.tr/Detay/Icerik/1-3428/enerji-donusumuserbest-erisim-platformu--sarj@tr)).
+Sayfa, üçüncü taraflar için bir API, indirme ya da web servisi anlatmaz.
+EPDK makinece okunabilir bir erişim sunduğunda Şarj@TR ideal tek kaynak
+olur (her lisanslı işletmeci ona bildirmek zorunda olduğu için eksiksiz,
+tek biçimli ve resmî, üstelik müsaitlik bilgisiyle) ve bu vaka
+çalışmasındaki OSM istasyonlarının da fiyat anlık görüntüsünün de yerini
+alır. O zamana kadar bir programın girdisi değil, insanlar için bir
+başvuru kaynağıdır.
+
+**OCPI.** Open Charge Point Interface, şarj noktası işletmecilerinin
+(CPO) ve e-mobilite hizmet sağlayıcılarının dolaşım (roaming) için konum,
+tarife, oturum ve şarj kaydı alışverişi yaptığı açık protokoldür. EVRoaming
+Foundation tarafından sürdürülür ve ücretsiz kullanılır; güncel sürüm
+2.3.0'dır, 2.2.1 hâlâ listelenir, 3.0 taslağının hedefi 2027'nin ortasıdır
+([evroaming.org/ocpi](https://evroaming.org/ocpi/)). Locations modülü bir
+tesisi Location → EVSE → Connector olarak tanımlar: her konnektörün
+standardı, akım türü ve `max_electric_power` değeri (W cinsinden), her
+EVSE'nin durumu (`AVAILABLE`, `CHARGING`, `OUTOFORDER`, ...). CPO durum
+değişikliklerini ortaklarına iletir, ortaklar listenin tamamını da
+çekebilir
+([Locations modülü, 2.2.1](https://github.com/ocpi/ocpi/blob/release-2.2.1-bugfixes/mod_locations.asciidoc));
+fiyatları Tariffs modülü taşır. Verisini bir araştırma projesiyle
+paylaşmayı kabul eden bir işletmeci, bunu dolaşım ortaklarıyla zaten
+kullandığı biçimde yapabilir: Locations ve Tariffs için okuma erişimi ya da
+kaydedilmiş bir yanıt. Türkiye'deki hangi işletmecilerin kime OCPI arayüzü
+sunduğu kendi anlaşmalarına bağlıdır; bu sayfa bunu bildiğini iddia etmez.
+
+**Open Charge Map.** Herkese açık bir API'si olan, dünya çapında açık bir
+şarj noktası kaydı; API, anahtar (API key) içermeyen istekleri reddeder.
+Kullanıcılarının katkıda bulunduğu veriler 1 Nisan 2022'den beri CC BY 4.0
+lisanslıdır; o tarihte önceki "aynı lisansla paylaş" (share-alike) koşulu
+kaldırıldı
+([duyuru](https://community.openchargemap.org/t/announcing-our-new-simpler-data-license-for-ocm-data-cc-by-4-0-international/565)).
+Başka veri sağlayıcılarından aktarılan POI'ler ise o sağlayıcıların verisi
+olarak kalır ve onları kullanan bir uygulama, veri sağlayıcının atfını
+lisans koşullarıyla birlikte son kullanıcılarına göstermelidir
+([koşullar](https://beta.openchargemap.org/about/terms)). Türkiye'deki
+ağın ne kadarını içerdiği bu sayfa için ölçülmedi.
+
+**Araştırma için veri anlaşmaları.** Bir işletmecinin eksiksiz verisine
+giden doğrudan yol, istemektir: amacı, alanları (tesisler, soketler,
+güçler, fiyatlar, durum geçmişi), dönemi, verinin nasıl saklanacağını ve
+ham verinin değil yalnızca sonuçların yayımlanacağını belirten, üniversiteden
+gelen bir talep. İstenecek şey tarihli bir anlık görüntü ya da işletmecinin
+zaten sahip olduğu bir arayüze okuma erişimidir (OCPI Locations ve Tariffs
+ya da aşağıdaki şemada bir CSV dışa aktarımı). Öteki yol, platformun
+topladığı veriye araştırma amaçlı erişim için EPDK'ye başvurmaktır.
+
+**OpenStreetMap** açık temel olarak kalır: ODbL lisanslı, pakette hazır ve
+herkesçe geliştirilebilir; saha gözlemiyle ya da lisansı izin veren bir
+kaynaktan işaretlenen istasyonlar ağın bir sonraki yapımına girer.
+
+### Neler yapılmamalı
+
+- İşletmecilerin uygulamalarını ya da internet sitelerini kullanım
+  koşullarına aykırı biçimde **kazımayın** (scraping), uygulamalarının
+  kapalı arayüzlerini çağırmayın. 28. maddenin birinci fıkrası veriyi
+  sürücülere görünür kılar, toplanmaya açmaz: koşullar bunu genellikle
+  yasaklar, işletmecinin sunucularına yük bindirir ve bunun üzerine kurulan
+  bir sonuç ne yayımlanabilir ne de yeniden üretilebilir.
+- Uygulamalardan ya da tescilli haritalardan istasyon listelerini OSM'ye
+  **kopyalamayın**: OpenStreetMap yalnızca kaynağı buna izin veren veriyi
+  kabul eder.
+- İçe aktarılan bir veri kümesini lisansının izin vermediği koşullarla
+  **yayımlamayın**: Open Charge Map verisi atıf ister, bir OCPI akışı
+  anlaşmasına, OSM'den türetilen veri ODbL'ye tabidir.
+
 ### İstasyon verisini içe aktarmak: `evroute.station_sources`
 
 [`evroute.station_sources`](../src/evroute/station_sources.py) modülündeki
@@ -560,11 +666,37 @@ istasyonunun anlık görüntüsüdür: `available` EVSE'ler (durumu
 Planlayıcılar bunu henüz kullanmaz: kuyruk modeli beklemeleri hâlâ
 Erlang-C varsayımlarından alır.
 
-**Lisanslar.** İçe aktarılan veriler kaynaklarının lisansını korur: Open
-Charge Map verileri CC BY-SA 4.0'dır (`with_stations`, görüntüleyicinin
-gösterdiği atıf satırına "Open Charge Map" atfını ekler; başka bir veri
-sağlayıcısından gelen bir POI o sağlayıcının koşullarını taşıyabilir), OCPI
-akışları ise erişimi sağlayan anlaşmaya tabidir.
+**Lisanslar.** İçe aktarılan veriler kaynaklarının lisansını korur. Open
+Charge Map verileri CC BY 4.0'dır ([yukarıda](#neler-var-ekim-2026)):
+`with_stations`, görüntüleyicinin gösterdiği atıf satırına bir "Open Charge
+Map" atfı ekler; başka bir veri sağlayıcısından gelen bir POI ise o
+sağlayıcının koşullarını ve atfını taşır (POI'deki `DataProvider`), bunları
+da göstermeniz gerekir. OCPI akışları, erişimi sağlayan anlaşmaya tabidir.
+
+### Anlık görüntülerden canlı planlamaya (gelecek çalışma)
+
+Henüz yapılmamış iki sonraki adım:
+
+- **Varsayılan kuyruklar yerine gözlenen doluluk.** Bugün her istasyonun
+  beklenen bekleme süresi, ulusal ortalamalarla Erlang-C modelinden gelir.
+  OCPI EVSE durumlarının (ya da Şarj@TR'deki müsaitliğin) bir geçmişi her
+  tesisin günün saatlerine göre doluluğunu verir; bundan soket başına
+  oturum sayısı, oturum süresi ve saatlik talep profili kestirilebilir:
+  CSV şemasının zaten kabul ettiği istasyon başına kuyruk alanları
+  (`daily_sessions`, `mean_service_min`, `demand_profile`). Parametreler ne
+  olursa olsun, bekleme profilinin FIFO onarımı
+  ([`model.md` §6](model.md#6-queues)) planlayıcıları kesin tutar. Erlang-C
+  formülünün kendisini gözlenen beklemelerle değiştirmek ve hemen yola
+  çıkan bir yolculuğun ilk istasyonları için anlık bir görüntü kullanmak
+  bundan sonraki adımlardır.
+- **Web sitesi için gecelik bir anlık görüntü.** Canlı demo tarayıcıda
+  planlar ve Pyodide dışında hiçbir şey indirmez. Zamanlanmış bir GitHub
+  Actions iş akışı her gece bir istasyon görüntüsü indirebilir (API
+  anahtarı depo sırrı olarak saklanan Open Charge Map ya da anlaşmasıyla
+  bir işletmeci akışı), onu `evroute.station_sources` ile içe aktarıp
+  tarihli ve atıflı olarak siteyle birlikte yayımlayabilir: ziyaretçiler
+  canlı istasyonlar üzerinde değil, bir önceki günün istasyonları üzerinde
+  planlar.
 
 ## Sınırlar
 
@@ -575,7 +707,8 @@ akışları ise erişimi sağlayan anlaşmaya tabidir.
   sentetiktir.
 - **İstasyon verisi.** Güçlerin %64'ü ve soket sayılarının %44'ü
   varsayılandır; soket sayıları alt sınırdır. Müsaitlik, çalışma saatleri
-  ve arızalı şarj noktaları modellenmez; tek bir markaya ya da yalnızca
+  ve arızalı şarj noktaları modellenmez (OCPI'den içe aktarılan veri
+  müsaitliği bildirir, ama planlayıcılar onu henüz kullanmaz); tek bir markaya ya da yalnızca
   müşterilere açık istasyonlar (ör. "Sadece Renault", otel şarj noktaları)
   kümede kalır, çünkü OSM bu kısıtı nadiren işaretler.
 - **Hızlar.** Yasal sınırlar ya da atanmış varsayılanlar; serbest akış,

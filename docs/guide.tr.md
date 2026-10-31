@@ -9,7 +9,10 @@ onun yerine ne yapar, yanıtlarına neden güvenilebilir ve hangisi ne zaman
 kullanılmalı. Konuya yeni başlayanlar için yazıldı; her bölüm, kesin
 ifadeleri ve ispatları arayan uzmanlar için bir bağlantıyla biter. Aşağıdaki
 her sayı kodun ürettiği bir sonuçtur (komutlar bu rehberde,
-[README](../README.tr.md) dosyasında ya da [dokümantasyonda](index.md)). Baştan sona kullanılan örnek,
+[README](../README.tr.md) dosyasında ya da [dokümantasyonda](index.md)). Son
+bölümler uygulamaya dönüktür: hangi planlayıcının kullanılacağı, bir planın
+yalnızca birkaç puanlık şarj için mola vermesinin nasıl önleneceği ve web
+uygulamasının günlük kullanım modu. Baştan sona kullanılan örnek,
 README'deki **Karaman → İstanbul** yolculuğu: 747 km, 85 kWh bataryalı bir
 C-SUV, saat 08:00'de %80 şarjla yola çıkıyor; yol boyunca ve varışta %10
 rezerv korunuyor, her şarj noktasında beklenen kuyruklar hesaba katılıyor.
@@ -23,7 +26,9 @@ rezerv korunuyor, her şarj noktasında beklenen kuyruklar hesaba katılıyor.
 [9. Eko hız, kuyruklar, soğuk hava](#9-eko-hız-kuyruklar-ve-soğuk-hava-aynı-mekanizma) ·
 [10. Doğrulama](#10-yanıtların-doğru-olduğunu-nereden-biliyoruz) ·
 [11. Tarifeler](#11-tarifeler-tek-bir-en-iyi-rota-yok) ·
-[12. Hangi planlayıcı?](#12-hangi-planlayıcıyı-kullanmalıyım)
+[12. Hangi planlayıcı?](#12-hangi-planlayıcıyı-kullanmalıyım) ·
+[13. Taban kuralı](#13-her-molada-en-az-bir-şarj-düzeyi-taban-kuralı) ·
+[14. Günlük kullanım modu](#14-günlük-kullanım-modu)
 
 ## 1. Düz A\* neden yetmiyor?
 
@@ -418,14 +423,35 @@ bölümünde.
 
 ## 12. Hangi planlayıcıyı kullanmalıyım?
 
-**Kısa yanıt:** `bls-astar`. Basit ve çok yönlü (süre ve maliyet amaçları,
-tarifeler, eko hız, zamana bağlı kuyruklar), sürekli optimumdan ortalama
-yalnızca %0,11 uzakta. Yalnızca yolculuk süresi önemliyse ve kesin sürekli
-optimumu istiyorsanız `cfp-astar`.
+**Kısa yanıt: `bls-astar`**; harcadığı hesaplama süresine göre en iyi
+sonucu veren planlayıcı. Şarj ızgarasında (SoC'nin her %2'si ve şarj
+eğrilerinin kırılma noktaları) kesindir ve modeldeki her şeyi destekler:
+süre ve maliyet amaçları, tarifeler ve daha ucuz fiyatı bekleme kararı, eko
+hızlar, zamana bağlı kuyruklar, 13. bölümdeki asgari mola şarjı ve aracın
+konnektörleri. Izgaranın bedeli küçüktür: 60 rastgele yolculukta sürekli
+optimumun ortalama %0,11 üzerinde (en çok %0,26, `optimality-gap` deneyi),
+gerçek veri deneyinin her yolculuğunda ise %0,4 yakınında kalır. Hızlıdır:
+yaklaşık Türkiye ağında onlarca milisaniye, Türkiye'nin 44 673 düğümlü
+OpenStreetMap ağında altı yolculukta medyan 4,0 sn. Web uygulamasının
+günlük kullanım modu (14. bölüm) yalnızca onunla planlar.
+
+Başka bir planlayıcı ne zaman?
+
+- **`cfp-astar`**: yalnızca yolculuk süresi önemliyse ve bir ızgaradaki
+  optimumu değil, sürekli optimumun kendisini istiyorsanız. Yalnızca
+  yolculuk süresini en küçükler ve büyük ağda daha yavaştır: altı gerçek
+  veri yolculuğunda medyan 9,9 sn; Karaman → İstanbul 23,3 sn sürer, BLS-A\*
+  ise 3,8 sn.
+- **`pareto`**: süre ile para (ve yıpranma) arasındaki ödünleşimi görüp
+  kendiniz seçmek için (7. bölüm).
+- **`greedy`**: temel çizgi olarak. Araç içi bir navigasyon cihazı gibi
+  planlar ve kesin planlayıcıların ne kazandırdığını gösterir: yaklaşık ağda
+  ortalama %5,2; yavaş AC şarj noktalarında saatlerce şarj ettiği gerçek veri
+  ağında %153 ([gerçek veri](real-data.tr.md#sonuçlar-real-data-deneyi)).
 
 | istediğiniz | kullanın | neden |
 |---|---|---|
-| hızlıca iyi bir plan; süre **ya da** maliyet için (varsayılan) | `bls-astar` | %2'lik şarj ızgarasında kesin (sürekli optimumdan ortalama %0,11, en çok %0,26 uzakta), Türkiye ağında onlarca milisaniye; maliyet amacında da, tarifeler dahil, kesin |
+| hızlıca iyi bir plan; süre **ya da** maliyet için (varsayılan) | `bls-astar` | %2'lik şarj ızgarasında kesin (sürekli optimumdan ortalama %0,11, en çok %0,26 uzakta); yaklaşık Türkiye ağında onlarca milisaniye, OpenStreetMap ağında birkaç saniye; maliyet amacında da, tarifeler ve beklemeler dahil, kesin |
 | sürekli şarj miktarlarıyla kesin en hızlı yolculuk | `cfp-astar` | yolculuk süresi için gerçek sürekli optimum; yalnızca süre amacı (`objective="cost"` ile de en hızlı rotayı döndürür) |
 | ödünleşimi görüp kendiniz seçmek | `criteria=("time", "money")` ile `pareto` | kesin cephe; `max_labels` verin, tarifeli uzun yolculuklarda daha kaba bir `charge_step_soc` (örn. 0,05) kullanın |
 | süreyi parayla tartan tek bir plan | `objective="cost"` ve kendi `value_of_time_per_h` değerinizle `bls-astar` | cepheden tek bir nokta seçer; tarifeyle birlikte nerede bekleneceğine de karar verir |
@@ -436,3 +462,106 @@ Komut satırından: `evroute plan SCENARIO -a bls-astar` (varsayılan),
 `-a cfp-astar`, `--objective cost`; `evroute compare SCENARIO` birkaç
 planlayıcıyı yan yana çalıştırır, `evroute viz SCENARIO -o yolculuk.html`
 ise onları görüntüleyicide gösterir.
+
+## 13. Her molada en az bir şarj düzeyi: taban kuralı
+
+Kesin bir optimum saniyesine kadar optimaldir ve bu bazen göze batar. Gerçek
+veri ağında, OpenStreetMap istasyonlarıyla Karaman → İstanbul yolculuğu ZES
+Afyon'da 5 dakikalığına durur ve %14,5'ten %26'ya şarj eder: Kütahya'daki
+Supercharger'a %10 rezervle varmaya tam yetecek kadar. Model bu molanın park
+etme ve fişi takma süresini de hesaba katar, yani bu gerçek bir optimumdur;
+ama %12 için otoyoldan çıkacak sürücü azdır: bir sonraki şarj noktası dolu
+ya da arızalı olabilir, mola da sonuçta moladır.
+
+`min_stop_soc` bir **asgari mola şarjı** belirler: bu düzeyin altında
+başlayan her şarj molası en az bu düzeye kadar sürer. Komut satırında
+`--min-stop-soc 0.4`, Python'da `scenario.with_preferences(min_stop_soc=0.4)`,
+web uygulamasında ise üç hızlı seçeneği (*Acele*, *Dengeli*, *Rahat*:
+rezerv + %10, %30 ya da %40) olan "Durakta en az şuna kadar şarj et"
+kaydırıcısı. Aynı yolculuk BLS-A\* ile:
+
+| asgari mola şarjı | yolculuk süresi | şarj maliyeti | iki mola |
+|---|---:|---:|---|
+| kapalı ya da %20 (*Acele*) | 9 sa 14 dk | 999,92 TRY | ZES Afyon %14,5 → %26, Kütahya %10 → %75 |
+| %40 (*Dengeli*) | 9 sa 15 dk | 1 028,17 TRY | ZES Afyon %14,5 → %40, Kütahya %24 → %75 |
+| %50 (*Rahat*) | 9 sa 16 dk | 1 048,36 TRY | ZES Afyon %14,5 → %50, Kütahya %34 → %75 |
+
+Molayı değerli kılmanın bedeli burada yaklaşık bir dakikadır (%40'ta 67 sn,
+%50'de 110 sn): planlayıcı enerjiyi ikinci moladan birinciye kaydırır ve
+plan yine kesin optimumdur; artık kurala uyan planlar arasında.
+
+**Neden "en az +Δ şarj et" değil de bir taban?** Akla ilk gelen kural, yani
+"her mola en az %20 eklesin", bütün kesin planlayıcıların dayandığı fikri
+bozar: *aynı anda daha fazla enerji hiçbir zaman daha kötü değildir* (2.
+bölüm). Aynı şarj noktasında aynı anda iki araç düşünün: biri %70, öteki
+%20 şarjlı ve ikisinin de yolun kalanı için %75'e ihtiyacı var. "+%20"
+kuralıyla dolu araç, şarj eğrisinin yavaş üst kısmında %70 → %90 şarj etmek
+zorundadır; boş olan ise hızlı kısımda %20 → %75 şarj eder ve pekâlâ önce
+yola çıkabilir. Dolu araç artık boş olana baskın gelmez, baskılanan
+etiketler atılamaz ve BLS, CFP ile Pareto araması garantilerini yitirir.
+
+Taban bu fikri korur. Dolu araç, boş olanın planını her zaman
+kopyalayabilir: boş araç bir *y* düzeyine kadar şarj ettiğinde dolu araç ya
+zaten *y*'ye sahiptir ve yoluna devam eder ya da o da *y*'ye kadar, daha
+uzun sürmeden şarj eder. Taban bunu hiçbir zaman yasaklamaz: dolu araç
+tabanda ya da üstündeyse her hedef serbesttir; altındaysa boş araç da
+altındaydı, dolayısıyla onun molası tabanda ya da üstünde bitmek
+zorundaydı, kopyası da öyle. Böylece her kesin planlayıcı bu kuralla da
+kesin kalır, sezgiseller hedeflerini tabana yükseltir ve bağımsız
+değerlendirici kuralı çiğneyen her molayı bildirir. Araçlar molaya
+genellikle rezerve yakın bir şarjla gelir; bu yüzden rezerv + Δ'lık bir
+taban "+Δ" gibi davranır. Ama taban bir miktar değil, bir düzeydir: tabanın
+hemen altında gelen bir araç yalnızca tabana ulaşacak kadar ekler (%40'lık
+tabanla Karaman → Mersin yolculuğu Ereğli'de %33'le durur ve %40'a kadar
+şarj eder), tabanın üstünde gelen bir araç ise istediği kadar ekleyebilir;
+0'lık bir taban da kuralı kapatır ve öncekiyle birebir aynı planları verir.
+
+*Uzmanlar için:* kural [`model.md` §3](model.md#3-battery) bölümünde; Lemma
+1F (taban monotonluğu korur, "+Δ" korumaz), BLS'nin hedef kümesindeki ve
+CFP'nin geçiş noktalarındaki taban
+[`algorithms.md` §1, §2, §4](algorithms.md#1-the-battery-expanded-state-space)
+bölümlerinde.
+
+## 14. Günlük kullanım modu
+
+Bu rehberdeki her şey web uygulamasında görülebilir: arama tekrarları,
+yarışlar, etiketler, Pareto cepheleri. Bu, *araştırma* görünümüdür ve
+varsayılan odur. Yalnızca nerede şarj edeceğini bilmek isteyen bir sürücü
+daha azıyla yetinir; bu yüzden uygulamanın üst çubuğunda *Animasyon*
+anahtarının yanında ikinci bir anahtar vardır: **Günlük kullanım**
+("Everyday use"). Sayfa her açıldığında kapalıdır (`#everyday` ile biten bir
+bağlantı sayfayı bu mod açık olarak açar); harita, animasyon, dil ve tema
+iki modda da aynı çalışır.
+
+Anahtar açıkken uygulama bir yolculuk planlayıcısına dönüşür:
+
+- **Siz girersiniz:** nereden ve nereye (`istanbul`, `ISTANBUL` ya da
+  `Istanbul` yazsanız da "İstanbul"u bulan aranabilir listeler), araç
+  (hücre kimyasını, bataryayı, DC ve AC gücünü ve konnektörleri gösteren
+  bir kartla), mevcut şarj, kalkış saati, minimum varış şarjı, bir şarj
+  tarzı (*Acele* / *Dengeli* / *Rahat*: 13. bölümdeki asgari mola şarjı) ve
+  bir öncelik (*En hızlı* süreye, *En ucuz* maliyete göre planlar).
+  Tarifeler açıktır.
+- **Yalnızca BLS-A\* ile planlar** (12. bölüm); algoritma seçimleri,
+  zamanın değeri ve teknik anahtarlar makul varsayılanlarla gizli kalır.
+- **Elinize geçen** bir yol planıdır: varış saati, toplam, sürüş ve şarj
+  süresi, mola sayısı, şarj maliyeti ve varış şarjı; ardından adım adım:
+  A'dan çıkış, sürüş (km, süre), her mola (istasyon, operatör, AC/DC ve
+  güç, konnektör, varış % → çıkış %, bekleme ve şarj dakikaları, maliyet,
+  fiyat puanttaysa bir not), B'ye varış. *Kopyala* planı düz metin olarak
+  panoya alır, *Yazdır* yazdırır; gerçek koordinatlı haritalarda (Türkiye
+  hazır senaryoları) *Google Haritalar'da aç* rotayı, molalar ara nokta
+  olacak şekilde açar. Bu sizin tıklayıp izlediğiniz bir bağlantıdır;
+  uygulamanın kendisi hiçbir yere bir şey göndermez.
+- **Dışarıda bıraktıkları** yalnızca araştırmacıların ihtiyaç duyduğu
+  şeylerdir: batarya yıpranması ve parasal karşılığı, genelleştirilmiş
+  maliyet, arama istatistikleri, C oranları, şarj kayıpları ve algoritma
+  adları.
+
+Araştırma görünümü ise ters yönde gider ve daha fazlasını gösterir: her
+mola için girişteki ve çıkıştaki enerji ve SoC, şarj edilen kWh'nin
+arkasındaki şebeke enerjisi, istasyonun ve aracın sınırlarına göre ortalama
+ve tepe şarj gücü, kuyrukta bekleme, hazırlık, gönüllü bekleme ve şarj
+olarak ayrılmış süre, fiyat dönemi ve batarya yıpranması; her teknik terimi
+bir ipucu açıklar. Aracın bağlanamadığı istasyonlar (uyan konnektör yok) iki
+modda da içi boş ve gri çizilir; planlayıcılar oralarda hiç durmaz.

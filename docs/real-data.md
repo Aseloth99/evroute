@@ -28,6 +28,7 @@ On this page: [at a glance](#at-a-glance) · [try it](#try-it) ·
 [station sets](#three-station-sets-osm-synthetic-hybrid) ·
 [prices and the 2026 regulation](#prices-and-the-march-2026-regulation) ·
 [queues](#queues-assumptions) · [results](#results-the-real-data-experiment) ·
+[live and operator data](#live-and-operator-data) ·
 [limitations](#limitations) · [rebuilding](#rebuilding-the-data) ·
 [licences](#licences)
 
@@ -143,7 +144,7 @@ experiment print it.
 | KGM (Karayolları Genel Müdürlüğü), *İller arası mesafeler* ([`ilmesafe.xlsx`](https://www.kgm.gov.tr/SiteCollectionDocuments/KGMdocuments/Root/Uzakliklar/ilmesafe.xlsx)) | table of 2026-03-03 | validation only |
 | EPDK, *Şarj Hizmeti Piyasası Aylık İstatistikleri* ([statistics page](https://www.epdk.gov.tr/Detay/Icerik/3-0-222/enerji-donusumusarj-hizmeti-piyasasi--istatistik)) | September 2026, published 16.10.2026 | coverage, queue assumptions |
 | the operators' own price pages | accessed 2026-10-27 | `prices.json` |
-| Resmî Gazete 23.03.2026, No. 33202: amendment of the Şarj Hizmeti Yönetmeliği ([text](https://www.resmigazete.gov.tr/eskiler/2026/03/20260323-4.htm)) | in force since March 2026 | price rules |
+| Resmî Gazete 23.03.2026, No. 33202: amendment of the Şarj Hizmeti Yönetmeliği ([text](https://www.resmigazete.gov.tr/eskiler/2026/03/20260323-4.htm)) | in force since March 2026 | price rules; the operators' data duties ([live data](#live-and-operator-data)) |
 | Karayolları Trafik Yönetmeliği, Art. 100 | | default speeds |
 
 ## How the network is built
@@ -296,7 +297,8 @@ The most-mapped operator is Sharz.net (129 stations, mostly AC at hotels
 and businesses), then ZES (91) and Trugo (84); 108 stations have no
 operator tag.  EPDK publishes no station coordinates as open data (its
 Şarj@TR app shows the stations, its licence register only addresses), so
-OSM is the open source with locations.  The coverage is the main limit of
+OSM is the open source with locations
+([live and operator data](#live-and-operator-data)).  The coverage is the main limit of
 this case study: with OSM stations alone, long eastern trips have no fast
 charger to use.
 
@@ -507,6 +509,102 @@ Karaman → İstanbul on OSM data (`karaman-istanbul/`).
 
 ## Live and operator data
 
+The weak point of this case study is not the roads but the chargers.  OSM
+holds about 3 % of the sockets that EPDK counts, 64 % of the station powers
+are defaults, and nothing says whether a charger is free, busy or broken
+([coverage](#charging-coverage-osm-against-epdk)).  The operators - Eşarj,
+Trugo, ZES, Tesla and the many smaller licence holders - each know their own
+network completely: every site, every socket and its power, the price, and
+the state of every charge point right now.  With their data the planners
+would optimise over the real charging network instead of the mapped part
+of it, and live availability could replace the assumed queues
+([Queues](#queues-assumptions)) with observed ones.  The planners take any
+station list, so this is a question of data, not of algorithms.  This
+section says what exists in Turkey as of 30 October 2026, what not to do,
+and how EVRoute takes such data in.
+
+### What exists (October 2026)
+
+**EPDK's Şarj@TR platform.**  The amendment of the Şarj Hizmeti
+Yönetmeliği (Resmî Gazete 23.03.2026, No. 33202,
+[text](https://www.resmigazete.gov.tr/eskiler/2026/03/20260323-4.htm);
+the articles quoted here took effect on publication, two other provisions
+on 1 July 2026) rewrote Article 30: EPDK sets up and runs a
+free-access platform that publishes the location, charging units, socket
+types, numbers and powers, availability, payment methods and prices of
+every public charging station of every network, and every network operator
+must submit to EPDK, in the format and at the intervals EPDK sets, the
+location, units and sockets, station number and name, payment methods and
+opening hours, the prices per unit and socket, planned maintenance and
+failures, availability and the energy delivered (Article 19 of the
+amendment).  The new Article 28(1) also obliges every operator to show the
+usage status, availability and prices of all its stations and sockets in
+real time on its web site or mobile app (Article 18).  The platform today
+is EPDK's Şarj@TR mobile app for iOS and Android: all public stations on a
+map, the sockets of a station with their availability and reservations,
+payment options, the current price and the socket power
+([EPDK page](https://www.epdk.gov.tr/Detay/Icerik/1-3428/enerji-donusumuserbest-erisim-platformu--sarj@tr)).
+The page describes no API, download or web service for third parties.
+Once EPDK offers machine-readable access, Şarj@TR is the ideal single
+source - complete, because every licensed operator must report to it,
+uniform and official, with availability - and it would replace both the OSM
+stations and the price snapshot of this case study.  Until then it is a
+reference for people, not an input for a program.
+
+**OCPI.**  The Open Charge Point Interface is the open protocol in which
+charge point operators (CPOs) and e-mobility service providers exchange
+locations, tariffs, sessions and charge records for roaming.  It is
+maintained by the EVRoaming Foundation and free to use; 2.3.0 is the
+current version, 2.2.1 is still listed, and a 3.0 draft targets mid-2027
+([evroaming.org/ocpi](https://evroaming.org/ocpi/)).  Its Locations module
+describes a site as Location → EVSE → Connector, with the standard, the
+power type and the `max_electric_power` (in W) of every connector and the
+status of every EVSE (`AVAILABLE`, `CHARGING`, `OUTOFORDER`, ...); the CPO
+pushes status changes to its partners, who can also fetch the whole list
+([Locations module, 2.2.1](https://github.com/ocpi/ocpi/blob/release-2.2.1-bugfixes/mod_locations.asciidoc)),
+and the Tariffs module carries the prices.  An operator that agrees to
+share its data with a research project can do it in the form it already
+uses with roaming partners: read access to its Locations and Tariffs, or a
+saved response.  Which Turkish operators run OCPI interfaces, and for whom,
+is a matter of their agreements; this page does not claim to know.
+
+**Open Charge Map.**  A worldwide open registry of charging locations with a
+public API; the API refuses requests without an API key.  Data contributed
+by its users are licensed CC BY 4.0 since 1 April 2022, when the earlier
+share-alike condition was dropped
+([announcement](https://community.openchargemap.org/t/announcing-our-new-simpler-data-license-for-ocm-data-cc-by-4-0-international/565)).
+POIs imported from other data providers stay those providers' data, and an
+application that uses them must show the data provider's
+attribution, licence included, to its end users
+([terms](https://beta.openchargemap.org/about/terms)).  How much of the
+Turkish network it holds has not been measured for this page.
+
+**Data agreements for research.**  The direct way to the complete data of
+an operator is to ask: a request from the university that states the
+purpose, the fields (sites, sockets, powers, prices, status history), the
+period, how the data are stored and that only results, not the raw data,
+will be published.  What to ask for is a dated snapshot or read access to an
+interface the operator already has (OCPI Locations and Tariffs, or a CSV
+export in the schema below).  A request to EPDK for research access to the
+data its platform collects is the other route.
+
+**OpenStreetMap** stays the open baseline: ODbL, bundled, and improvable by
+anyone - stations mapped from a survey or from a source whose licence allows
+it reach the next build of the network.
+
+### What not to do
+
+- **Do not scrape** operators' apps or web sites, or call the private
+  interfaces of their apps, against their terms of use.  Article 28(1) makes
+  the data visible to drivers, not free to harvest: the terms usually forbid
+  it, it loads the operator's servers, and a result built on it can be
+  neither published nor reproduced.
+- **Do not copy** station lists from apps or proprietary maps into OSM:
+  OpenStreetMap accepts only data whose source allows it.
+- **Do not publish** an imported data set under terms its licence does not
+  allow: Open Charge Map data need their attribution, an OCPI feed is bound
+  by its agreement, data derived from OSM by the ODbL.
+
 ### Importing station data: `evroute.station_sources`
 
 The adapters of [`evroute.station_sources`](../src/evroute/station_sources.py)
@@ -546,11 +644,35 @@ status and the location's `last_updated`; `with_stations` keeps it in
 `scenario.meta["station_info"]`.  The planners do not use it yet: the queue
 model still takes its waits from the Erlang-C assumptions.
 
-**Licences.**  Imported data keep the licence of their source: Open Charge
-Map data are CC BY-SA 4.0 (`with_stations` appends the credit "Open Charge
-Map" to the scenario's attribution, which the viewer shows; a POI from
-another data provider may carry that provider's terms), OCPI feeds are
-governed by the agreement that gives access to them.
+**Licences.**  Imported data keep the licence of their source.  Open Charge
+Map data are CC BY 4.0 ([above](#what-exists-october-2026)): `with_stations`
+appends an "Open Charge Map" credit to the scenario's attribution, which the
+viewer shows; a POI from another data provider carries that provider's
+terms and attribution (`DataProvider` in the POI), which you must show as
+well.  OCPI feeds are governed by the agreement that gives access to them.
+
+### From snapshots to live planning (future work)
+
+Two next steps, not built yet:
+
+- **Observed occupancy instead of assumed queues.**  Every station's
+  expected wait comes from the Erlang-C model with national averages today.
+  A history of OCPI EVSE states (or of the availability on Şarj@TR) gives
+  each site's occupancy by hour of the day, from which its sessions per
+  plug, session length and hourly demand profile can be estimated: the
+  per-station queue fields that the CSV schema already accepts
+  (`daily_sessions`, `mean_service_min`, `demand_profile`).  Whatever the
+  parameters, the FIFO repair of the wait profile
+  ([`model.md` §6](model.md#6-queues)) keeps the planners exact.  Replacing
+  the Erlang-C formula itself by observed waits, and using a live snapshot
+  for the first stations of a trip that starts now, are the further steps.
+- **A nightly snapshot for the web site.**  The live demo plans in the
+  browser and fetches nothing but Pyodide.  A scheduled GitHub Actions
+  workflow could fetch a station snapshot every night (Open Charge Map with
+  an API key kept as a repository secret, or an operator feed under its
+  agreement), import it with `evroute.station_sources` and publish it with
+  the site, dated and credited: the visitors would plan over yesterday's
+  stations, not over live ones.
 
 ## Limitations
 
@@ -560,7 +682,8 @@ governed by the agreement that gives access to them.
   hybrid gap-fillers are synthetic.
 - **Station data.**  64 % of the powers and 44 % of the plug counts are
   defaults; plug counts are lower bounds.  Availability, opening hours and
-  broken chargers are not modelled, and stations for one brand or for
+  broken chargers are not modelled (an OCPI import reports availability,
+  but the planners do not use it yet), and stations for one brand or for
   customers only (e.g. "Sadece Renault", hotel chargers) are kept, since
   OSM rarely tags the restriction.
 - **Speeds.**  Legal limits or imputed defaults, free flow, no traffic or

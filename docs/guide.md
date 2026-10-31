@@ -9,7 +9,9 @@ the planners do instead, why their answers can be trusted, and which one to
 use.  It is written for newcomers; every section ends with a pointer to the
 exact statements and proofs for experts.  Every number below is produced by
 the code (the commands are in this guide, the [README](../README.md) or
-the [documentation](index.md)); the running example is the README's
+the [documentation](index.md)).  The last sections are practical: which
+planner to use, how to keep a plan from stopping for a few per cent, and the
+everyday mode of the web app.  The running example is the README's
 **Karaman → İstanbul** trip: 747 km, an 85 kWh C-SUV leaving at 08:00 with
 80 %, 10 % reserve on the way and on arrival, expected queues at every
 charger.
@@ -23,7 +25,9 @@ Contents: [1. Why plain A\* is not enough](#1-why-plain-a-is-not-enough) ·
 [9. Eco speeds, queues, cold weather](#9-eco-speeds-queues-and-cold-weather-the-same-machinery) ·
 [10. How we know the answers are right](#10-how-we-know-the-answers-are-right) ·
 [11. Tariffs](#11-tariffs-there-is-no-single-best-route) ·
-[12. Which planner should I use?](#12-which-planner-should-i-use)
+[12. Which planner should I use?](#12-which-planner-should-i-use) ·
+[13. The floor rule](#13-a-minimum-charge-at-each-stop-the-floor-rule) ·
+[14. Everyday mode](#14-everyday-mode)
 
 ## 1. Why plain A\* is not enough
 
@@ -407,14 +411,36 @@ same charger in the other price period) in
 
 ## 12. Which planner should I use?
 
-**Short answer:** `bls-astar` - simple, versatile (time and cost objectives,
-tariffs, eco speeds, time-dependent queues) and on average 0.11 % from the
-continuous optimum.  If only the trip time matters and you want the exact
-continuous optimum, `cfp-astar`.
+**Short answer: `bls-astar`**, the best value for the computing time it
+takes.  It is exact on its charging grid (every 2 % of SoC plus the
+breakpoints of the charging curves) and handles everything the model has:
+the time and the cost objective, tariffs and the decision to wait for a
+cheaper price, eco speeds, time-dependent queues, the minimum stop SoC of
+section 13 and the vehicle's connectors.  The grid costs little: 0.11 %
+above the continuous optimum on average over 60 random trips (at most
+0.26 %, experiment `optimality-gap`) and within 0.4 % on every trip of the
+real-data experiment.  It is fast: tens of milliseconds on the approximate
+Turkey network and a median of 4.0 s over six trips on the 44 673-node
+OpenStreetMap network of Turkey.  The everyday mode of the web app
+(section 14) plans with it alone.
+
+When to use something else:
+
+- **`cfp-astar`** when only the trip time matters and you want the
+  continuous optimum itself, not the optimum on a grid.  It optimises the
+  trip time only, and on the large network it is slower: a median of 9.9 s
+  over the six real-data trips; Karaman → İstanbul takes 23.3 s, against
+  3.8 s for BLS-A\*.
+- **`pareto`** to see the trade-off between time and money (and wear) and
+  choose yourself (section 7).
+- **`greedy`** as the baseline: it plans like an in-car navigator and shows
+  what the exact planners gain - 5.2 % on average on the approximate
+  network, and on the real-data network, where it charges for hours at slow
+  AC chargers, 153 % ([real data](real-data.md#results-the-real-data-experiment)).
 
 | you want | use | why |
 |---|---|---|
-| a good plan, fast, for time **or** cost (the default) | `bls-astar` | exact on its 2 % charging grid (0.11 % from the continuous optimum on average, at most 0.26 %), tens of milliseconds on the Turkey network; exact for the cost objective too, tariffs included |
+| a good plan, fast, for time **or** cost (the default) | `bls-astar` | exact on its 2 % charging grid (0.11 % from the continuous optimum on average, at most 0.26 %), tens of milliseconds on the approximate Turkey network, seconds on the OpenStreetMap network; exact for the cost objective too, tariffs and holds included |
 | the exact fastest trip with continuous charging amounts | `cfp-astar` | the true continuous optimum for the trip time; time objective only (with `objective="cost"` it still returns the fastest route) |
 | to see the trade-off and choose yourself | `pareto` with `criteria=("time", "money")` | the exact front; set `max_labels`, and a coarser `charge_step_soc` (e.g. 0.05) on long trips with a tariff |
 | one plan that weighs time against money | `bls-astar` with `objective="cost"` and your `value_of_time_per_h` | picks one point of the front; with a tariff it also decides where to wait |
@@ -425,3 +451,102 @@ From the command line: `evroute plan SCENARIO -a bls-astar` (the default),
 `-a cfp-astar`, `--objective cost`; `evroute compare SCENARIO` runs several
 planners side by side, and `evroute viz SCENARIO -o trip.html` shows them in
 the viewer.
+
+## 13. A minimum charge at each stop: the floor rule
+
+An exact optimum is optimal to the second, and sometimes that shows.  On the
+real-data network, Karaman → İstanbul with the OpenStreetMap stations
+stops at ZES Afyon for 5 minutes, from 14.5 to 26 %: exactly what it takes
+to reach the Supercharger at Kütahya with the 10 % reserve.  The model
+counts the parking and plugging-in time of that stop, so it is a real
+optimum - but few drivers would leave the motorway for 12 %: the next
+charger may be busy or broken, and a stop is a stop.
+
+`min_stop_soc` sets a **minimum stop SoC**: every charging stop that starts
+below it ends at it or above.  On the command line it is `--min-stop-soc
+0.4`, in Python `scenario.with_preferences(min_stop_soc=0.4)`, in the web
+app the slider "Charge at least to … at each stop" with three quick choices
+(*Hurry*, *Balanced*, *Relaxed*: the reserve + 10, 30 or 40 %).  The same
+trip with BLS-A\*:
+
+| minimum stop SoC | trip time | charging cost | the two stops |
+|---|---:|---:|---|
+| off, or 20 % (*Hurry*) | 9 h 14 min | 999.92 TRY | ZES Afyon 14.5 → 26 %, Kütahya 10 → 75 % |
+| 40 % (*Balanced*) | 9 h 15 min | 1,028.17 TRY | ZES Afyon 14.5 → 40 %, Kütahya 24 → 75 % |
+| 50 % (*Relaxed*) | 9 h 16 min | 1,048.36 TRY | ZES Afyon 14.5 → 50 %, Kütahya 34 → 75 % |
+
+A stop worth making costs about a minute here (67 s at 40 %, 110 s at
+50 %): the planner moves energy from the second stop to the first, and the
+plan is still the exact optimum - now among the plans that obey the rule.
+
+**Why a floor and not "charge at least +Δ"?**  The obvious rule - "every
+stop adds at least 20 %" - breaks the idea that all exact planners rest on:
+*more energy at the same time is never worse* (section 2).  Take two cars at
+the same charger at the same time, one with 70 %, one with 20 %, and both
+need 75 % for the rest of the trip.  Under "+20 %" the fuller car must
+charge 70 → 90 %, in the slow top range of the charging curve; the emptier
+one charges 20 → 75 % in the fast range and may well leave first.  The
+fuller car would no longer dominate the emptier one, dominated labels could
+no longer be thrown away, and BLS, CFP and the Pareto search would lose
+their guarantees.
+
+A floor keeps the idea intact.  The fuller car can always copy the plan of
+the emptier one: wherever the emptier car charges to some level *y*, either
+the fuller one already has *y* and drives on, or it charges to *y* too, in
+no more time.  The floor never forbids that: if the fuller car is at the
+floor or above, any target is allowed; if it is below, the emptier car was
+below as well, so its own stop had to end at the floor or above - and so
+does the copy.  So every exact planner stays exact with the rule, the heuristics
+simply raise their targets to the floor, and the independent evaluator
+reports any stop that breaks it.  Cars usually reach a stop near the
+reserve, so a floor of reserve + Δ behaves like "+Δ".  It is a level, not an
+amount: a car that arrives just below the floor adds only what it takes to
+reach it (with a 40 % floor, Karaman → Mersin stops at Ereğli with 33 % and
+charges to 40 %), one that arrives above it may add any amount, and a floor
+of 0 switches the rule off and gives exactly the plans of before.
+
+*For experts:* the rule in [`model.md` §3](model.md#3-battery); Lemma 1F
+(the floor keeps monotonicity, and "+Δ" does not), the floor in BLS's
+target set and CFP's switch points in
+[`algorithms.md` §1, §2, §4](algorithms.md#1-the-battery-expanded-state-space).
+
+## 14. Everyday mode
+
+Everything in this guide is visible in the web app - search replays, races,
+labels, Pareto fronts.  That is the *research* view, and it is the default.
+A driver who only wants to know where to charge needs less, so the top bar
+of the app has a second switch next to *Animation*: **Everyday use**
+("Günlük kullanım").  It is off whenever the page opens (a link ending in
+`#everyday` opens the page with it on), and the map, the animation, the
+language and the theme work the same in both modes.
+
+With the switch on, the app is a trip planner:
+
+- **You enter** where from and where to (searchable lists that find
+  "İstanbul" whether you type `istanbul`, `ISTANBUL` or `Istanbul`), the
+  vehicle (with a card showing its cell chemistry, battery, DC and AC power
+  and connectors), the current charge, the departure time, the minimum
+  arrival charge, a charging style (*Hurry* / *Balanced* / *Relaxed*: the
+  minimum stop SoC of section 13) and a priority (*Fastest* plans for
+  time, *Cheapest* for cost).  Tariffs are on.
+- **It plans** with BLS-A\* alone (section 12); algorithm choices, value of
+  time and the technical switches stay hidden, with sensible defaults.
+- **You get** a trip plan: arrival time, total, driving and charging time,
+  stops, charging cost and arrival charge, then step by step: leave A, drive
+  (km, duration), each stop (station, operator, AC/DC and power, connector,
+  arrive % → leave %, waiting and charging minutes, cost, a note when the
+  price is in its peak), arrive at B.  *Copy* puts the plan on the clipboard
+  as text, *Print* prints it, and on maps with real coordinates (the Turkey
+  presets) *Open in Google Maps* opens the route with the stops as
+  waypoints - a link that you follow; the app itself sends nothing anywhere.
+- **It leaves out** what only researchers need: battery wear and its money
+  value, the generalised cost, search statistics, C-rates, charging losses
+  and algorithm names.
+
+The research view goes the other way and shows more: per stop the energy
+and SoC in and out, the grid energy behind the charged kWh, the average and
+peak charging power against the station's and the vehicle's limits, the
+split into waiting, set-up, holding and charging, the price period and the
+battery wear; tooltips explain every technical term.  Stations the vehicle
+cannot plug into (no matching connector) are drawn hollow and grey in both
+modes, and the planners never stop there.
