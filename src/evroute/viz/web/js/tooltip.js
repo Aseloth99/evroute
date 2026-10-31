@@ -10,8 +10,9 @@
  *
  * The bubble stays inside the viewport (above the element, else below,
  * shifted sideways when needed), follows the theme's colours, has no
- * animation with prefers-reduced-motion, and is announced: the element gets
- * aria-describedby while it is shown.  Escape, scrolling, a click or leaving
+ * animation with prefers-reduced-motion, and is announced: the focused (or
+ * hovered) element gets aria-describedby while it is shown -- the control
+ * itself when the tip belongs to its surrounding field.  Escape, scrolling, a click or leaving
  * the element hides it.  Native `title` tooltips are not used next to it
  * (they would show twice).
  */
@@ -27,6 +28,7 @@
       this.el = U.el('div', { class: 'ui-tip', id: 'ui-tip', role: 'tooltip', hidden: true });
       document.body.appendChild(this.el);
       this.target = null;
+      this.owner = null;
       this._timer = 0;
       this._press = null;
       this._swallowClick = false;
@@ -54,7 +56,7 @@
         if (!t) return;
         let visible = true;
         try { visible = ev.target.matches(':focus-visible'); } catch (e) { /* old browsers: always */ }
-        if (visible) this.show(t);
+        if (visible) this.show(t, ev.target);
       });
       doc.addEventListener('focusout', () => this.hide());
       doc.addEventListener('keydown', (ev) => { if (ev.key === 'Escape' && this.target) this.hide(); }, true);
@@ -102,18 +104,21 @@
       this._timer = setTimeout(() => this.show(t), ms);
     }
 
-    show(t) {
+    /** Show the tip of `t`; `owner` (default `t`) is the element it describes (the focused control). */
+    show(t, owner) {
       clearTimeout(this._timer);
       const text = t.getAttribute('data-tip');
       if (!text || !t.isConnected) { this.hide(); return; }
-      if (this.target && this.target !== t) this._release();
+      const o = owner && owner.nodeType === 1 ? owner : t;
+      if (this.owner && this.owner !== o) this._release();
       this.target = t;
+      this.owner = o;
       this.el.textContent = text;
       this.el.hidden = false;
-      const prev = t.getAttribute('aria-describedby');
+      const prev = o.getAttribute('aria-describedby');
       if (!prev || !prev.split(' ').includes('ui-tip')) {
-        t.dataset.tipPrevDesc = prev || '';
-        t.setAttribute('aria-describedby', prev ? `${prev} ui-tip` : 'ui-tip');
+        o.dataset.tipPrevDesc = prev || '';
+        o.setAttribute('aria-describedby', prev ? `${prev} ui-tip` : 'ui-tip');
       }
       this._place(t);
       this.el.classList.add('show');
@@ -140,11 +145,12 @@
     }
 
     _release() {
-      const t = this.target;
-      if (!t) return;
-      const prev = t.dataset.tipPrevDesc;
-      if (prev) t.setAttribute('aria-describedby', prev); else t.removeAttribute('aria-describedby');
-      delete t.dataset.tipPrevDesc;
+      const o = this.owner;
+      this.owner = null;
+      if (!o) return;
+      const prev = o.dataset.tipPrevDesc;
+      if (prev) o.setAttribute('aria-describedby', prev); else o.removeAttribute('aria-describedby');
+      delete o.dataset.tipPrevDesc;
     }
 
     hide() {
@@ -160,7 +166,7 @@
     refresh() {
       if (this.target) {
         if (!this.target.isConnected) this.hide();
-        else this.show(this.target);
+        else this.show(this.target, this.owner);
       }
     }
   }
