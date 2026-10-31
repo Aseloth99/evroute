@@ -8,6 +8,13 @@
  *
  * Keyboard: Space play/pause · A animation on/off · R race · S search
  * replay · ←/→ scrub (Shift: larger steps) · F fit route · +/- zoom.
+ *
+ * Two levels of detail: the research view (default) and "everyday use"
+ * (the top-bar switch, off on every load; a link with #everyday turns it
+ * on): a trip planner for drivers -- one planner (BLS-A*), the selected
+ * route only, a trip plan instead of the research panels.  The switch sets
+ * #app[data-view]; the stylesheet hides [data-research] / [data-everyday]
+ * parts.
  */
 (function (EVR) {
   'use strict';
@@ -21,6 +28,8 @@
       this.payload = payload;
       this.live = !!payload.live;
       I.setLang(App.initialLang(payload));
+      this.everyday = App.initialEveryday();   // never remembered: research view unless the link asks
+      U.$('#app').dataset.view = this.everyday ? 'everyday' : 'research';
       this.model = new EVR.model.Model(payload);
       this.layers = { terrain: true, stations: true, labels: true, others: true };
       this.visible = new Set(this.model.results.map((r, i) => i));
@@ -43,6 +52,9 @@
       };
       this.panels = new EVR.panels.Panels(this);
       this.tipEl = U.$('#map-tip');
+      this.tooltip = EVR.tooltip.install();
+      // origin / destination circles of the static markup (letters centred by construction)
+      for (const slot of U.$$('[data-od]')) slot.replaceWith(U.odDot(slot.dataset.od));
       this._wireHeader();
       this._wireMapTools();
       this._wireKeyboard();
@@ -68,7 +80,7 @@
       const ok = (x) => (x === 'tr' || x === 'en' ? x : null);
       let lang = null;
       try {
-        lang = ok(new URLSearchParams(window.location.search).get('lang')) || ok(window.location.hash.slice(1).toLowerCase());
+        lang = ok(new URLSearchParams(window.location.search).get('lang')) || App.hashTokens().map(ok).find(Boolean) || null;
       } catch (e) { /* no location (embedded) */ }
       lang = lang || ok(U.storage.get('evroute.lang', null));
       if (!lang && payload.lang_auto) {
@@ -79,6 +91,16 @@
         } catch (e) { /* no navigator */ }
       }
       return lang || (payload.lang === 'en' ? 'en' : 'tr');
+    }
+
+    /** Words of the page's #hash: "#en", "#everyday", "#en&everyday". */
+    static hashTokens() {
+      try { return window.location.hash.slice(1).toLowerCase().split(/[&,;+]/).filter(Boolean); } catch (e) { return []; }
+    }
+
+    /** Everyday use only when the link asks for it (#everyday); the default is the research view. */
+    static initialEveryday() {
+      return App.hashTokens().includes('everyday');
     }
 
     /* ------------------------------------------------------------ selection */
@@ -100,8 +122,12 @@
       return this.model.results[s.ri] || null;
     }
 
-    /** Visible routes in result order (a selected Pareto alternative is appended). */
+    /** Visible routes in result order (a selected Pareto alternative is appended); everyday use: the selected one. */
     visibleRoutes() {
+      if (this.everyday) {
+        const r = this.selectedRoute();
+        return r ? [r] : [];
+      }
       const out = this.model.results.filter((r, i) => this.visible.has(i));
       if (this.selection.ai >= 0) {
         const a = this.selectedRoute();
@@ -302,6 +328,35 @@
       this._toastT = setTimeout(() => t.classList.remove('show'), 1800);
     }
 
+    /* ---------------------------------------------------- level of detail */
+    /** Switch between the research view and everyday use (`user`: from the switch, with a toast). */
+    setEveryday(on, user) {
+      on = !!on;
+      const changed = on !== this.everyday;
+      this.everyday = on;
+      const t = U.$('#everyday-toggle');
+      t.checked = on;
+      t.setAttribute('aria-checked', String(on));
+      U.$('#everyday-state').textContent = on ? 'ON' : 'OFF';
+      U.$('#app').dataset.view = on ? 'everyday' : 'research';
+      if (!changed) return;
+      if (on) {
+        // one route: the flagship planner's (BLS-A*), driven in trip mode
+        const ri = this._defaultSelection();
+        if (this.model.results[ri]) this.selection = { ri, ai: -1 };
+        if (this.anim.mode !== 'trip') {
+          if (this.anim.enabled) this.anim.setMode('trip', false); else this.anim.mode = 'trip';
+        }
+      }
+      this.panels.renderAll();
+      if (this.liveCtl) this.liveCtl.onViewChanged();
+      this.anim.buildTimeline();
+      if (this.anim.enabled) this.anim.restart();
+      this.redrawAll();
+      this.anim.frame();
+      if (user) this.toast(I.t(on ? 'toast_everyday_on' : 'toast_everyday_off'));
+    }
+
     /* ------------------------------------------------------ theme and lang */
     _applyThemeAttr() {
       let dark = this.themePref === 'dark';
@@ -358,6 +413,7 @@
       this.anim.buildTimeline();
       this.anim.frame();
       this.redrawAll();
+      if (this.tooltip) this.tooltip.refresh();
     }
 
     /** "1 h = 5 s" (wide screens) or "5 s/h" (phones). */
@@ -381,6 +437,11 @@
       }
       if (Array.isArray(data.wait_profiles)) {
         data.wait_profiles.forEach((p, i) => { if (this.model.stations[i]) this.model.stations[i].wait_profile = p; });
+      }
+      // the stations the planned vehicle can plug into (absent in an older answer: unchanged)
+      if (Array.isArray(data.station_usable)) {
+        data.station_usable.forEach((u, i) => { if (this.model.stations[i]) this.model.stations[i].usable = !!u; });
+        this.map._stNodes = null;
       }
       // peak periods and price factors follow the tariff of the planned scenario (absent: no tariff)
       const tariffs = Array.isArray(data.station_tariffs) ? data.station_tariffs : null;
@@ -434,12 +495,12 @@
       if (!site) return;
       const mark = U.$('#topbar .brand-mark');
       if (site.home && mark) {
-        const a = U.el('a', { class: 'brand-mark brand-home', href: site.home, 'data-i18n-aria': 'site_home', 'data-i18n-title': 'site_home' });
+        const a = U.el('a', { class: 'brand-mark brand-home', href: site.home, 'data-i18n-aria': 'site_home', 'data-i18n-tip': 'site_home' });
         a.append(...mark.childNodes);
         mark.replaceWith(a);
       }
       if (site.repo) {
-        const gh = U.el('a', { class: 'btn-icon site-repo', href: site.repo, 'data-i18n-aria': 'site_repo', 'data-i18n-title': 'site_repo' });
+        const gh = U.el('a', { class: 'btn-icon site-repo', href: site.repo, 'data-i18n-aria': 'site_repo', 'data-i18n-tip': 'site_repo' });
         // a constant icon (no data in this markup)
         gh.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 19c-4 1.5-4-2-6-2.5m12 5v-3.5c0-1 .1-1.4-.5-2 2.8-.3 5.5-1.4 5.5-6a4.6 4.6 0 0 0-1.3-3.2 4.2 4.2 0 0 0-.1-3.2s-1.1-.3-3.5 1.3a12 12 0 0 0-6.2 0C6.5 2.8 5.4 3.1 5.4 3.1a4.2 4.2 0 0 0-.1 3.2A4.6 4.6 0 0 0 4 9.5c0 4.6 2.7 5.7 5.5 6-.6.6-.6 1.2-.5 2V21"/></svg>';
         U.$('#topbar .topbar-actions').prepend(gh);
@@ -450,6 +511,9 @@
       this._siteLinks();
       for (const b of U.$$('#lang-seg button')) b.addEventListener('click', () => this.setLang(b.dataset.lang));
       for (const b of U.$$('#theme-seg button')) b.addEventListener('click', () => this.setTheme(b.dataset.themeChoice));
+      const ev = U.$('#everyday-toggle');
+      ev.addEventListener('change', () => this.setEveryday(ev.checked, true));
+      this.setEveryday(this.everyday, false);
       try {
         window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { if (this.themePref === 'auto') this.setTheme('auto'); });
       } catch (e) { /* old browsers */ }
@@ -489,6 +553,8 @@
           this.anim.togglePlay();
         } else if (k === 'a' || k === 'A') {
           this.anim.setEnabled(!this.anim.enabled, true);
+        } else if ((k === 'r' || k === 'R' || k === 's' || k === 'S') && this.everyday) {
+          // no race or search replay in everyday use
         } else if (k === 'r' || k === 'R') {
           this.anim.setMode(this.anim.enabled && this.anim.mode === 'race' ? 'trip' : 'race', true);
         } else if (k === 's' || k === 'S') {

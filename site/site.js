@@ -23,7 +23,10 @@
     root.setAttribute('lang', lang);
     if (save) store.set('evroute.lang', lang);
     for (const b of document.querySelectorAll('[data-set-lang]')) b.setAttribute('aria-pressed', String(b.dataset.setLang === lang));
-    for (const a of document.querySelectorAll('a[data-viewer]')) a.setAttribute('href', `${a.dataset.viewer}?lang=${lang}`);
+    for (const a of document.querySelectorAll('a[data-viewer]')) {
+      const [path, hash] = a.dataset.viewer.split('#');   // e.g. "live/#everyday": the query goes before the hash
+      a.setAttribute('href', `${path}?lang=${lang}${hash ? '#' + hash : ''}`);
+    }
     const title = root.getAttribute(`data-title-${lang}`);
     if (title) document.title = title;
   }

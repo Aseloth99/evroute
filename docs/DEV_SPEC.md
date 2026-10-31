@@ -245,7 +245,9 @@ with it (`check_objective` is only required of the exact planners).
   "scenario": {"name": "", "description": "", "currency": "TRY",
                "vehicle": {"key": "", "name": "", "battery_kwh": 0, "capacity_kwh": 0, "dc_peak_kw": 0,
                            "ac_max_kw": 11, "mass_kg": 0, "chemistry": "NMC|NCA|LFP",
-                           "connectors": ["Type2", "CCS2"], "dc_max_kw": null},
+                           "connectors": ["Type2", "CCS2"], "dc_max_kw": null,
+                           "dc_curve": {"soc_breaks": [], "power_kw": []}, "aux_kw": 0.35,
+                           "dc_temp_factor": 1.0},
                "query": {"origin": 0, "destination": 0, "initial_soc": 0.8, "departure_s": 28800},
                "conditions": {...}, "preferences": {...}},
   "network": {"x": [], "y": [], "elevation": [], "tail": [], "head": [], "road_class": [],
@@ -261,7 +263,10 @@ with it (`check_objective` is only required of the exact planners).
 ```
 
 `dc_peak_kw` is the *effective* DC peak (capped at `dc_max_kw`; 0 for a
-vehicle without a DC inlet).  A station's `connectors` are its connector
+vehicle without a DC inlet); `dc_curve` is the vehicle's DC charging curve
+before that cap, `aux_kw` the auxiliary (HVAC) power and `dc_temp_factor`
+the cold derating of DC power at the trip's conditions (the viewer's
+vehicle panel and energy breakdown; older payloads lack them).  A station's `connectors` are its connector
 standards (`Station.sockets`: the kind's default when none are given) and
 `usable` tells whether the scenario's vehicle can plug in there
 (`PreparedScenario.station_usable`; the planners never stop where it is

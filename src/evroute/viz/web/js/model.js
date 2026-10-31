@@ -119,6 +119,9 @@
       this.roadClass = net.road_class;
       this.edgeName = net.edge_name || {};
       this.nodeName = net.node_name || {};
+      // geographic coordinates (real-data networks only): the trip plan's map link
+      this.lat = Array.isArray(net.lat) && net.lat.length === n ? net.lat : null;
+      this.lon = Array.isArray(net.lon) && net.lon.length === n ? net.lon : null;
       const len = new Float64Array(m);
       for (let e = 0; e < m; e++) {
         len[e] = net.length ? net.length[e] : Math.hypot(this.X[this.head[e]] - this.X[this.tail[e]], this.Y[this.head[e]] - this.Y[this.tail[e]]);

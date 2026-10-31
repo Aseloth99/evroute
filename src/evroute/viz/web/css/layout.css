@@ -1,9 +1,12 @@
 /* ==========================================================================
    EVRoute viewer -- page layout.
 
+   Wide:      (>= 2200 px) the trip column holds two columns of results
+              (summary | stops); the side columns grow with the window
    Desktop:   header / [controls | map | trip] / charts + table / footer
    Tablet:    header / map / [controls | trip] / charts
    Phone:     everything stacked below the map, no horizontal page scroll.
+   The app has no maximum width: the map takes what the side columns leave.
    ========================================================================== */
 
 *, *::before, *::after { box-sizing: border-box; }
@@ -25,9 +28,9 @@ body {
 h1, h2, h3, p { margin: 0; }
 
 .app {
-  --map-h: clamp(520px, calc(100vh - 92px), 980px);
+  --map-h: clamp(520px, calc(100vh - 92px), 1400px);
   display: grid;
-  grid-template-columns: 300px minmax(0, 1fr) 368px;
+  grid-template-columns: clamp(300px, 17vw, 400px) minmax(0, 1fr) clamp(368px, 21vw, 500px);
   grid-template-rows: auto var(--map-h) auto auto;
   grid-template-areas:
     "top    top    top"
@@ -36,8 +39,6 @@ h1, h2, h3, p { margin: 0; }
     "foot   foot   foot";
   gap: var(--gap);
   padding: 0 var(--gap) var(--gap);
-  max-width: 2200px;
-  margin: 0 auto;
 }
 
 .topbar  { grid-area: top; }
@@ -149,6 +150,19 @@ h1, h2, h3, p { margin: 0; }
 }
 
 /* ---------------------------------------------------------- breakpoints */
+@media (min-width: 2200px) {
+  /* a third column of results: the trip column shows the summary and the stops side by side */
+  .app { grid-template-columns: clamp(340px, 15vw, 440px) minmax(0, 1fr) clamp(760px, 32vw, 1040px); }
+  .panel-right { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-content: start; align-items: start; }
+  .panel-right > .plan-own, .panel-right > .wide-span { grid-column: 1 / -1; }
+  .chart-soc { grid-column: span 6; }
+  .chart-wait { grid-column: span 3; }
+  .chart-time, .bottom.no-pareto .chart-time { grid-column: span 3; }
+  .chart-pareto { grid-column: span 5; }
+  .table-card { grid-column: span 7; }
+  .bottom.no-pareto .table-card { grid-column: span 12; }
+}
+
 @media (max-width: 1360px) {
   .app { grid-template-columns: 272px minmax(0, 1fr) 336px; }
 }
@@ -190,7 +204,7 @@ h1, h2, h3, p { margin: 0; }
   }
   .topbar { flex-wrap: wrap; padding-top: 10px; gap: 10px; }
   .brand { flex: 1 1 100%; }
-  .topbar-actions { flex: 1 1 100%; justify-content: space-between; }
+  .topbar-actions { flex: 1 1 100%; flex-wrap: wrap; justify-content: space-between; row-gap: 8px; }
   .brand-text h1 { font-size: 16px; }
   .chart-soc, .chart-wait, .chart-time, .chart-pareto, .table-card,
   .bottom.no-pareto .chart-time { grid-column: span 12; }

@@ -482,19 +482,22 @@
     }
 
     _stationNodes() {
-      // one icon per node: the most powerful class there
+      // one icon per node: the most powerful class there the vehicle can use
+      // (hollow when the vehicle has no compatible connector at the node)
       if (this._stNodes && this._stNodesModel === this.model) return this._stNodes;
       const order = { AC: 0, DC: 1, HPC: 2 };
+      const ok = (st) => st.usable !== false;
       const out = [];
       for (const [node, idxs] of this.model.stationsAt) {
         let best = idxs[0];
         for (const i of idxs) {
           const a = this.model.stations[i], b = this.model.stations[best];
+          if (ok(a) !== ok(b)) { if (ok(a)) best = i; continue; }
           if (order[a.cls] > order[b.cls] || (a.cls === b.cls && a.power_kw > b.power_kw)) best = i;
         }
-        out.push({ node, best, n: idxs.length });
+        out.push({ node, best, n: idxs.length, off: !ok(this.model.stations[best]) });
       }
-      out.sort((a, b) => order[this.model.stations[a.best].cls] - order[this.model.stations[b.best].cls]);
+      out.sort((a, b) => (b.off - a.off) || order[this.model.stations[a.best].cls] - order[this.model.stations[b.best].cls]);
       this._stNodes = out;
       this._stNodesModel = this.model;
       return out;
@@ -510,12 +513,15 @@
       return U.clamp(1.4 + pxPerKm * 1.9, 2.3, 8.5);
     }
 
-    /** Station icon: AC circle, DC rounded square, HPC diamond; bolt when large. */
-    drawStationIcon(ctx, x, y, cls, r) {
+    /**
+     * Station icon: AC circle, DC rounded square, HPC diamond; bolt when
+     * large.  `off`: the vehicle cannot plug in there -- a hollow, greyed icon.
+     */
+    drawStationIcon(ctx, x, y, cls, r, off) {
       const th = this.app.theme;
-      ctx.fillStyle = this.stationColor(cls);
-      ctx.strokeStyle = th.stStroke;
-      ctx.lineWidth = r > 5 ? 1.6 : r > 3.2 ? 1.1 : 0.9;
+      ctx.fillStyle = off ? th.surface : this.stationColor(cls);
+      ctx.strokeStyle = off ? U.mix(this.stationColor(cls), th.text3, 0.55) : th.stStroke;
+      ctx.lineWidth = off ? (r > 5 ? 1.8 : 1.3) : r > 5 ? 1.6 : r > 3.2 ? 1.1 : 0.9;
       if (cls === 'AC') {
         ctx.beginPath();
         ctx.arc(x, y, r * 0.92, 0, Math.PI * 2);
@@ -529,7 +535,7 @@
       }
       ctx.fill();
       ctx.stroke();
-      if (r >= 5.5) {
+      if (r >= 5.5 && !off) {
         ctx.fillStyle = '#fff';
         U.bolt(ctx, x, y, r * 1.35);
         ctx.fill();
@@ -550,7 +556,9 @@
         const x = ox + m.X[sn.node] * s, y = oy - m.Y[sn.node] * s;
         if (x < -10 || y < -10 || x > T.w + 10 || y > T.h + 10) continue;
         const st = m.stations[sn.best];
-        this.drawStationIcon(ctx, x, y, st.cls, r);
+        if (sn.off) ctx.globalAlpha *= 0.8;
+        this.drawStationIcon(ctx, x, y, st.cls, sn.off ? r * 0.9 : r, sn.off);
+        if (sn.off) ctx.globalAlpha /= 0.8;
         hits.push([x, y, sn.node]);
       }
       ctx.restore();
@@ -870,8 +878,15 @@
     return Math.hypot(px - (ax + t * dx), py - (ay + t * dy));
   }
 
-  /** Teardrop map pin whose tip is at (x, y). */
+  /**
+   * Teardrop map pin whose tip is at (x, y).  The pin is snapped to the
+   * device-pixel grid, so its circle and letter are drawn the same way
+   * wherever it sits (the letter stays visibly centred).
+   */
   function drawPin(ctx, x, y, color, letter) {
+    const dpr = U.dpr();
+    x = Math.round(x * dpr) / dpr;
+    y = Math.round(y * dpr) / dpr;
     const r = 10.5, cy = y - 19;
     ctx.save();
     ctx.shadowColor = 'rgba(0,0,0,.28)';
@@ -889,12 +904,23 @@
     ctx.lineWidth = 2;
     ctx.strokeStyle = '#fff';
     ctx.stroke();
+    // the letter as an outline whose ink is centred on the circle's centre
+    // (U.GLYPH), not as text: a font's glyph sits higher or lower
     ctx.fillStyle = '#fff';
-    ctx.font = '800 11.5px system-ui, sans-serif';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText(letter, x, cy + 0.5);
+    const k = PIN_GLYPH_SCALE;
+    ctx.translate(x - 8 * k, cy - 8 * k);
+    ctx.scale(k, k);
+    ctx.fill(glyphPath(letter), 'evenodd');
     ctx.restore();
+  }
+
+  /** Scale of the 16 x 16 glyph box in a pin (letter height 8 * k px). */
+  const PIN_GLYPH_SCALE = 1.1;
+  const _glyphs = {};
+  function glyphPath(letter) {
+    const key = letter === 'B' ? 'B' : 'A';
+    if (!_glyphs[key]) _glyphs[key] = new Path2D(U.GLYPH[key]);
+    return _glyphs[key];
   }
 
   EVR.map = { MapView, drawPin, segDist };

@@ -102,6 +102,7 @@
 
     setMode(mode, user) {
       if (!['trip', 'race', 'search'].includes(mode)) return;
+      if (this.app.everyday && mode !== 'trip') return;   // everyday use: one route, no race or search replay
       if (mode === 'search' && !this._hasTrace()) { this.app.toast(I.t('toast_no_trace')); return; }
       if (!this.enabled) this.setEnabled(true, false);
       const prev = this.mode;
@@ -373,7 +374,6 @@
       el.fill.style.background = U.socColor(soc, app.theme);
       el.battery.classList.toggle('charging', st.kind === 'charge');
       el.dist.textContent = I.km(st.dist, 0);
-      el.dist.title = `${I.km(st.dist, 0)} / ${I.km(sel._tl.dEnd, 0)}`;
       el.speedOut.textContent = st.kind === 'drive' ? `${I.num(st.speed, 0)} ${I.t('unit_kmh')}` : '–';
       el.elev.textContent = `${I.num(st.elev, 0)} m`;
       let cls = 'drive', txt = '';
@@ -385,7 +385,7 @@
         case 'wait': cls = 'queue'; txt = `${I.t('st_queue')} · ${sname} · ${I.t('min_left', { m: I.minutes(st.left) })}`; break;
         case 'setup': cls = 'setup'; txt = `${I.t('st_setup')} · ${sname}`; break;
         case 'charge': cls = 'charge'; txt = `${I.t('st_charge')} · ${I.num(st.power, 0)} kW · ${I.t('min_left', { m: I.minutes(st.left) })}`; break;
-        case 'done': cls = 'done'; txt = `${I.t('st_done')} · ${I.clock(app.model.departure + sel._tl.tEnd)} · ${I.pct(st.soc, 0)}`; break;
+        case 'done': cls = 'done'; txt = `${I.t('st_done')} · ${I.clock(app.model.departure + sel._tl.tEnd)} · ${I.t('arrival_soc')} ${I.pct(st.soc, 0)}`; break;
         case 'stranded': cls = 'stranded'; txt = `${I.t('st_stranded')} · ${I.km(st.dist)}`; break;
         default: txt = '';
       }
@@ -515,9 +515,7 @@
         ctx.stroke();
         ctx.fillStyle = '#fff';
         ctx.font = `800 12px ${th.font}`;
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        ctx.fillText(String(s._num), x, y + 0.5);
+        U.fillTextCentered(ctx, String(s._num), x, y);
       }
     }
 

@@ -102,6 +102,8 @@ CSS_FILES: tuple[str, ...] = ("theme.css", "layout.css", "components.css")
 JS_FILES: tuple[str, ...] = (
     "util.js",
     "i18n.js",
+    "combo.js",
+    "tooltip.js",
     "model.js",
     "terrain.js",
     "map.js",
@@ -434,6 +436,12 @@ def _scenario_block(scenario: Scenario, P: PreparedScenario) -> dict[str, Any]:
                 "chemistry": veh.chemistry,
                 "connectors": list(veh.connectors),
                 "dc_max_kw": veh.dc_max_kw,
+                # the viewer's vehicle panel: charging curve (before the cap), auxiliary power and
+                # cold derating of DC charging at the trip's conditions
+                "dc_curve": veh.dc_curve.to_dict(),
+                "aux_kw": round(veh.aux_power_kw(scenario.conditions.temperature_c), 4),
+                "dc_temp_factor": round(
+                    veh.dc_temperature_factor(scenario.conditions.temperature_c, scenario.conditions.preconditioning), 4),
             },
             "query": {
                 "origin": q.origin,

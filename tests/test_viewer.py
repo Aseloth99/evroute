@@ -10,6 +10,7 @@ the HTTP endpoints of :mod:`evroute.server`.
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import socket
@@ -301,13 +302,19 @@ def test_cli_entry_point(tmp_path, scenario):
     assert data["animate"] is False and data["lang"] == "en"
 
 
+#: The one external URL of the viewer's code: the trip plan's "Open in Google Maps" link (everyday
+#: use, real-data scenarios only).  It is a link the user may follow; the page never fetches it.
+GMAPS_LINK = "https://www.google.com/maps/dir/?api=1"
+
+
 def test_web_assets_exist_and_are_inlinable():
     for name in CSS_FILES:
         assert "</style" not in (WEB_DIR / "css" / name).read_text(encoding="utf-8").lower()
     for name in JS_FILES:
         js = (WEB_DIR / "js" / name).read_text(encoding="utf-8")
         assert "</script" not in js.lower() and "<!--" not in js
-        assert "http://" not in js.replace("http://www.w3.org/2000/svg", "") and "https://" not in js
+        rest = js.replace("http://www.w3.org/2000/svg", "").replace(GMAPS_LINK, "")
+        assert "http://" not in rest and "https://" not in rest, name
     tpl = (WEB_DIR / "index.html").read_text(encoding="utf-8")
     for name in JS_FILES:
         assert f'src="js/{name}"' in tpl  # the template loads the same files in the same order
@@ -505,10 +512,193 @@ process.stdout.write(JSON.stringify({ tr: Object.keys(S.tr), en: Object.keys(S.e
     used = set()
     for name in JS_FILES:
         used.update(re.findall(r"I\.t\('([a-z0-9_]+)'", (WEB_DIR / "js" / name).read_text(encoding="utf-8")))
-    used.update(re.findall(r'data-i18n(?:-aria|-title)?="([a-z0-9_]+)"', (WEB_DIR / "index.html").read_text(encoding="utf-8")))
+    used.update(re.findall(r'data-i18n(?:-aria|-title|-tip)?="([a-z0-9_]+)"', (WEB_DIR / "index.html").read_text(encoding="utf-8")))
     assert used and not used - set(keys["en"])
     for k in ("st_hold_offpeak", "hold", "stop_hold_offpeak", "tariff_toggle", "kv_tariff_peak"):
         assert k in keys["en"]
+    # keys built at run time: chemistry and connector tooltips, styles, guarantees, legend items
+    dynamic = {f"tip_chem_{c}" for c in ("LFP", "NMC", "NCA")} | {f"tip_conn_{c}" for c in ("Type2", "Type1", "CCS2", "CCS1", "CHAdeMO", "NACS")}
+    dynamic |= {f"tip_style_{x}" for x in ("hurry", "balanced", "relaxed")} | {f"tip_leg_{x}" for x in ("ac", "dc", "hpc")}
+    dynamic |= {f"g_{g}{t}" for g in ("exact", "grid", "heuristic") for t in ("", "_title")}
+    heads = set(re.findall(r"'(th_[a-z_]+)'", (WEB_DIR / "js" / "panels.js").read_text(encoding="utf-8")))
+    dynamic |= {f"tip_{k}" for k in heads - {"th_p_strand", "th_p_short", "th_hold"}}  # those three carry their own title
+    assert len(heads) > 10
+    assert not dynamic - set(keys["en"]), dynamic - set(keys["en"])
+
+
+def test_input_and_result_labels():
+    """The setting is the *minimum* arrival charge; the result keeps "arrival charge" (the plan's value)."""
+    i18n = (WEB_DIR / "js" / "i18n.js").read_text(encoding="utf-8")
+    assert "min_arrival: 'Minimum varış şarjı'" in i18n and "min_arrival: 'Minimum arrival charge'" in i18n
+    assert "arrival_soc: 'Varış şarjı'" in i18n and "arrival_soc: 'Arrival charge'" in i18n
+    assert "min_stop: 'Durakta en az şuna kadar şarj et'" in i18n and "everyday: 'Günlük kullanım'" in i18n
+    tpl = (WEB_DIR / "index.html").read_text(encoding="utf-8")
+    assert 'data-i18n="min_arrival"' in tpl and 'id="in-minstop"' in tpl and 'id="in-dcmax"' in tpl
+
+
+def test_everyday_switch_is_off_by_default_and_not_remembered():
+    """Everyday use starts off on every load: only a link's #everyday turns it on, nothing stores it."""
+    tpl = (WEB_DIR / "index.html").read_text(encoding="utf-8")
+    m = re.search(r'<input[^>]*id="everyday-toggle"[^>]*>', tpl)
+    assert m and "checked" not in m.group(0).replace("aria-checked", "")
+    assert 'data-view="research"' in tpl
+    tags = re.findall(r'<[^>]+id="(?:anim-switch|everyday-switch)"[^>]*>', tpl)
+    assert len(tags) == 2 and tpl.index('id="everyday-switch"') < tpl.index('id="anim-switch"')  # side by side
+    app = (WEB_DIR / "js" / "app.js").read_text(encoding="utf-8")
+    assert "return App.hashTokens().includes('everyday');" in app
+    for name in JS_FILES:
+        js = (WEB_DIR / "js" / name).read_text(encoding="utf-8")
+        assert not re.search(r"storage\.set\([^)]*everyday", js), name
+    # the research parts the switch hides, the trip plan it shows
+    for part in ('id="algo-card" data-research', 'id="scenario-card" data-research', 'id="summary-card" aria-live="polite" data-research',
+                 'class="algo-picks" data-research', 'id="itinerary-card" data-everyday', 'id="mode-seg" data-i18n-aria="mode" data-research'):
+        assert part in tpl, part
+
+
+def test_payload_vehicle_panel_fields(payload, scenario):
+    v = payload["scenario"]["vehicle"]
+    assert v["dc_curve"] == scenario.vehicle.dc_curve.to_dict()
+    assert v["aux_kw"] == pytest.approx(scenario.vehicle.aux_power_kw(scenario.conditions.temperature_c), abs=1e-4)
+    assert 0 < v["dc_temp_factor"] <= 1 and v["chemistry"] == scenario.vehicle.chemistry
+    for st in payload["stations"]:
+        assert st["connectors"] and st["usable"] is True  # the default vehicle plugs in everywhere
+
+
+_UI_HARNESS = r"""
+const fs = require('fs'), vm = require('vm');
+const [webDir, dataPath] = process.argv.slice(2);
+const ctx = { console, Math, JSON, Float64Array, Float32Array, Int32Array, Map, Set, Number, Intl, isFinite, String, Array,
+  document: { documentElement: { setAttribute() {} } } };
+ctx.window = ctx;
+vm.createContext(ctx);
+for (const f of ['util.js', 'i18n.js', 'model.js', 'panels.js']) vm.runInContext(fs.readFileSync(webDir + '/js/' + f, 'utf8'), ctx, { filename: f });
+const req = JSON.parse(fs.readFileSync(dataPath, 'utf8'));
+const out = vm.runInContext(`(function (req) {
+  const U = EVR.util, I = EVR.i18n;
+  I.setLang(req.lang);
+  const folds = req.words.map((w) => U.fold(w));
+  const model = new EVR.model.Model(req.payload);
+  const app = { model, currentQuery: () => model.query, currentPrefs: () => model.scenario.preferences };
+  const plans = model.results.filter((r) => r.feasible && r._ok).map((r) => {
+    const it = EVR.panels.itinerary(app, r);
+    return { algorithm: r.algorithm, steps: it.steps.map((s) => [s.kind, s.dist || 0, s.dur || 0, s.arrive || 0, s.leave || 0, s.kwh || 0]),
+      totals: it.totals, text: EVR.panels.itineraryText(app, r, it), maps: EVR.panels.mapsUrl(app, r) };
+  });
+  return { folds, plans };
+})`, ctx)(req);
+process.stdout.write(JSON.stringify(out));
+"""
+
+
+def _run_ui_harness(tmp_path, payload, lang="en", words=()):
+    data = tmp_path / "ui.json"
+    data.write_text(json.dumps({"payload": payload, "lang": lang, "words": list(words)}), encoding="utf-8")
+    script = tmp_path / "ui_harness.js"
+    script.write_text(_UI_HARNESS, encoding="utf-8")
+    res = subprocess.run(["node", str(script), str(WEB_DIR), str(data)], capture_output=True, text=True, timeout=60)
+    assert res.returncode == 0, res.stderr
+    return json.loads(res.stdout)
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_search_folding_is_turkish_aware(tmp_path, payload):
+    """The pickers' matching folds case, accents and the Turkish dotted/dotless i alike."""
+    words = ["İstanbul", "istanbul", "ISTANBUL", "Istanbul", "ıstanbul", "İSTANBUL",
+             "Eskişehir", "ESKİŞEHİR", "eskisehir", "Çanakkale", "canakkale", "Muğla", "mugla", "Gölcük", "golcuk", "Ünye", "unye"]
+    f = _run_ui_harness(tmp_path, payload, words=words)["folds"]
+    assert len(set(f[:6])) == 1 and f[0] == "istanbul"
+    assert f[6] == f[7] == f[8] == "eskisehir"
+    for k in range(9, len(words), 2):
+        assert f[k] == f[k + 1], (words[k], f[k], f[k + 1])
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_itinerary_adds_up(tmp_path, payload, scenario):
+    """The trip plan of everyday use: its legs and stops tile the route (distance and time),
+    its totals are the plan's, and the map link exists only with real coordinates."""
+    got = _run_ui_harness(tmp_path, payload)
+    plans = {p["algorithm"]: p for p in got["plans"]}
+    assert plans
+    by_name = {r["algorithm"]: r for r in payload["results"]}
+    for name, it in plans.items():
+        r = by_name[name]
+        kinds = [s[0] for s in it["steps"]]
+        assert kinds[0] == "start" and kinds[-1] == "end" and kinds.count("stop") == len(r["stops"])
+        assert sum(s[1] for s in it["steps"] if s[0] == "drive") == pytest.approx(r["distance_m"], abs=0.1)
+        dwell = sum(s[4] - s[3] for s in it["steps"] if s[0] == "stop")
+        drive = sum(s[2] for s in it["steps"] if s[0] == "drive")
+        assert drive + dwell == pytest.approx(r["total_time_s"], abs=0.1)
+        t = it["totals"]
+        dep = payload["scenario"]["query"]["departure_s"]
+        assert t["arrival"] == pytest.approx(dep + r["total_time_s"]) and t["stops"] == len(r["stops"])
+        assert t["money"] == pytest.approx(r["money"]) and t["arrivalSoc"] == pytest.approx(r["arrival_soc"])
+        assert sum(s[5] for s in it["steps"] if s[0] == "stop") == pytest.approx(r["energy_charged_kwh"], abs=1e-3)
+        for st in r["stops"]:
+            assert (st["station_name"] or "") in it["text"]
+        assert "SoH" not in it["text"] and it["maps"] is None  # no research numbers; a synthetic map has no coordinates
+    # with coordinates: a Google Maps link with the stops as waypoints (built, never fetched)
+    geo = json.loads(json.dumps(payload))
+    n = len(geo["network"]["x"])
+    geo["network"]["lat"] = [40.0 + i * 1e-3 for i in range(n)]
+    geo["network"]["lon"] = [30.0 + i * 1e-3 for i in range(n)]
+    for it in _run_ui_harness(tmp_path, geo)["plans"]:
+        assert it["maps"].startswith(GMAPS_LINK + "&origin=")
+        assert ("waypoints=" in it["maps"]) == any(s[0] == "stop" for s in it["steps"])
+
+
+@pytest.mark.slow
+@pytest.mark.skipif(os.environ.get("EVROUTE_BROWSER_TESTS") != "1" or shutil.which("node") is None,
+                    reason="set EVROUTE_BROWSER_TESTS=1 (needs Node.js with Playwright)")
+def test_viewer_ui_in_chromium(tmp_path):
+    """The live viewer in Chromium, driven like a user (tests/browser/viewer_ui.js): searchable
+    pickers, tooltips, the new controls, everyday use and its trip plan, centred A/B letters
+    at DPR 1 and 2, no horizontal scroll from 390 to 3440 px, no console error."""
+    from pathlib import Path
+
+    srv = make_server("turkey-karaman-istanbul", port=0, lang="tr", robustness_runs=0)
+    th = threading.Thread(target=srv.serve_forever, daemon=True)
+    th.start()
+    try:
+        script = Path(__file__).resolve().parent / "browser" / "viewer_ui.js"
+        res = subprocess.run(["node", str(script), srv.url.rstrip("/") + "/?lang=tr"], capture_output=True, text=True,
+                             timeout=900, cwd=tmp_path)
+    finally:
+        srv.shutdown()
+        srv.server_close()
+    assert res.returncode == 0, res.stderr[-3000:]
+    d = json.loads(res.stdout)
+    assert d["console_errors"] == []
+    st = d["start"]
+    assert st["everyday"] is False and st["view"] == "research" and st["toggle"] is False and st["tariff"] is True
+    assert st["minArrivalLabel"] == "Minimum varış şarjı" and st["arrivalShown"].startswith("Varış şarjı")
+    for word, hit in d["search"].items():
+        if word == "zzzqx":
+            assert hit["empty"] is True
+        else:
+            assert hit["first"].startswith(("İstanbul", "Eskişehir")) and hit["mark"], (word, hit)
+    assert d["escape"] == {"text": "Karaman", "open": False}
+    assert d["choose"]["label"] == "Konya" and d["choose"]["origin"] == int(d["choose"]["value"]) and d["choose"]["input"] == "Konya"
+    assert d["keys"]["open"] and d["keys"]["expanded"] == "true" and d["keys"]["activedescendant"]
+    assert d["tooltipHover"]["shown"] and d["tooltipHover"]["text"]
+    assert d["tooltipFocus"]["shown"] and d["tooltipFocus"]["focused"] == "in-dcmax" and "ui-tip" in d["tooltipFocus"]["describedby"]
+    assert d["tooltipEscape"] is True
+    assert d["controls"] == {"min_stop_soc": 0.4, "dc_max_kw": 60, "reserve": 0.1, "tariff": "80", "pressed": "balanced"}
+    assert d["controlsOff"] == 0
+    on = d["everydayOn"]
+    assert on["view"] == "everyday" and on["request"]["algorithms"] == ["bls-astar"] and on["request"]["queue_aware"] is True
+    assert all(on["hidden"]) and all(on["shown"])
+    plan = d["everydayPlan"]
+    assert plan["algorithms"] == ["bls-astar"] and plan["objective"] == "cost"
+    assert plan["steps"][0] == "start" and plan["steps"][-1] == "end" and plan["steps"].count("stop") == plan["stops"]
+    assert plan["arrival"] == pytest.approx(plan["total"]) and plan["drive"] == pytest.approx(plan["distance"], abs=0.1)
+    assert plan["link"]["href"].startswith(GMAPS_LINK) and plan["link"]["rel"] == "noopener noreferrer"
+    assert plan["research"] is False and d["everydayOff"] == "research"
+    for w in d["widths"]:
+        assert w["scroll"] <= w["inner"], w
+    assert len(d["centring"]) == 8
+    for c in d["centring"]:
+        assert abs(c["dx"]) <= 0.5 and abs(c["dy"]) <= 0.5, c
+        assert 6 <= c["w"] <= 10 and 7 <= c["h"] <= 10, c
 
 
 # ------------------------------------------------------------------ server

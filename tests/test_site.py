@@ -287,19 +287,28 @@ def test_live_page_config(site, live_payload):
 _URL = re.compile(r"""https?://[^\s"'<>`)\\]+""")
 
 
+#: The trip plan's "Open in Google Maps" button (everyday use, scenarios with real coordinates).
+GMAPS_LINK = "https://www.google.com/maps/dir/?api=1"
+
+
 def test_live_app_has_no_external_url_but_pyodide(site):
     """The live app loads nothing from outside the site but the pinned Pyodide files.
 
-    The only other URLs are the SVG namespace (an identifier, never fetched)
-    and the repository in the install hint (shown to the reader)."""
+    The only other URLs are the SVG namespace (an identifier, never fetched),
+    the repository in the install hint (shown to the reader) and the Google
+    Maps directions link of the trip plan: an <a href> the user may follow
+    (rel="noopener noreferrer", opened only on click) -- the app itself sends
+    nothing there."""
     out, _ = site
-    allowed_text = {"http://www.w3.org/2000/svg", f"git+{bs.REPO}"}
+    allowed_text = {"http://www.w3.org/2000/svg", f"git+{bs.REPO}", GMAPS_LINK}
     for rel in ("live/index.html", "live/worker.js"):
         text = (out / rel).read_text(encoding="utf-8")
         for url in _URL.findall(text):
             if url.startswith(bs.PYODIDE_URL):
                 continue
             assert url in allowed_text or url == bs.REPO, (rel, url)
+    live = (out / "live/index.html").read_text(encoding="utf-8")
+    assert live.count(GMAPS_LINK) == 1  # one constant, used only to build that link
     worker = (out / "live" / "worker.js").read_text(encoding="utf-8")
     assert not _URL.findall(worker)  # the worker gets the CDN URL from the page
     # it loads the CDN scripts only after checking their digests, and refuses any other CDN file
@@ -381,9 +390,10 @@ def _page_request(payload: dict, algorithms: list[str]) -> dict:
         "objective": prefs["objective"], "value_of_time_per_h": prefs["value_of_time_per_h"],
         "speed_factors": [1.0, 0.9, 0.8] if len(prefs["speed_factors"]) > 1 else [1.0],
         "queue_aware": prefs["queue_aware"], "departure_s": int(dep // 3600) * 3600 + int(dep % 3600 // 60) * 60,
+        "min_stop_soc": round(prefs.get("min_stop_soc", 0.0) * 100) / 100,
     }
     if not payload["scenario"].get("tariff"):
-        body["tariff"] = "flat"  # the tariff switch is shown (demonstration tariff) and off
+        body["tariff"] = "80"  # the tariff switch starts on: the demonstration tariff
     return body
 
 
@@ -397,8 +407,14 @@ _STOP_FIELDS = ("station", "position", "arrival_s", "hold_s", "wait_s", "charge_
 
 
 def _cli_plan(preset: str, algo: str, tmp_path: Path, capsys) -> dict:
+    """`evroute plan` of the page's default trip: with the demonstration tariff, which the page's
+    tariff switch starts with (a preset with a tariff of its own keeps it)."""
+    from evroute.generators.presets import get_scenario
+    from evroute.scenario import Tariff
+
     path = tmp_path / f"{preset}-{algo}.json"
-    rc = cli_main(["plan", preset, "-a", algo, "--json", str(path)])
+    tariff = ["--tariff", "80"] if get_scenario(preset).tariff == Tariff() else []
+    rc = cli_main(["plan", preset, "-a", algo, "--json", str(path), *tariff])
     out = capsys.readouterr().out
     assert rc == 0, out
     d = json.loads(path.read_text(encoding="utf-8"))
