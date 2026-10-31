@@ -26,6 +26,8 @@ basitleştirip geçer:
 |---|---|---|
 | Doğrusal olmayan şarj | şarj durumu (SoC) ~%50-80'i geçince güç keskin biçimde düşer | her araç × şarj ünitesi çifti için kesin şarj eğrileri |
 | Kısmi şarj | şarj %100'de değil, %54'te kesilir | sürekli şarj miktarları (CFP) ya da ince bir ızgara (BLS) |
+| Kısa molalar | birkaç puanlık şarj için otoyoldan çıkan sürücü azdır | her mola için isteğe bağlı bir asgari şarj düzeyi; planlayıcılar yine kesin kalır |
+| Araçlar ve soketler | LFP hücreler, 50 kW'lık bir DC sınırı, yalnızca CHAdeMO kabul eden bir araç | her araç için hücre kimyası, DC güç sınırı ve konnektörler |
 | Kuyruklar | öğleden sonraları yoğun dinlenme tesislerinde 20-40 dk | saatlik talep profilli Erlang-C kuyrukları |
 | Arazi ve soğuk | inişler bataryayı yeniden doldurur; −5 °C'de kapasite küçülür, şarj yavaşlar | eğim, rüzgâr ve rejeneratif frenlemeyi içeren fizik modeli; soğukta kapasite ve şarj |
 | Batarya yıpranması | yüksek SoC'de hızlı şarj batarya paketini yaşlandırır | amaç fonksiyonunda fiyatlandırılır |
@@ -51,15 +53,29 @@ modellerin ve ticari planlayıcıların kendisiyle kıyaslanabileceği bir
 - **Tek bir en iyi rota yok** — %80 kuralı ve puant saatlerle şarj
   tarifeleri; daha ucuz fiyatı beklemenin ne zaman kârlı olduğunun kesin
   planlanması ([aşağıda](#tek-bir-en-iyi-rota-yok)).
-- **Görerek anlayın** — animasyonlu, çevrimdışı bir web görüntüleyici
-  (yolculuk, yarış ve arama tekrarı modları; TR/EN; açık/koyu tema; mobil
-  uyum), canlı bir planlama sunucusu ve etkileşimli bir deney paneli.
+- **Araçlar ve sürücüler olduğu gibi** — NMC, NCA ve LFP hücreler, bir DC güç
+  sınırı ve konnektör standartları (planlayıcı yalnızca aracın fişini
+  takabildiği yerde durur); "+%2"lik ara şarjlar yerine her mola için bir
+  asgari şarj düzeyi, üstelik kesin planlayıcılar bununla da kesin kalır
+  ([rehber §13](docs/guide.tr.md#13-her-molada-en-az-bir-şarj-düzeyi-taban-kuralı)).
+- **Görerek anlayın** — tarayıcınızda planlayan bir web uygulaması:
+  animasyonlu bir araştırma görünümü (yolculuk, yarış ve arama tekrarı
+  modları, her molanın tüm ayrıntıları) ve sürücüler için kopyalanabilen,
+  yazdırılabilen ya da Google Haritalar'da açılabilen bir yol planı sunan
+  **günlük kullanım modu**; aranabilir seçiciler, ipuçları, TR/EN, açık/koyu
+  tema, telefondan geniş monitörlere kadar uyum. Ayrıca canlı bir planlama
+  sunucusu ve etkileşimli bir deney paneli.
 - **Türkiye vaka çalışmaları** — yaklaşık bir ağ (1 279 düğüm, 146 yol, 10
   dağ geçidi, 290 sentetik şarj istasyonu) ve
   [gerçek veriyle bir ağ](#gerçek-veriyle-vaka-çalışması-openstreetmap):
   SRTM yükseklikli 44 673 OpenStreetMap düğümü, OSM'deki 711 şarj
   istasyonu ve operatör liste fiyatları; ayrıca 40 000 düğüme kadar
   sentetik ağlar ve bir OpenStreetMap yükleyicisi.
+- **Kendi istasyonlarınız** — şarj noktalarını bir CSV dosyasından, OCPI
+  2.2.1 Location nesnelerinden ya da Open Charge Map'ten içe aktarın
+  (`--stations-file`); Türkiye'de hangi operatör ve canlı verilerin
+  bulunduğu ve nasıl kullanılacağı:
+  [gerçek veri](docs/real-data.tr.md#canlı-ve-operatör-verisi).
 - **Tekrarlanabilir** — her tablonun ve grafiğin arkasında sabit tohumlu on
   iki deney, tek komut; algoritmalar için [anlaşılır bir rehber](docs/guide.tr.md).
 
@@ -101,7 +117,7 @@ modellerin ve ticari planlayıcıların kendisiyle kıyaslanabileceği bir
 
 ## Hızlı başlangıç
 
-Hiçbir şey kurmadan denemek için [canlı demoyu](https://aseloth99.github.io/evroute/live/?lang=tr) açın: planlama tarayıcınızda yapılır.
+Hiçbir şey kurmadan denemek için [canlı demoyu](https://aseloth99.github.io/evroute/live/?lang=tr) açın: planlama tarayıcınızda yapılır; *Günlük kullanım* anahtarı onu sade bir yolculuk planlayıcısına dönüştürür.
 
 ```bash
 git clone https://github.com/Aseloth99/evroute.git
@@ -117,6 +133,8 @@ pip install -e ".[dev]"     # isteğe bağlı: + pytest, testler için
 evroute scenarios                                    # hazır senaryoları listeler
 evroute plan turkey-karaman-istanbul                 # BLS-A* ile planlar (varsayılan)
 evroute plan turkey-karaman-istanbul-tariff --objective cost      # %80 kuralı + puant saatler: 20:00'yi bekler
+evroute plan turkey-karaman-istanbul --vehicle hatch51_lfp --dc-max-kw 80   # LFP'li bir hatchback, DC 80 kW ile sınırlı
+evroute plan turkey-osm-karaman-istanbul --min-stop-soc 0.4       # gerçek veri; her mola %40'ta ya da üstünde biter
 evroute viz turkey-karaman-istanbul -o karaman-istanbul.html   # animasyonlu görüntüleyici, çevrimdışı çalışır
 evroute serve turkey-karaman-istanbul --open          # tarayıcıda canlı planlama
 evroute experiments --quick -o results/               # on iki deneyin tamamı, hızlı boyut (~1,5 dk)
@@ -280,7 +298,8 @@ evroute plan turkey-osm-karaman-istanbul   # 9 sa 14 dk, 751,81 km, 2 mola, 999,
 > [!NOTE]
 > Veri © OpenStreetMap contributors, ODbL 1.0; yükseklikler SRTM (NASA/USGS).
 > Araştırma verisidir, navigasyon için uygun değildir. Mart 2026 şarj
-> yönetmeliği dahil ayrıntılar: [`docs/real-data.tr.md`](docs/real-data.tr.md) ([English](docs/real-data.md)).
+> yönetmeliği ve operatör ile canlı verinin nereden gelebileceği dahil
+> ayrıntılar: [`docs/real-data.tr.md`](docs/real-data.tr.md) ([English](docs/real-data.md)).
 
 ## Tek bir en iyi rota yok
 
@@ -342,7 +361,8 @@ bütün bir günün kalkışları) [dokümantasyonda](docs/index.md#worked-examp
 
 Kesin planlayıcılar yolculuk süresini ya da süre, para ve yıpranmadan oluşan
 genelleştirilmiş bir maliyeti en küçükler (CFP: yalnızca süre); zamana bağlı
-kuyrukları, eko hızları, rejeneratif frenlemeyi ve tarifeleri destekler.
+kuyrukları, eko hızları, rejeneratif frenlemeyi, tarifeleri, aracın
+konnektörlerini ve her mola için bir asgari şarj düzeyini destekler.
 Nasıl çalıştıkları: [rehber](docs/guide.tr.md) (adım adım; sonunda
 "[hangi planlayıcıyı kullanmalıyım?](docs/guide.tr.md#12-hangi-planlayıcıyı-kullanmalıyım)")
 ve [`docs/algorithms.md`](docs/algorithms.md#at-a-glance) (genel bakış ve ispatlar).
@@ -367,6 +387,7 @@ evroute gallery -o docs/img                        # bu README'deki seaborn graf
 | `temperature` | Karaman → İstanbul: 20 °C'de 8 sa 07 dk; −15 °C'de ön ısıtmalı bataryayla 8 sa 37 dk, ön ısıtma olmadan 10 sa 24 dk |
 | `robustness` | İzmir → Erzurum: P(rezerv aşımı) güvenlik katsayısı 1,0'da %56, 1,1'de %9,7 (+21 dk), 1,2'de %0,4 (+36 dk) |
 | `tariffs` | maliyet-optimal plan en hızlı plandan 6,3 dk uzun sürer ama 76,73 TRY (%7,6) daha az öder |
+| `vehicles` | on bir hazır araç profiliyle Karaman → İstanbul: 7 sa 50 dk (75 kWh'lik sedan) ile 10 sa 57 dk (27 kWh'lik şehir aracı) arası, LFP'li araçlar 8 sa 01 dk ile 8 sa 34 dk arası; yalnızca AC ile şarj olan bir araç 20 sa 35 dk |
 | `scalability` | 40 000 düğümlü sentetik ülkelerde BLS-A\* ortalama 1,7 sn'de, CFP-A\* 2,5 sn'de yanıt veriyor |
 | `real-data` | yaklaşık ağda ve OpenStreetMap verisinde altı yolculuk: OSM istasyonlarıyla optimum ortalama %7,0 daha uzun sürer, neredeyse tamamı daha yavaş sürüşten; BLS-A\* 4,0 sn'de, CFP-A\* 9,9 sn'de yanıt verir (medyan) |
 
@@ -379,8 +400,8 @@ Her planlayıcının her planı **bağımsız bir değerlendiricide** yeniden si
 edilir; sabit tohumlu bir **çapraz doğrulama paketi** on bir değişmezi kaba
 kuvvete, analitik referans çözümlere, metamorfik bağıntılara ve yerel aramaya
 karşı, rastgele şarj tarifeleri altında da sınar
-([`tests/fuzz_report.md`](tests/fuzz_report.md)). Toplam 740 test vardır;
-bunların 636'sı hızlı katmandadır ve CI'da Python 3.10-3.13 üzerinde
+([`tests/fuzz_report.md`](tests/fuzz_report.md)). Toplam 881 test vardır;
+bunların 744'ü hızlı katmandadır ve CI'da Python 3.10-3.13 üzerinde
 çalıştırılır ([ayrıntılar](docs/algorithms.md#8-how-correctness-is-verified)):
 
 ```bash
@@ -391,20 +412,24 @@ python -m pytest -m "not slow"   # hızlı katman, birkaç dakika
 
 - [Rehber](docs/guide.tr.md) ([English](docs/guide.md)) — algoritmalar adım
   adım, konuya yeni başlayanlar için; sonunda "hangi planlayıcıyı
-  kullanmalıyım?"
-- [Model](docs/model.md) — tüm denklemler, onları gerçekleyen modüllerle birlikte
+  kullanmalıyım?", her mola için asgari şarj düzeyi ve günlük kullanım modu
+- [Model](docs/model.md) — tüm denklemler, onları gerçekleyen modüllerle
+  birlikte; araçlar, DC sınırları ve konnektörler §10'da
 - [Gerçek veriyle vaka çalışması](docs/real-data.tr.md) ([English](docs/real-data.md)) —
   OpenStreetMap üzerinde Türkiye: kaynaklar, verinin hazırlanışı, doğrulama,
-  şarj kapsamı, fiyatlar ve 2026 yönetmeliği, sonuçlar, sınırlar
+  şarj kapsamı, fiyatlar ve 2026 yönetmeliği, sonuçlar, canlı ve operatör
+  verisi (Şarj@TR, OCPI, Open Charge Map), sınırlar
 - [Algoritmalar ve ispatlar](docs/algorithms.md) — doğruluk gerekçeleri ve kaynakça
 - [Dokümantasyon dizini](docs/index.md) — komut satırı, Python API'si,
   görüntüleyici, canlı sunucu, deneyler, senaryolar ve veriler, tarifeler,
   SSS, yol haritası
 - [Web sitesi](https://aseloth99.github.io/evroute/?lang=tr): tarayıcınızda çalışan canlı planlayıcı ve hazır
   [örnekler](https://aseloth99.github.io/evroute/examples/?lang=tr) (görüntüleyici, tarife görüntüleyicisi, gerçek veri, sonuç paneli)
+- [v1.0.0 sürüm notları](docs/release-notes-v1.0.0.md#türkçe) — bu sürümün içeriği
 - [Katkıda bulunma](CONTRIBUTING.md) — kurulum, proje yapısı, temel kurallar
 
-Rehber ve gerçek veri vaka çalışması dışındaki belgeler İngilizcedir.
+Rehber, gerçek veri vaka çalışması ve sürüm notları dışındaki belgeler
+İngilizcedir.
 
 ## Atıf
 
