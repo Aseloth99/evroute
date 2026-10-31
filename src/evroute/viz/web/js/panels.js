@@ -471,7 +471,9 @@
         tile('arrival_soc', [I.pct(t.arrivalSoc, 0), U.isNum(t.minArrival) ? U.el('small', { text: ` (${I.t('arrival_min', { p: I.pct(t.minArrival, 0) })})` }) : null],
           I.t('tip_arrival_soc'), 'good'));
       const steps = U.el('ol', { class: 'itin-steps' }, it.steps.map((st) => itinStep(app, st)));
-      U.setChildren(box, head, totals, steps, U.el('p', { class: 'itin-note', text: I.t('it_note') }));
+      const veh = ((app.model.scenario || {}).vehicle || {}).name;
+      const od = U.el('p', { class: 'itin-od', text: [`${it.steps[0].place} → ${it.steps[it.steps.length - 1].place}`, veh, `${I.km(t.dist, 0)}`].filter(Boolean).join(' · ') });
+      U.setChildren(box, head, od, totals, steps, U.el('p', { class: 'itin-note', text: I.t('it_note') }));
     }
 
     /** Static pages in everyday mode: the trip's assumptions (vehicle, departure, charge). */

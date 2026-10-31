@@ -439,8 +439,9 @@ select.combo-native {
 /* ------------------------------------------------- vehicle details card */
 .veh-card { margin: -4px 0 11px; padding: 9px 10px; border-radius: 12px; background: var(--surface-2); border: 1px solid var(--border); }
 .veh-card:empty { display: none; }
-.veh-head { display: flex; align-items: center; gap: 7px; min-width: 0; margin-bottom: 6px; }
-.veh-head .veh-name { font-size: 13px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.veh-head { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 7px; min-width: 0; margin-bottom: 6px; }
+.veh-head .veh-name { flex: 1 1 120px; font-size: 13px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.veh-head .conn-chips { flex-wrap: nowrap; }
 .veh-note { font-size: 11px; color: var(--text-3); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .veh-stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
 .veh-stat { min-width: 0; }
@@ -510,7 +511,8 @@ a.btn-sm:hover { text-decoration: none; }
 .itin-total small { display: block; font-size: 11px; color: var(--text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .itin-total b { display: block; font-size: 15.5px; font-weight: 750; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .itin-total b small { display: inline; font-size: 11.5px; font-weight: 600; color: var(--text-3); }
-.itin-total.good { background: var(--ok-soft); border-color: transparent; }
+.itin-total.good { background: var(--ok-soft); border-color: transparent; grid-column: span 2; }
+.itin-od { margin: -4px 0 10px; font-size: 12.5px; color: var(--text-3); }
 .itin-total.good b { color: var(--ok); }
 .itin-steps { list-style: none; margin: 0; padding: 0; position: relative; }
 .itin-step { position: relative; display: grid; grid-template-columns: 28px minmax(0, 1fr); gap: 10px; padding: 0 0 12px; }
@@ -1090,6 +1092,13 @@ table.cmp { width: 100%; border-collapse: separate; border-spacing: 0; font-size
 }
 
 /* ------------------------------------------------------------- phones */
+/* narrow trip column (1181-1360 px): smaller tiles, so that the values fit */
+@media (max-width: 1360px) and (min-width: 1181px) {
+  .metric { padding: 8px 8px; }
+  .metric b { font-size: 14px; }
+  .metric small { font-size: 10.5px; }
+}
+
 @media (max-width: 760px) {
   .plan-own:not([hidden]) { display: inline-flex; gap: 8px; }
   #live-card { scroll-margin-top: 10px; }
