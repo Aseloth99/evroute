@@ -25,6 +25,8 @@ simplify the rest away:
 |---|---|---|
 | Nonlinear charging | power drops sharply above ~50-80 % state of charge (SoC) | exact charging curves per vehicle × charger |
 | Partial charging | stop at 54 %, not at 100 % | continuous amounts (CFP) or a fine grid (BLS) |
+| Short stops | few drivers leave the motorway for a few per cent | an optional minimum charge at each stop, and the planners stay exact |
+| Vehicles and plugs | LFP cells, a 50 kW DC limit, a car that takes only CHAdeMO | cell chemistry, DC power limit and connectors per vehicle |
 | Queues | 20-40 min at busy service areas in the afternoon | Erlang-C queues with hourly demand |
 | Terrain and cold | descents refill the battery; −5 °C: smaller battery, slower charging | physics model with grade, wind and regeneration; cold-weather capacity and charging |
 | Battery wear | fast charging at high SoC ages the pack | priced in the objective |
@@ -49,15 +51,26 @@ effects: [`docs/model.md`](docs/model.md#at-a-glance).
 - **No single best route** - charging tariffs with the 80 % rule and peak
   hours, and exact planning of when it pays to wait for a cheaper price
   ([below](#there-is-no-single-best-route)).
-- **See it** - an animated, offline web viewer (trip, race and search-replay
-  modes, TR/EN, light/dark, mobile), a live planning server and an
-  interactive experiment dashboard.
+- **Vehicles and drivers as they are** - NMC, NCA and LFP cells, a DC power
+  limit and connector standards (a planner only stops where the car can plug
+  in), and a minimum charge at each stop instead of "+2 %" top-ups, with
+  every exact planner still exact ([guide §13](docs/guide.md#13-a-minimum-charge-at-each-stop-the-floor-rule)).
+- **See it** - a web app that plans in your browser: an animated research
+  view (trip, race and search-replay modes, every quantity of every stop)
+  and an **everyday mode** for drivers with a trip plan to copy, print or
+  open in Google Maps; searchable pickers, tooltips, TR/EN, light/dark,
+  phones to wide monitors.  Also a live planning server and an interactive
+  experiment dashboard.
 - **Turkey case studies** - an approximate one (1 279 nodes, 146 roads, 10
   mountain passes, 290 synthetic charging stations) and a
   [real-data one](#real-data-case-study-openstreetmap): 44 673
   OpenStreetMap nodes with SRTM elevations, 711 OSM charging stations and
   operator list prices; plus synthetic networks of up to 40 000 nodes and an
   OpenStreetMap loader.
+- **Your own stations** - import chargers from a CSV file, OCPI 2.2.1
+  Locations or Open Charge Map (`--stations-file`); which operator and live
+  data exist in Turkey and how to use them:
+  [real data](docs/real-data.md#live-and-operator-data).
 - **Reproducible** - twelve seeded experiments behind every table and
   figure, one command; a [gentle guide](docs/guide.md) to the algorithms.
 
@@ -99,7 +112,7 @@ effects: [`docs/model.md`](docs/model.md#at-a-glance).
 
 ## Quick start
 
-To try it without installing anything, open the [live demo](https://aseloth99.github.io/evroute/live/?lang=en): it plans in your browser.
+To try it without installing anything, open the [live demo](https://aseloth99.github.io/evroute/live/?lang=en): it plans in your browser, and its *Everyday use* switch turns it into a plain trip planner.
 
 ```bash
 git clone https://github.com/Aseloth99/evroute.git
@@ -115,6 +128,8 @@ pip install -e ".[dev]"     # optional: + pytest, for the tests
 evroute scenarios                                    # list the preset scenarios
 evroute plan turkey-karaman-istanbul                 # plan with BLS-A* (default)
 evroute plan turkey-karaman-istanbul-tariff --objective cost      # 80 % rule + peak hours: waits for 20:00
+evroute plan turkey-karaman-istanbul --vehicle hatch51_lfp --dc-max-kw 80   # an LFP hatchback, DC limited to 80 kW
+evroute plan turkey-osm-karaman-istanbul --min-stop-soc 0.4       # real data; every stop ends at 40 % or above
 evroute viz turkey-karaman-istanbul -o karaman-istanbul.html --lang en   # animated viewer, works offline
 evroute serve turkey-karaman-istanbul --open          # live planning in the browser
 evroute experiments --quick -o results/               # all twelve experiments, smoke size (~1.5 min)
@@ -271,7 +286,8 @@ evroute plan turkey-osm-karaman-istanbul   # 9 h 14 min, 751.81 km, 2 stops, 999
 > [!NOTE]
 > Data © OpenStreetMap contributors, ODbL 1.0; elevations SRTM (NASA/USGS).
 > Research data, not for navigation. The full write-up, with the March 2026
-> charging regulation: [`docs/real-data.md`](docs/real-data.md) ([Türkçe](docs/real-data.tr.md)).
+> charging regulation and where operator and live data could come from:
+> [`docs/real-data.md`](docs/real-data.md) ([Türkçe](docs/real-data.tr.md)).
 
 ## There is no single best route
 
@@ -330,7 +346,8 @@ departures) in the [documentation](docs/index.md#worked-example).
 
 The exact planners minimise the trip time or a generalised cost of time,
 money and wear (CFP: time only) and handle time-dependent queues, eco
-speeds, regeneration and tariffs. How they work: the [guide](docs/guide.md) (step by step, ending
+speeds, regeneration, tariffs, the vehicle's connectors and a minimum charge
+at each stop. How they work: the [guide](docs/guide.md) (step by step, ending
 with "[which planner should I use?](docs/guide.md#12-which-planner-should-i-use)")
 and [`docs/algorithms.md`](docs/algorithms.md#at-a-glance) (overview and proofs).
 
@@ -354,6 +371,7 @@ evroute gallery -o docs/img                        # the seaborn figures of this
 | `temperature` | Karaman → İstanbul: 8 h 07 min at 20 °C, 8 h 37 min at −15 °C with a preconditioned battery, 10 h 24 min without |
 | `robustness` | İzmir → Erzurum: P(reserve breach) 56 % at safety factor 1.0, 9.7 % at 1.1 (+21 min), 0.4 % at 1.2 (+36 min) |
 | `tariffs` | the cost-optimal plan pays 76.73 TRY (7.6 %) less than the fastest for 6.3 min more |
+| `vehicles` | Karaman → İstanbul with all eleven vehicle presets: 7 h 50 min (75 kWh sedan) to 10 h 57 min (27 kWh city car), the LFP cars 8 h 01 min to 8 h 34 min; an AC-only car needs 20 h 35 min |
 | `scalability` | synthetic countries of 40 000 nodes: BLS-A\* answers in 1.7 s and CFP-A\* in 2.5 s on average |
 | `real-data` | six trips on the approximate network and on OpenStreetMap data: with OSM stations the optimum takes 7.0 % longer on average, almost all of it slower driving; BLS-A\* answers in 4.0 s and CFP-A\* in 9.9 s (median) |
 
@@ -366,7 +384,7 @@ Every plan of every planner is replayed by an **independent evaluator**; a
 seeded **cross-validation suite** checks eleven invariants against brute
 force, analytic oracles, metamorphic relations and local search, also under
 random charging tariffs ([`tests/fuzz_report.md`](tests/fuzz_report.md)).
-740 tests, 636 in the fast tier, run on Python 3.10-3.13 in CI
+881 tests, 744 in the fast tier, run on Python 3.10-3.13 in CI
 ([details](docs/algorithms.md#8-how-correctness-is-verified)):
 
 ```bash
@@ -376,16 +394,20 @@ python -m pytest -m "not slow"   # fast tier, a few minutes
 ## Documentation
 
 - [Guide](docs/guide.md) ([Türkçe](docs/guide.tr.md)) - the algorithms step
-  by step, for newcomers, and "which planner should I use?"
-- [Model](docs/model.md) - every equation, with the module that implements it
+  by step, for newcomers; "which planner should I use?", the minimum charge
+  at each stop and the everyday mode
+- [Model](docs/model.md) - every equation, with the module that implements
+  it; vehicles, DC limits and connectors in §10
 - [Real-data case study](docs/real-data.md) ([Türkçe](docs/real-data.tr.md)) -
   Turkey on OpenStreetMap: sources, build, validation, charging coverage,
-  prices and the 2026 regulation, results, limitations
+  prices and the 2026 regulation, results, live and operator data
+  (Şarj@TR, OCPI, Open Charge Map), limitations
 - [Algorithms & proofs](docs/algorithms.md) - correctness arguments and references
 - [Documentation index](docs/index.md) - command line, Python API, viewer,
   live server, experiments, scenarios and data, tariffs, FAQ, roadmap
 - [Web site](https://aseloth99.github.io/evroute/): the live planner in your browser and prebuilt
   [examples](https://aseloth99.github.io/evroute/examples/) (viewer, tariff viewer, real data, results dashboard)
+- [Release notes v1.0.0](docs/release-notes-v1.0.0.md) - what this version contains
 - [Contributing](CONTRIBUTING.md) - set-up, project structure, ground rules
 
 ## Citation
