@@ -682,6 +682,10 @@ def test_viewer_ui_in_chromium(tmp_path):
     assert d["tooltipHover"]["shown"] and d["tooltipHover"]["text"]
     assert d["tooltipFocus"]["shown"] and d["tooltipFocus"]["focused"] == "in-dcmax" and "ui-tip" in d["tooltipFocus"]["describedby"]
     assert d["tooltipEscape"] is True
+    ms = d["tooltipMinStop"]   # the minimum stop slider has a tooltip of its own (the "no +2 % top-ups" text)
+    assert ms["focused"] == "in-minstop" and ms["shown"] and "%2" in ms["text"] and "ui-tip" in (ms["describedby"] or "")
+    ts = d["tooltipScroll"]    # focusing scrolled the side panel: the tip stays
+    assert ts["focused"] == "in-arrive" and ts["scrollTop"] > 0 and ts["shown"] and "ui-tip" in (ts["describedby"] or "")
     assert d["controls"] == {"min_stop_soc": 0.4, "dc_max_kw": 60, "reserve": 0.1, "tariff": "80", "pressed": "balanced"}
     assert d["controlsOff"] == 0
     on = d["everydayOn"]
@@ -693,8 +697,19 @@ def test_viewer_ui_in_chromium(tmp_path):
     assert plan["arrival"] == pytest.approx(plan["total"]) and plan["drive"] == pytest.approx(plan["distance"], abs=0.1)
     assert plan["link"]["href"].startswith(GMAPS_LINK) and plan["link"]["rel"] == "noopener noreferrer"
     assert plan["research"] is False and d["everydayOff"] == "research"
+    assert "BLS" not in plan["legend"] and plan["legend"].startswith("Rota")   # no planner name in everyday use
+    # a search stopped by its label budget: once more on a 5 % grid, said in the note
+    co = d["coarse"]
+    assert co["plans"] == [None, 0.05] and co["feasible"] and "%5" in co["note"] and co["toast"] == "Yol planı hazır"
+    # ... and when that stops as well: a translated reason, no "plan ready"
+    cf = d["coarseFail"]
+    assert cf["plans"] == [None, 0.05] and not cf["feasible"] and cf["toast"] == "Yol planı bulunamadı"
+    assert "arama sınırına" in cf["card"] and "label" not in cf["card"].lower()
     for w in d["widths"]:
         assert w["scroll"] <= w["inner"], w
+        assert w["od"] and w["totals"] == [], w   # the chosen place and the trip plan's labels are not cut
+        if w["view"] == "everyday":
+            assert w["socRow"] > 0.99, w          # the SoC chart fills the row the research charts leave
     assert len(d["centring"]) == 8
     for c in d["centring"]:
         assert abs(c["dx"]) <= 0.5 and abs(c["dy"]) <= 0.5, c
@@ -847,6 +862,97 @@ def test_build_plan_scenario_unit():
     assert (base.query.origin, base.query.destination) == (0, 15)
     with pytest.raises(PlanRequestError):
         build_plan_scenario(base, {"reserve_soc": 0.9})
+
+
+def test_build_plan_scenario_charge_step():
+    """Everyday use re-plans with a coarser charging-target grid when the first search hit its label budget."""
+    base = grid_scenario(rows=4, cols=4, seed=2)
+    sc, _ = build_plan_scenario(base, {"charge_step_soc": 0.05})
+    assert sc.preferences.charge_step_soc == 0.05 and base.preferences.charge_step_soc == 0.02
+    for bad in (0.0, 0.5, "coarse"):
+        with pytest.raises(PlanRequestError, match="charge_step_soc"):
+            build_plan_scenario(base, {"charge_step_soc": bad})
+
+
+_LIVE_HARNESS = r"""
+const fs = require('fs'), vm = require('vm');
+const [webDir, reqPath] = process.argv.slice(2);
+const req = JSON.parse(fs.readFileSync(reqPath, 'utf8'));
+const ctx = { req, console, Math, JSON, Map, Set, Number, Intl, isFinite, String, Array, Object, Promise,
+  document: { documentElement: { setAttribute() {} } } };
+ctx.window = ctx;
+vm.createContext(ctx);
+for (const f of ['util.js', 'i18n.js', 'model.js', 'panels.js', 'live.js']) vm.runInContext(fs.readFileSync(webDir + '/js/' + f, 'utf8'), ctx, { filename: f });
+const out = vm.runInContext(`(function () {
+  const L = EVR.live, I = EVR.i18n;
+  const res = (feasible, status) => ({ results: [{ algorithm: 'bls-astar', feasible, stats: { extra: status ? { status } : {} } }] });
+  const body = { algorithms: ['bls-astar'], origin: 1, destination: 2 };
+  const retry = L.coarseRetry(body, res(false, 'limit'));
+  const keys = ['route_one', 'toast_no_plan', 'note_coarse', 'no_plan_limit'];
+  return {
+    retry, body,
+    feasible: L.coarseRetry(body, res(true, 'limit')), infeasible: L.coarseRetry(body, res(false, null)),
+    again: L.coarseRetry(retry, res(false, 'limit')), empty: L.coarseRetry(body, { results: [] }),
+    keys: ['tr', 'en'].map((l) => keys.map((k) => I.STR[l][k] || null)),
+    cmd: L.cliCommand(Object.assign({ scenario: 'x', initial_soc: 0.8, reserve_soc: 0.1, min_arrival_soc: 0.1, departure_s: 0 }, retry), ['bls-astar'], null, { nodeLabel: String }),
+    texts: ['tr', 'en'].map((l) => {
+      I.setLang(l);
+      return {
+        vehicles: req.vehicles.map((name) => I.vehicleName({ name, key: 'k' })),
+        custom: I.vehicleName({ name: 'My own EV', key: 'k' }),
+        desc: req.algorithms.map((name) => EVR.panels.algoTip({ name, exact: name === 'pareto' ? 'grid' : null, description: '' })),
+        long: req.algorithms.map((name) => I.algoLongTitle(name, 'EN ' + name)),
+      };
+    }),
+  };
+})()`, ctx);
+process.stdout.write(JSON.stringify(out));
+"""
+
+
+def _run_live_harness(tmp_path):
+    from evroute.algorithms import REGISTRY
+    from evroute.vehicle import VEHICLES
+
+    data = tmp_path / "live.json"
+    data.write_text(json.dumps({"vehicles": [v.name for v in VEHICLES.values()], "algorithms": list(REGISTRY)}), encoding="utf-8")
+    script = tmp_path / "live_harness.js"
+    script.write_text(_LIVE_HARNESS, encoding="utf-8")
+    res = subprocess.run(["node", str(script), str(WEB_DIR), str(data)], capture_output=True, text=True, timeout=60)
+    assert res.returncode == 0, res.stderr
+    return json.loads(res.stdout)
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_algorithm_and_vehicle_texts_in_both_languages(tmp_path):
+    """Algorithm tooltips are one plain line in both languages (not the planner docstring), name the
+    guarantee once, long titles and the vehicle presets have Turkish names, a custom vehicle keeps its own."""
+    from evroute.vehicle import VEHICLES
+
+    tr, en = _run_live_harness(tmp_path)["texts"]
+    for lang in (tr, en):
+        for tip in lang["desc"]:
+            desc, guarantee = tip.rsplit(" · ", 1)
+            assert 20 < len(desc) <= 140, tip
+            word, title = guarantee.split(": ", 1)
+            assert word.lower() != title.split()[0].lower().rstrip(":"), tip   # not "heuristic: Heuristic: ..."
+        assert lang["custom"] == "My own EV"
+    assert en["vehicles"] == [v.name for v in VEHICLES.values()]
+    assert all(a != b for a, b in zip(tr["vehicles"], en["vehicles"]))
+    assert all("EV" not in n.split() and "only" not in n and "usable" not in n for n in tr["vehicles"]), tr["vehicles"]
+    assert tr["long"][1] == "Açgözlü (gerektiğinde şarj)" and all(not t.startswith("EN ") for t in tr["long"] if "astar" not in t)
+    assert en["long"][1] == "EN greedy"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_everyday_retries_a_budget_stopped_search_on_a_coarser_grid(tmp_path):
+    """Everyday use: a search that stopped at its label budget without a route is planned once more
+    with charge_step_soc 0.05 (and only then); the texts that say so exist in both languages."""
+    out = _run_live_harness(tmp_path)
+    assert out["retry"] == dict(out["body"], charge_step_soc=0.05)
+    assert out["feasible"] is None and out["infeasible"] is None and out["again"] is None and out["empty"] is None
+    assert all(all(row) for row in out["keys"]), out["keys"]
+    assert "--step 0.05" in out["cmd"]
 
 
 def test_build_plan_scenario_tariff_switch():

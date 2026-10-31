@@ -29,7 +29,7 @@
       destination: 'Varış',
       swap: 'Başlangıç ve varışı değiştir',
       pick_hint: 'Haritaya tıklayın: başlangıç · Shift+tık: varış',
-      map_click_sets: 'Harita tıklaması şunu ayarlar',
+      map_click_sets: 'Haritaya tıklayınca seçilecek nokta',
       vehicle: 'Araç',
       initial_soc: 'Başlangıç şarjı',
       temperature: 'Sıcaklık',
@@ -42,13 +42,13 @@
       value_of_time: 'Zaman değeri',
       per_hour: '/sa',
       eco_speeds: 'Eko hızlar (%100 / 90 / 80)',
-      queue_aware: 'Kuyruk farkındalığı',
+      queue_aware: 'Kuyrukları hesaba kat',
       algorithms: 'Algoritmalar',
       plan: 'Planla',
       routes: 'Rotalar',
       routes_hint: 'seçmek için tıklayın',
       layers: 'Katmanlar',
-      layer_terrain: 'Arazi gölgelendirme',
+      layer_terrain: 'Arazi gölgelendirmesi',
       layer_stations: 'Şarj istasyonları',
       layer_labels: 'Yer adları',
       layer_others: 'Diğer rotalar',
@@ -79,6 +79,7 @@
       mode_search_title: 'Arama algoritmasının keşfettiği düğümler (S)',
       timeline: 'Zaman çizelgesi',
       trip: 'Yolculuk',
+      route_one: 'Rota',
       charging_stops: 'Şarj durakları',
       chart_soc: 'Şarj durumu ve rakım',
       chart_wait: 'Kuyruk profili (24 saat)',
@@ -126,7 +127,7 @@
       arrival_soc: 'Varış şarjı',
       min_soc: 'En düşük şarj',
       runtime: 'Çalışma süresi',
-      settled: 'Etiketler',
+      settled: 'Kesinleşen etiket',
       drive: 'Sürüş',
       queue: 'Kuyruk',
       setup: 'Bağlanma',
@@ -148,7 +149,7 @@
       g_partial: 'kısmi',
       g_exact_title: 'Model için kanıtlanmış optimum',
       g_grid_title: 'Şarj hedefleri SoC ızgarasında olduğunda optimum',
-      g_heuristic_title: 'Sezgisel: optimum garanti edilmez',
+      g_heuristic_title: 'Optimum garanti edilmez',
 
       th_algorithm: 'Algoritma',
       th_guarantee: 'Garanti',
@@ -172,10 +173,10 @@
       stop_money: 'Ücret',
 
       tip_power: 'Güç',
-      tip_plugs: 'Soket',
+      tip_plugs: 'Soket sayısı',
       tip_price: 'Fiyat',
       tip_wait: 'Beklenen kuyruk {c}',
-      tip_operator: 'İşletmeci',
+      tip_operator: 'Operatör',
       tip_wait_24: '24 saatlik beklenen kuyruk',
 
       ax_soc: 'SoC (%)',
@@ -218,7 +219,7 @@
       err_same_od: 'Başlangıç ve varış aynı olamaz',
       err_no_algo: 'En az bir algoritma seçin',
       err_no_data: 'Görüntüleyici verisi bulunamadı.',
-      generated_by: 'EVRoute {v} ile oluşturuldu · yaklaşık veriler, navigasyon için değildir',
+      generated_by: 'EVRoute {v} ile oluşturuldu · yaklaşık veriler, navigasyon için uygun değildir',
       unit_km: 'km',
       unit_kmh: 'km/sa',
       unit_m: 'm',
@@ -233,13 +234,13 @@
       p_short_m: 'Eksik varış',
       th_p_strand: 'P(kalma)',
       th_p_short: 'P(eksik)',
-      rel_title: '{n} Monte Carlo dünyası (belirsiz tüketim, rastgele kuyruklar): yolda kalma {s}, rezerv ihlali {b}, hedefin altında varış {a}',
-      rel_short_title: 'Varışta istenen şarjın altında kalma olasılığı ({n} Monte Carlo dünyası)',
-      rel_strand_title: 'Bataryanın yolda bitme olasılığı ({n} Monte Carlo dünyası)',
+      rel_title: '{n} Monte Carlo benzetimi (belirsiz tüketim, rastgele kuyruklar): yolda kalma {s}, rezerv ihlali {b}, hedefin altında varış {a}',
+      rel_short_title: 'Varışta istenen şarjın altında kalma olasılığı ({n} Monte Carlo benzetimi)',
+      rel_strand_title: 'Bataryanın yolda bitme olasılığı ({n} Monte Carlo benzetimi)',
       pareto_fastest: 'en hızlı',
       pareto_cheapest: 'en ucuz',
       pareto_members: '{n} Pareto-optimal rota',
-      pareto_dominated: 'domine edilen bölge',
+      pareto_dominated: 'baskılanan bölge',
       pareto_front: 'Pareto cephesi',
       pareto_returned: 'döndürülen plan',
       off_axis: 'eksen dışında',
@@ -284,7 +285,7 @@
       boot_scenario: 'Senaryo yükleniyor',
       boot_failed: 'Tarayıcıdaki planlayıcı yüklenemedi: {m}',
       boot_retry: 'Tekrar dene',
-      planning_algo: '{a} planlanıyor ({i}/{n})…',
+      planning_algo: '{a} ile planlanıyor ({i}/{n})…',
       restarting: '{a} zaman sınırını aştı; planlayıcı yeniden başlatılıyor…',
       budget_time_stop: '{s} sn\'lik zaman sınırında durduruldu',
       budget_time_limit: '{s} sn\'lik zaman sınırına ulaştı',
@@ -307,8 +308,8 @@
       site_home: 'EVRoute web sitesi',
       site_repo: 'GitHub deposu',
       // scenario texts of the presets (the data carries them in English)
-      meta_disclaimer_turkey: 'Yaklaşık yol ağı ve sentetik istasyonlar; araştırma amaçlı bir örnektir, seyir için değildir.',
-      meta_disclaimer_osm_turkey: 'OpenStreetMap yolları ve istasyonları, operatör liste fiyatları ve varsayılan kuyruklar; araştırma verisidir, seyir için değildir.',
+      meta_disclaimer_turkey: 'Yaklaşık yol ağı ve sentetik istasyonlar; araştırma amaçlı bir örnektir, navigasyon için uygun değildir.',
+      meta_disclaimer_osm_turkey: 'OpenStreetMap yolları ve istasyonları, operatör liste fiyatları ve varsayıma dayalı kuyruklar; araştırma verisidir, navigasyon için uygun değildir.',
       meta_licence_osm_turkey: 'ODbL 1.0 (veri), MIT (kod)',
 
       // everyday mode, searchable pickers, tooltips, research detail
@@ -318,10 +319,13 @@
       toast_everyday_on: 'Günlük kullanım: sade yol planı',
       toast_everyday_off: 'Araştırma görünümü: tüm ayrıntılar',
       toast_plan_ready: 'Yol planı hazır',
+      toast_no_plan: 'Yol planı bulunamadı',
+      note_coarse: 'Arama çok büyüdü; yolculuk {p}’lik şarj adımlarıyla yeniden planlandı. Plan, en iyi plandan biraz uzun sürebilir.',
+      no_plan_limit: 'Bu yolculuk için arama sınırına ulaşıldı ve plan bulunamadı. Başlangıç şarjını yükseltmeyi ya da yakın bir ara noktaya planlamayı deneyin.',
       combo_no_match: 'Eşleşme yok',
       combo_more: '+{n} sonuç daha: aramayı daraltın',
       arrival_min: 'min. {p}',
-      tip_min_arrival: 'Plan varışta en az bu kadar şarjla gelir; daha azıyla varmayı asla planlamaz. Planın gerçek varış şarjı sonuçta gösterilir.',
+      tip_min_arrival: 'Araç hedefe en az bu şarjla varır; plan hiçbir zaman daha düşük bir varış şarjı öngörmez. Planın gerçek varış şarjı sonuçta gösterilir.',
       tip_arrival_soc: 'Planın gerçek varış şarjı (ayarladığınız minimum değil, planın sonucu)',
       min_stop: 'Durakta en az şuna kadar şarj et',
       min_stop_off: 'kapalı',
@@ -339,12 +343,12 @@
       tip_prio_fast: 'Toplam yolculuk süresini en aza indirir',
       tip_prio_cheap: 'Ücreti ve süreyi birlikte en aza indirir (bir saatin değeri: {v})',
       veh_battery: 'Batarya',
-      veh_dc: 'DC en çok',
+      veh_dc: 'Maks. DC',
       veh_ac: 'AC (araç içi)',
-      veh_connectors: 'Soketler',
+      veh_connectors: 'Konnektörler',
       veh_no_dc: 'DC yok',
       veh_curve: 'Şarj eğrisi',
-      tip_veh_curve: 'Bataryaya giren en yüksek DC gücü (kW) ve şarj durumu. Kesikli çizgi: etkin DC sınırı; noktalı çizgiler: seçili rotanın duraklarındaki istasyon gücü.',
+      tip_veh_curve: 'Şarj durumuna (SoC) göre bataryaya girebilecek en yüksek DC gücü (kW). Kesikli çizgi: etkin DC sınırı; noktalı çizgiler: seçili rotanın duraklarındaki istasyon gücü.',
       curve_limit: 'sınır {kw}',
       tip_veh_battery: 'Nominal batarya kapasitesi; yolculuk sıcaklığında kullanılabilir kısım: {u}',
       tip_veh_dc: 'Aracın kabul ettiği en yüksek DC şarj gücü (etkin sınırla)',
@@ -359,9 +363,9 @@
       tip_conn_CHAdeMO: 'CHAdeMO: Japon DC hızlı şarj standardı',
       tip_conn_NACS: 'NACS (SAE J3400): AC ve DC tek sokette',
       dc_limit: 'DC şarj gücü sınırı',
-      dc_limit_ph: 'aracın kendisi: {kw}',
-      tip_dc_limit: 'Aracın kabul ettiği en yüksek DC gücünü sınırlar (ör. eski bir araç ya da batarya koruması). Boş bırakın: aracın kendi sınırı.',
-      tip_vehicle: 'Araç modeli: batarya, şarj eğrisi ve soketler. Yazarak arayın.',
+      dc_limit_ph: 'aracın kendi sınırı: {kw}',
+      tip_dc_limit: 'Aracın kabul ettiği en yüksek DC gücünü sınırlar (ör. eski bir araç ya da batarya koruması). Boş bırakılırsa aracın kendi sınırı kullanılır.',
+      tip_vehicle: 'Araç modeli: batarya, şarj eğrisi ve konnektörler. Yazarak arayın.',
       tip_scenario: 'Yol ağı, istasyonlar ve varsayılan yolculuk',
       tip_origin: 'Yazarak arayın ya da haritaya tıklayın',
       tip_destination: 'Yazarak arayın ya da haritada Shift+tıklayın',
@@ -371,7 +375,7 @@
       tip_objective: 'Neyin en iyi sayılacağı: toplam süre ya da genelleştirilmiş maliyet (zaman değeri × süre + ücret + yıpranma bedeli)',
       tip_departure: 'Kalkış saati: kuyruklar ve puant fiyatları günün saatine bağlıdır',
       tip_vot: 'Bir saatin parasal değeri; maliyet amacında süre ile ücreti dengeler',
-      tip_eco: 'Planlayıcı enerji kazanmak için yer yer %90 ya da %80 hızla sürmeyi de seçebilir',
+      tip_eco: 'Planlayıcı enerji tasarrufu için bazı yol kesimlerinde hızın %90’ı ya da %80’iyle sürmeyi de seçebilir',
       tip_queue: 'İstasyonlarda günün saatine göre beklenen kuyruk süresini hesaba katar',
       tip_tariff_toggle: 'Örnek tarife: %80 üstü şarj ve puant saatleri (16:00–20:00) daha pahalı. Kapalı: sabit fiyat.',
       tip_algorithms: 'Karşılaştırmak için bir ya da daha çok planlayıcı seçin',
@@ -384,19 +388,19 @@
       tip_leg_dc: 'DC hızlı şarj (250 kW’ın altında)',
       tip_leg_hpc: 'Yüksek güçlü DC şarj (250 kW ve üstü)',
       leg_unusable: 'Uyumsuz',
-      tip_leg_unusable: 'Bu araçla uyumsuz soket: araç burada şarj edemez (içi boş simge)',
-      st_unusable: 'Bu araçla uyumsuz soket',
+      tip_leg_unusable: 'Bu araçla uyumlu konnektör yok: araç burada şarj edemez (içi boş simge)',
+      st_unusable: 'Bu araçla uyumlu konnektör yok',
       st_usable: 'Bu araçla uyumlu',
-      tip_connectors: 'Soketler',
+      tip_connectors: 'Konnektörler',
       tip_kind: 'Tür',
       tip_peak_hours: 'Puant saatleri',
       tip_vehicle_fit: 'Bu araç',
       tip_chart_soc: 'Rota boyunca batarya şarjı (sol eksen) ve rakım (sağ eksen); dikey sıçramalar şarj duraklarıdır',
       tip_chart_wait: 'Seçili istasyonda günün saatine göre beklenen kuyruk süresi (Erlang-C kuyruk modeli)',
       tip_chart_time: 'Her rotanın toplam süresinin sürüş, bekleme, bağlanma ve şarja dağılımı',
-      tip_chart_pareto: 'Birbirinden hem daha hızlı hem daha ucuz olmayan rotalar: süre ile ücret arasındaki seçenekler',
-      tip_comparison: 'Bütün planlayıcıların sayısal karşılaştırması; ★ sütundaki en iyi değer',
-      tip_routes: 'Hesaplanan rotalar: kutucuk haritada gösterir, satır seçer',
+      tip_chart_pareto: 'Hiçbiri bir diğerinden hem daha hızlı hem daha ucuz olmayan rotalar: süre ile ücret arasındaki ödünleşim',
+      tip_comparison: 'Bütün planlayıcıların sayısal karşılaştırması; ★ sütundaki en iyi değeri gösterir',
+      tip_routes: 'Hesaplanan rotalar: onay kutusu rotayı haritada gösterir ya da gizler, satıra tıklamak rotayı seçer',
       tip_m_distance: 'Rotanın toplam uzunluğu',
       tip_m_stops: 'Şarj duraklarının sayısı',
       tip_m_energy: 'Net sürüş enerjisi: tüketim eksi rejeneratif frenle geri kazanım',
@@ -409,7 +413,7 @@
       tip_th_algorithm: 'Planlayıcı',
       tip_th_guarantee: 'Kesin: kanıtlanmış optimum · ızgara: SoC ızgarasında optimum · sezgisel: garanti yok',
       tip_th_feasible: 'Rota batarya ve varış kısıtlarını sağlıyor mu?',
-      tip_th_total: 'Toplam yolculuk süresi (s:dd:ss)',
+      tip_th_total: 'Toplam yolculuk süresi (sa:dk:sn)',
       tip_th_drive: 'Sürüş süresi',
       tip_th_charge: 'Fiilen şarj edilen süre',
       tip_th_wait: 'Kuyruk ve bağlanma süresi',
@@ -480,7 +484,7 @@
       s_pushes: 'Kuyruğa ekleme',
       s_pruned: 'Budanan',
       s_peak_queue: 'En büyük kuyruk',
-      kv_min_stop: 'Durakta en az',
+      kv_min_stop: 'Durakta asgari şarj düzeyi',
       kv_chemistry: 'Kimya',
       trip_plan: 'Yol planı',
       it_arrival: 'Varış saati',
@@ -502,7 +506,7 @@
       tip_gmaps: 'Rotayı duraklarla birlikte Google Haritalar’da açar. Yalnızca siz tıklarsanız açılır; uygulama hiçbir veri göndermez.',
       tip_copy: 'Yol planını düz metin olarak panoya kopyalar',
       tip_print: 'Yalnızca yol planını yazdırır',
-      it_note: 'Yaklaşık veriler; seyir için değildir.',
+      it_note: 'Yaklaşık veriler; navigasyon için uygun değildir.',
     },
     en: {
       skip_to_map: 'Skip to map',
@@ -570,6 +574,7 @@
       mode_search_title: 'Nodes explored by the search algorithm (S)',
       timeline: 'Timeline',
       trip: 'Trip',
+      route_one: 'Route',
       charging_stops: 'Charging stops',
       chart_soc: 'State of charge and elevation',
       chart_wait: 'Queue profile (24 h)',
@@ -639,7 +644,7 @@
       g_partial: 'partial',
       g_exact_title: 'Proven optimum for the model',
       g_grid_title: 'Optimal for charging targets on the SoC grid',
-      g_heuristic_title: 'Heuristic: no optimality guarantee',
+      g_heuristic_title: 'No optimality guarantee',
 
       th_algorithm: 'Algorithm',
       th_guarantee: 'Guarantee',
@@ -809,6 +814,9 @@
       toast_everyday_on: 'Everyday use: a plain trip plan',
       toast_everyday_off: 'Research view: every detail',
       toast_plan_ready: 'Trip plan ready',
+      toast_no_plan: 'No trip plan found',
+      note_coarse: 'The search grew too large, so the trip was planned again with charging targets in {p} steps. The plan may take slightly longer than the best one.',
+      no_plan_limit: 'The search for this trip reached its limit without a plan. Try a higher starting charge or plan to a nearer stopover first.',
       combo_no_match: 'No match',
       combo_more: '+{n} more: refine the search',
       arrival_min: 'min. {p}',
@@ -1008,13 +1016,54 @@
       'bls-astar': 'BLS ile aynı optimum; tutarlı A* sezgiseli sayesinde çok daha az etiket.',
       cfp: 'Şarj fonksiyonu yayılımı: sürekli şarj miktarlarıyla kesin en hızlı rota (Baum ve ark.).',
       'cfp-astar': 'CFP ile aynı optimum; A* anahtarıyla çok daha az etiket.',
-      pareto: 'Çok kriterli etiket belirleme: süre, ücret ve batarya yıpranması arasındaki Pareto cephesi.',
+      pareto: 'Çok ölçütlü etiket belirleme: süre, ücret ve batarya yıpranması arasındaki Pareto cephesi.',
+    },
+    en: {
+      naive: 'The fastest path with no regard for the battery: what a classic navigator does. Usually infeasible on a long trip.',
+      greedy: 'A driver’s rule of thumb: follow the fastest path and, when the battery runs short, detour to the best reachable station.',
+      'station-graph': 'Dijkstra on a graph of the stations; every stop charges to a fixed target.',
+      genetic: 'A genetic algorithm over sequences of stations and target charges (fixed seed).',
+      bls: 'Exact label setting on the battery-expanded graph (Dijkstra order); optimal on the SoC grid.',
+      'bls-astar': 'The same optimum as BLS, with far fewer labels thanks to a consistent A* heuristic.',
+      cfp: 'Charging function propagation: the exact fastest route with continuous charging amounts (Baum et al.).',
+      'cfp-astar': 'The same optimum as CFP, with far fewer labels thanks to an A* key.',
+      pareto: 'Multi-criteria label setting: the Pareto front of trip time, charging cost and battery wear.',
     },
   };
 
   /** Localised short titles of the baselines (the exact methods keep their acronyms). */
   const ALGO_TITLE = {
     tr: { naive: 'Naif', greedy: 'Açgözlü', 'station-graph': 'İstasyon grafı', genetic: 'Genetik' },
+  };
+
+  /** Localised long titles (summary card); English is the payload's own title. */
+  const ALGO_LONG_TITLE = {
+    tr: {
+      naive: 'Naif en hızlı yol',
+      greedy: 'Açgözlü (gerektiğinde şarj)',
+      'station-graph': 'İstasyon grafı (sabit şarj hedefi)',
+      genetic: 'Genetik algoritma',
+      bls: 'BLS (etiket belirleme)',
+      cfp: 'CFP (şarj fonksiyonu yayılımı)',
+      pareto: 'Pareto etiket belirleme',
+    },
+  };
+
+  /** Names of the vehicle presets (the payload's English name -> the local one; other vehicles keep theirs). */
+  const VEHICLE_NAME = {
+    tr: {
+      'City EV 27 kWh': 'Şehir aracı 27 kWh',
+      'City EV 23 kWh (AC only)': 'Şehir aracı 23 kWh (yalnızca AC)',
+      'Compact EV 50 kWh': 'Kompakt araç 50 kWh',
+      'Sedan EV 75 kWh (400 V)': 'Sedan 75 kWh (400 V)',
+      'Crossover EV 84 kWh (800 V)': 'Crossover 84 kWh (800 V)',
+      'Turkish C-SUV 85 kWh usable (T10X-like, approx.)': 'Türk C-SUV, 85 kWh kullanılabilir (T10X benzeri, yaklaşık)',
+      'Electric Van 75 kWh': 'Elektrikli panelvan 75 kWh',
+      'Hatchback EV 51 kWh LFP': 'Hatchback 51 kWh LFP',
+      'Sedan EV 60 kWh LFP': 'Sedan 60 kWh LFP',
+      'Compact SUV EV 60 kWh LFP': 'Kompakt SUV 60 kWh LFP',
+      'Hatchback EV 40 kWh (CHAdeMO)': 'Hatchback 40 kWh (CHAdeMO)',
+    },
   };
 
   const LOCALE = { tr: 'tr-TR', en: 'en-GB' };
@@ -1042,6 +1091,19 @@
     algoTitle(name, fallback) {
       const local = ALGO_TITLE[I.lang] && ALGO_TITLE[I.lang][name];
       return local || fallback || name;
+    },
+
+    /** Long title of algorithm `name` in the current language (`fallback` = payload long title). */
+    algoLongTitle(name, fallback) {
+      const local = ALGO_LONG_TITLE[I.lang] && ALGO_LONG_TITLE[I.lang][name];
+      return local || fallback || name;
+    },
+
+    /** Display name of vehicle `v` (payload vehicle) in the current language. */
+    vehicleName(v) {
+      if (!v) return '';
+      const local = v.name && VEHICLE_NAME[I.lang] && VEHICLE_NAME[I.lang][v.name];
+      return local || v.name || v.key || '';
     },
 
     /** "1 stop" / "3 stops" (Turkish has no plural after numerals). */

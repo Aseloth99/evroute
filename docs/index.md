@@ -260,8 +260,9 @@ station graph take minutes there.  The server uses only the standard library
 `GET /api/scenarios`, `GET /api/scenario?name=...`, `POST /api/plan`
 (documented in [`server.py`](../src/evroute/server.py) and
 [`DEV_SPEC.md` §3](DEV_SPEC.md#3-viewer-data-contract-evroute-viewer1); the
-plan request takes `min_stop_soc`, a fraction up to 0.95, and `dc_max_kw`,
-3-500 kW or `null` for the vehicle's own limit).  It binds to
+plan request takes `min_stop_soc`, a fraction up to 0.95, `dc_max_kw`,
+3-500 kW or `null` for the vehicle's own limit, and `charge_step_soc`, the
+charging-target grid step).  It binds to
 `127.0.0.1` by default; it is a research tool, not a hardened web service.
 
 **In the browser.**  The [live planner of the web site](https://aseloth99.github.io/evroute/live/) is the

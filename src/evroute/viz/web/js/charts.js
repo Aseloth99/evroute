@@ -333,7 +333,7 @@
           ctx.lineWidth = 1.5;
           ctx.strokeStyle = th.surface;
           ctx.stroke();
-          rows.push([app.colorOf(r), r.title, I.pct(v, 1)]);
+          rows.push([app.colorOf(r), app.everyday ? I.t('route_one') : r.title, I.pct(v, 1)]);
         }
         const z = interp(er._elev, d);
         if (z !== null) rows.push([th.elevLine, I.t('elevation'), `${I.num(z, 0)} m`]);

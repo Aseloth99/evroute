@@ -148,7 +148,7 @@
       ax_factor: 'planlama güvenlik katsayısı',
       ax_prob: 'olasılık [%]',
       p_strand: 'Yolda kalma',
-      p_breach: 'Rezerv aşımı',
+      p_breach: 'Rezerv ihlali',
       p_short: 'Varışta eksik şarj',
       planned: 'Planlanan süre',
       realised: 'Gerçekleşen (medyan–%95)',

@@ -13,7 +13,8 @@
  * animation with prefers-reduced-motion, and is announced: the focused (or
  * hovered) element gets aria-describedby while it is shown -- the control
  * itself when the tip belongs to its surrounding field.  Escape, scrolling, a click or leaving
- * the element hides it.  Native `title` tooltips are not used next to it
+ * the element hides it; the tip of a focused control follows it instead while it stays in view
+ * (focusing a control often scrolls its panel to it).  Native `title` tooltips are not used next to it
  * (they would show twice).
  */
 (function (EVR) {
@@ -60,7 +61,7 @@
       });
       doc.addEventListener('focusout', () => this.hide());
       doc.addEventListener('keydown', (ev) => { if (ev.key === 'Escape' && this.target) this.hide(); }, true);
-      window.addEventListener('scroll', () => this.hide(), true);
+      window.addEventListener('scroll', (ev) => this._onScroll(ev), true);
       doc.addEventListener('input', () => this.hide(), true);   // typing into a field: out of the way
       window.addEventListener('resize', () => this.hide());
       // touch: a long press shows the tip; the click that ends the press is swallowed
@@ -124,6 +125,14 @@
       this.el.classList.add('show');
     }
 
+    /** A scroll hides the tip, unless its control has the focus and is still in view: then it moves along. */
+    _onScroll(ev) {
+      const t = this.target;
+      if (!t) return;
+      if (this.owner && this.owner === document.activeElement && t.isConnected && inView(t, ev.target)) this._place(t);
+      else this.hide();
+    }
+
     _place(t) {
       const r = t.getBoundingClientRect();
       const tip = this.el;
@@ -169,6 +178,16 @@
         else this.show(this.target, this.owner);
       }
     }
+  }
+
+  /** Whether `el` shows at least partly inside the viewport and inside the scrolled box `box` (an element or the document). */
+  function inView(el, box) {
+    const r = el.getBoundingClientRect();
+    const vh = window.innerHeight;
+    if (r.bottom <= 0 || r.top >= vh) return false;
+    if (!box || box.nodeType !== 1) return true;
+    const b = box.getBoundingClientRect();
+    return r.bottom > b.top && r.top < b.bottom;
   }
 
   function tipTarget(node) {

@@ -12,15 +12,23 @@
  *              (İstanbul / istanbul / ISTANBUL / Istanbul / ıstanbul), shows
  *              a "no match" row, keys choose an option (the <select> and the
  *              trip follow), Escape restores
- *   tooltip    hover and keyboard focus show the tooltip, Escape hides it
+ *   tooltip    hover and keyboard focus show the tooltip, Escape hides it; the
+ *              minimum stop slider has one; a tip shown on focus stays when
+ *              focusing scrolls the side panel
  *   controls   a charging-style chip sets the minimum stop charge, the DC
  *              limit is sent, both reach the request body
  *   everyday   the switch plans with BLS-A* only and shows the trip plan
- *              (steps, totals, a Google Maps link opened only by the user)
+ *              (steps, totals, a Google Maps link opened only by the user),
+ *              names no planner in the SoC chart's legend, and plans once
+ *              more on a coarser grid when the search hit its label budget
+ *              (else: a translated reason and no "plan ready" toast)
  *   centring   the letters of the A/B circles (form and map pins) are centred
  *              in their circles: the ink's bounding box, measured on a
  *              screenshot with sub-pixel edges, at DPR 1 and 2
- *   widths     no horizontal scroll at 390 ... 3440 px, in both modes
+ *   widths     no horizontal scroll at 390 ... 3440 px, in both modes; the
+ *              chosen place fits its picker (the HUD's clock line its box),
+ *              the trip plan's labels fit their tiles and in everyday use
+ *              the SoC chart fills its row
  *
  * Needs Node.js with Playwright (require('playwright')).
  */
@@ -203,6 +211,27 @@ async function main() {
   });
   await page.keyboard.press('Escape');
   res.tooltipEscape = await page.evaluate(() => document.getElementById('ui-tip').hidden);
+  const tipNow = () => page.evaluate(() => {
+    const t = document.getElementById('ui-tip');
+    const a = document.activeElement;
+    return { shown: !t.hidden, text: t.textContent, focused: a ? a.id : null, describedby: a ? a.getAttribute('aria-describedby') : null };
+  });
+  await page.focus('#in-arrive');
+  await page.keyboard.press('Tab');
+  await page.waitForTimeout(100);
+  res.tooltipMinStop = await tipNow();
+  await page.keyboard.press('Escape');
+  // a short window: Tab to a control below the fold scrolls the side panel, the tip stays
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await page.evaluate(() => { document.getElementById('panel-left').scrollTop = 0; });
+  await page.focus('#in-reserve');
+  await page.keyboard.press('Shift+Tab');
+  await page.keyboard.press('Tab');
+  await page.keyboard.press('Tab');
+  await page.waitForTimeout(250);
+  res.tooltipScroll = Object.assign(await tipNow(), { scrollTop: await page.evaluate(() => document.getElementById('panel-left').scrollTop) });
+  await page.keyboard.press('Escape');
+  await page.setViewportSize({ width: 1400, height: 900 });
 
   // ------------------------------------------------------------- controls
   await page.click('#style-chips [data-style="balanced"]');
@@ -241,6 +270,43 @@ async function main() {
       cardText: card.textContent, research: /SoH|BLS|Etiket|Label|C oran|C-rate/.test(card.textContent),
     };
   });
+  res.everydayPlan.legend = await page.evaluate(() => document.getElementById('legend-soc').textContent);
+
+  // a search stopped by its label budget (simulated on the first answer): once more on a coarser grid
+  const plans = [];
+  let stopBoth = false;
+  await page.route('**/api/plan', async (route) => {
+    const body = JSON.parse(route.request().postData());
+    plans.push(body.charge_step_soc === undefined ? null : body.charge_step_soc);
+    const response = await route.fetch();
+    const json = await response.json();
+    if (body.charge_step_soc === undefined || stopBoth) {
+      for (const r of json.results) {
+        Object.assign(r, { feasible: false, stops: [], message: 'label limit reached (max_labels=5,000,000) before the destination was settled' });
+        r.stats.extra = Object.assign({}, r.stats.extra, { status: 'limit' });
+      }
+    }
+    await route.fulfill({ response, json });
+  });
+  const replan = async () => {
+    plans.length = 0;
+    await page.evaluate(() => { document.getElementById('toast').textContent = ''; });
+    await page.click('#btn-plan');
+    await page.waitForFunction(() => !EVR.app.liveCtl.busy, null, { timeout: 120000 });
+    return page.evaluate(() => ({
+      feasible: !!(EVR.app.selectedRoute() || {}).feasible,
+      note: document.getElementById('plan-note').hidden ? '' : document.getElementById('plan-note').textContent,
+      toast: document.getElementById('toast').textContent,
+      card: document.getElementById('itinerary-card').textContent,
+    }));
+  };
+  res.coarse = Object.assign(await replan(), { plans: plans.slice() });
+  stopBoth = true;
+  res.coarseFail = Object.assign(await replan(), { plans: plans.slice() });
+  await page.unroute('**/api/plan');
+  await page.click('#btn-plan');
+  await page.waitForFunction(() => !EVR.app.liveCtl.busy && EVR.app.model.results.length === 1, null, { timeout: 120000 });
+
   await page.click('#everyday-switch');
   res.everydayOff = await page.evaluate(() => document.getElementById('app').dataset.view);
 
@@ -251,7 +317,15 @@ async function main() {
       await page.setViewportSize({ width: w, height: w > 2000 ? 1440 : 900 });
       await page.evaluate((v) => EVR.app.setEveryday(v === 'everyday', false), view);
       await page.waitForTimeout(250);
-      res.widths.push(await page.evaluate(({ w, v }) => ({ width: w, view: v, scroll: document.documentElement.scrollWidth, inner: window.innerWidth }), { w, v: view }));
+      res.widths.push(await page.evaluate(({ w, v }) => {
+        const fits = (el) => el.scrollWidth <= el.clientWidth;
+        const shown = (sel) => Array.from(document.querySelectorAll(sel)).filter((el) => el.offsetParent !== null);
+        const soc = document.querySelector('.chart-soc').getBoundingClientRect(), bottom = document.getElementById('bottom').getBoundingClientRect();
+        return { width: w, view: v, scroll: document.documentElement.scrollWidth, inner: window.innerWidth,
+          od: shown('#in-origin-combo, #in-destination-combo, #hud-elapsed').every(fits),
+          totals: shown('.itin-total small').filter((el) => !fits(el)).map((el) => el.textContent),
+          socRow: (soc.right - bottom.left) / bottom.width };
+      }, { w, v: view }));
     }
   }
   await page.evaluate(() => EVR.app.setEveryday(false, false));

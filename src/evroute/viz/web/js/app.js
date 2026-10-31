@@ -400,7 +400,7 @@
         : (this.payload.title || sc.name || 'EVRoute');
       U.$('#title').textContent = title;
       document.title = `${title} · EVRoute`;
-      const veh = (sc.vehicle || {}).name;
+      const veh = I.vehicleName(sc.vehicle);
       const parts = [sc.name, veh, `${I.t('departs')} ${I.clock(this.currentQuery().departure_s || 0, false)}`].filter(Boolean);
       U.$('#subtitle').textContent = parts.join(' · ');
       const g = this.payload.generator || {};

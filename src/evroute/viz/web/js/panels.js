@@ -177,7 +177,7 @@
   /** The trip plan as plain text (Copy). */
   function itineraryText(app, r, it) {
     const t = it.totals, cur = app.model.currency;
-    const veh = ((app.model.scenario || {}).vehicle || {}).name;
+    const veh = I.vehicleName((app.model.scenario || {}).vehicle);
     const start = it.steps[0], end = it.steps[it.steps.length - 1];
     const out = [`EVRoute · ${I.t('trip_plan')}: ${start.place} → ${end.place}`];
     if (veh) out.push(`${I.t('it_vehicle')}: ${veh}`);
@@ -354,7 +354,7 @@
     const kids = [];
     // chemistry and connectors in one line, the name when asked for (the picker shows it already)
     kids.push(U.el('div', { class: 'veh-head' }, chemBadge(v.chemistry, true),
-      o.title ? U.el('b', { class: 'veh-name', text: v.name || v.key || '' }) : null,
+      o.title ? U.el('b', { class: 'veh-name', text: I.vehicleName(v) }) : null,
       conns ? U.el('span', { class: 'veh-conn', 'aria-label': I.t('veh_connectors') }, conns) : null));
     kids.push(U.el('div', { class: 'veh-stats' },
       stat('veh_battery', U.isNum(v.battery_kwh) ? `${I.num(v.battery_kwh, v.battery_kwh % 1 ? 1 : 0)} kWh` : '–', I.t('tip_veh_battery', { u: usable })),
@@ -434,7 +434,9 @@
       const r = app.selectedRoute();
       const head = U.el('div', { class: 'card-head' }, U.el('h2', { text: I.t('trip_plan') }));
       if (!r || !r.feasible || !r._ok) {
-        const msg = !r ? noRouteText(app) : r._strand ? I.t('stranded_at', { km: I.km(r._strand.dist, 0) }) : (r.message || I.t('no_route'));
+        // a driver gets a translated reason, never the planner's own (English, technical) message
+        const msg = !r ? noRouteText(app) : r._strand ? I.t('stranded_at', { km: I.km(r._strand.dist, 0) })
+          : budgetStopped(r) ? I.t('no_plan_limit') : I.t('no_route');
         U.setChildren(box, head, U.el('p', { class: r ? 'summary-warn' : 'muted', text: msg }));
         return;
       }
@@ -471,7 +473,7 @@
         tile('arrival_soc', [I.pct(t.arrivalSoc, 0), U.isNum(t.minArrival) ? U.el('small', { text: ` (${I.t('arrival_min', { p: I.pct(t.minArrival, 0) })})` }) : null],
           I.t('tip_arrival_soc'), 'good'));
       const steps = U.el('ol', { class: 'itin-steps' }, it.steps.map((st) => itinStep(app, st)));
-      const veh = ((app.model.scenario || {}).vehicle || {}).name;
+      const veh = I.vehicleName((app.model.scenario || {}).vehicle);
       const od = U.el('p', { class: 'itin-od', text: [`${it.steps[0].place} → ${it.steps[it.steps.length - 1].place}`, veh, `${I.km(t.dist, 0)}`].filter(Boolean).join(' · ') });
       U.setChildren(box, head, od, totals, steps, U.el('p', { class: 'itin-note', text: I.t('it_note') }));
     }
@@ -485,7 +487,7 @@
       const sc = app.model.scenario || {};
       const v = sc.vehicle || {};
       const q = app.currentQuery(), p = app.currentPrefs();
-      const kids = [U.el('div', { class: 'trip-veh' }, U.el('b', { text: v.name || v.key || '–' }))];
+      const kids = [U.el('div', { class: 'trip-veh' }, U.el('b', { text: I.vehicleName(v) || '–' }))];
       kids.push(U.el('div', { class: 'veh-card' }, vehicleCard(app, v)));
       const rows = [['departure', I.clock(q.departure_s || 0)], ['initial_soc', I.pct(q.initial_soc, 0)],
         ['min_arrival', I.pct(p.min_arrival_soc, 0)]];
@@ -541,7 +543,7 @@
       const kids = [];
       kids.push(U.el('div', { class: 'summary-top', style: { '--algo': app.colorOf(r) } },
         U.el('div', { class: 'summary-algo', 'data-tip': algoTip(Object.assign({ name: r.algorithm, exact: r.exact }, app.algoInfo(r.algorithm) || {})) },
-          U.el('i', { class: 'swatch' }), U.el('span', { text: r.long_title || r.title })),
+          U.el('i', { class: 'swatch' }), U.el('span', { text: r.long_title ? I.algoLongTitle(r.algorithm, r.long_title) : r.title })),
         guaranteeBadge(r)));
       const q = app.currentQuery();
       const od = `${app.model.nodeLabel(q.origin)} → ${app.model.nodeLabel(q.destination)}`;
@@ -591,7 +593,8 @@
         kids.push(...this._routeDetails(r));
       }
       if (!r.feasible) {
-        const msg = r._strand ? I.t('stranded_at', { km: I.km(r._strand.dist, 0) }) : (r.message || I.t('no_route'));
+        const msg = r._strand ? I.t('stranded_at', { km: I.km(r._strand.dist, 0) })
+          : budgetStopped(r) ? `${I.t('no_route')}: ${stoppedText(r)}` : (r.message || I.t('no_route'));
         kids.push(U.el('div', { class: 'summary-warn', role: 'note', text: msg }));
       } else if (best !== null && r.total_time_s > best + 30) {
         kids.push(U.el('p', { class: 'summary-note', text: I.t('vs_best', { d: `+${I.duration(r.total_time_s - best)}` }) }));
@@ -1011,7 +1014,8 @@
       if (off) off.hidden = !app.model.stations.some((st) => st.usable === false);
       const routes = app.visibleRoutes();
       U.setChildren(this.el.legendSoc,
-        routes.map((r) => U.el('span', { style: { '--algo': app.colorOf(r) } }, U.el('i'), r.title)),
+        // everyday use names no planner: its one route is just "Route"
+        routes.map((r) => U.el('span', { style: { '--algo': app.colorOf(r) } }, U.el('i'), app.everyday ? I.t('route_one') : r.title)),
         U.el('span', {}, U.el('i', { class: 'dash' }), I.t('reserve_line')),
         U.el('span', {}, U.el('i', { class: 'area' }), I.t('elev_profile')));
       const parts = [['drive', th.cDrive], ['queue', th.cQueue], ['setup', th.cSetup], ['charge', th.cCharge]];

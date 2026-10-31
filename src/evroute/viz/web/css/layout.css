@@ -138,6 +138,8 @@ h1, h2, h3, p { margin: 0; }
 .chart-pareto { grid-column: span 6; }
 .bottom.no-pareto .chart-time { grid-column: span 12; }
 .table-card   { grid-column: span 12; }
+/* everyday use hides the research charts: the SoC chart takes the whole row at every width */
+.app[data-view="everyday"] .chart-soc { grid-column: 1 / -1; }
 
 .footer {
   display: flex;

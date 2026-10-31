@@ -1039,10 +1039,10 @@ def _sec_robustness(exp: Mapping[str, Any], checks: _Checks, ctx: Mapping[str, A
         f0 = fmt_num(base["factor"], 2, lang)
         pb, ps = fmt_pct(100 * base["p_breach"], 1, lang), fmt_pct(100 * (base["p_strand"] or 0.0), 1, lang)
         if lang == "tr":
-            s = f"{f0} katsayısıyla planlanan rotada rezerv aşımı olasılığı {pb} ({n or ''} tekrar, yolda kalma {ps})"
+            s = f"{f0} katsayısıyla planlanan rotada rezerv ihlali olasılığı {pb} ({n or ''} tekrar, yolda kalma {ps})"
             s = s.replace("( tekrar, ", "(")
             if target is base:
-                s = f"{f0} katsayısında bile rezerv aşımı olasılığı yalnızca {pb} (yolda kalma {ps})"
+                s = f"{f0} katsayısında bile rezerv ihlali olasılığı yalnızca {pb} (yolda kalma {ps})"
             elif target:
                 s += (f"; {fmt_num(target['factor'], 2, lang)} katsayısı bunu {fmt_pct(100 * target['p_breach'], 1, lang)} düzeyine "
                       f"indiriyor, bedeli {fmt_minutes(target['planned_min'] - base['planned_min'], lang)} daha uzun plan")
@@ -1776,7 +1776,7 @@ def _kpis(sections: Mapping[str, Mapping[str, Any]], checks: Mapping[str, Any]) 
         pts = [p for p in rb["data"]["points"] if p["p_breach"] is not None]
         if pts:
             a, b = pts[0], pts[-1]
-            kpi("robust", "robustness", {"tr": "Rezerv aşımı riski", "en": "Reserve-breach risk"},
+            kpi("robust", "robustness", {"tr": "Rezerv ihlali riski", "en": "Reserve-breach risk"},
                 _both(lambda L: f"{fmt_pct(100 * a['p_breach'], 0, L)} → {fmt_pct(100 * b['p_breach'], 0, L)}"),
                 _both(lambda L: (f"katsayı {fmt_num(a['factor'], 2, L)} → {fmt_num(b['factor'], 2, L)}" if L == "tr"
                                  else f"safety factor {fmt_num(a['factor'], 2, L)} → {fmt_num(b['factor'], 2, L)}")),

@@ -40,7 +40,7 @@ Endpoints
          "initial_soc": 0.8, "temperature_c": 18, "reserve_soc": 0.1,
          "min_arrival_soc": 0.1, "objective": "time", "value_of_time_per_h": 250,
          "speed_factors": [1.0, 0.9, 0.8], "queue_aware": true, "departure_s": 28800,
-         "tariff": "80", "min_stop_soc": 0.4, "dc_max_kw": 50}
+         "tariff": "80", "min_stop_soc": 0.4, "dc_max_kw": 50, "charge_step_soc": 0.05}
 
     ``origin``/``destination`` are node ids or place names, ``algorithms``
     defaults to :data:`DEFAULT_ALGORITHMS` (on a network of more than
@@ -52,7 +52,10 @@ Endpoints
     the SoC every charging stop must reach (fraction 0..0.95, ``0`` off;
     :attr:`~evroute.scenario.Preferences.min_stop_soc`) and ``dc_max_kw`` a
     cap on the vehicle's DC charging power (3..500 kW; ``null`` or absent:
-    the vehicle's own).  The answer is
+    the vehicle's own) and ``charge_step_soc`` the step of the charging-target
+    grid (0.01..0.25; absent: the preset's; everyday use re-plans with a
+    coarser grid when the search of the default grid hits its label budget).
+    The answer is
     :func:`evroute.viz.export.results_payload` plus ``"errors"`` (algorithms
     that failed) and ``"elapsed_ms"``.  Invalid requests get status 400 and
     ``{"error": message}``; bodies above :data:`MAX_BODY_BYTES` get 413.
@@ -147,6 +150,7 @@ _PLAN_FIELDS = frozenset(
         "scenario", "origin", "destination", "algorithms", "vehicle", "initial_soc", "temperature_c",
         "reserve_soc", "min_arrival_soc", "objective", "value_of_time_per_h", "speed_factors",
         "queue_aware", "departure_s", "lang", "tariff", "min_stop_soc", "dc_max_kw",
+        "charge_step_soc",
     }
 )
 _ASSET_TYPES = {".css": "text/css; charset=utf-8", ".js": "text/javascript; charset=utf-8"}
@@ -268,7 +272,7 @@ def build_plan_scenario(
     # ---------------------------------------------------------- preferences
     p: dict[str, Any] = {}
     for name, lo, hi in (("reserve_soc", 0.0, 0.5), ("min_arrival_soc", 0.0, 0.95), ("value_of_time_per_h", 0.0, 1e6),
-                         ("min_stop_soc", 0.0, 0.95)):
+                         ("min_stop_soc", 0.0, 0.95), ("charge_step_soc", 0.01, 0.25)):
         v = _number(body, name, lo, hi)
         if v is not None:
             p[name] = v

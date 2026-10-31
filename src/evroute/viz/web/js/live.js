@@ -31,8 +31,22 @@
   const DEFAULT_ALGOS = ['greedy', 'station-graph', 'bls-astar', 'cfp-astar'];
   /** The planner of everyday use (exact on its charging grid, handles cost, tariffs and holds; fast), then fallbacks. */
   const EVERYDAY_ALGOS = ['bls-astar', 'bls', 'cfp-astar'];
+  /** Charging-target grid step of the second try of everyday use, after the first search ran into its label budget. */
+  const EVERYDAY_COARSE_STEP = 0.05;
   /** Order in which the in-browser planner runs the ticked planners: usually fastest first. */
   const RUN_ORDER = ['naive', 'greedy', 'cfp-astar', 'bls-astar', 'station-graph', 'genetic', 'cfp', 'bls', 'pareto'];
+
+  /**
+   * Everyday use on a hard trip: when the one planner stopped at its label
+   * budget without a route, the same request on a coarser charging-target
+   * grid (the planner stays exact on that grid); null otherwise.
+   */
+  function coarseRetry(body, data) {
+    if (body.charge_step_soc) return null;
+    const r = ((data && data.results) || [])[0];
+    if (!r || r.feasible || !EVR.panels.budgetStopped(r)) return null;
+    return Object.assign({}, body, { charge_step_soc: EVERYDAY_COARSE_STEP });
+  }
 
   function runOrder(algos) {
     const rank = (a) => { const i = RUN_ORDER.indexOf(a); return i < 0 ? RUN_ORDER.length : i; };
@@ -256,6 +270,7 @@
       `--depart ${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`];
     if (body.vehicle) opts.push(`--vehicle ${body.vehicle}`);
     if (body.dc_max_kw) opts.push(`--dc-max-kw ${body.dc_max_kw}`);
+    if (body.charge_step_soc) opts.push(`--step ${pc(body.charge_step_soc)}`);
     if (body.min_stop_soc > 0) opts.push(`--min-stop-soc ${pc(body.min_stop_soc)}`);
     if (body.objective && body.objective !== 'time') opts.push(`--objective ${body.objective}`);
     if ((body.speed_factors || []).length > 1) opts.push('--eco');
@@ -444,7 +459,7 @@
       this._syncOD();
       el.vehicle.textContent = '';
       const vehicles = (p.vehicles || []).length ? p.vehicles : [(app.model.scenario || {}).vehicle || {}].filter((x) => x.key);
-      for (const veh of vehicles) el.vehicle.appendChild(U.el('option', { value: veh.key, text: `${veh.name}` }));
+      for (const veh of vehicles) el.vehicle.appendChild(U.el('option', { value: veh.key, text: I.vehicleName(veh) }));
       el.vehicle.value = v.vehicle || '';
       this.combos.vehicle.sync();
       el.dcmax.value = U.isNum(v.dc_max_kw) ? String(Math.round(v.dc_max_kw)) : '';
@@ -471,7 +486,7 @@
       this._renderVehicle();
       // algorithm checkboxes: those of the run under way, else those of the results shown
       const have = new Set(this.running || ticked || app.model.results.map((r) => r.algorithm));
-      if (!this.running && !ticked) for (const e of this.note ? this.note.stopped : []) have.add(e);
+      if (!this.running && !ticked) for (const e of (this.note && this.note.stopped) || []) have.add(e);
       el.algos.textContent = '';
       for (const a of p.algorithms || []) {
         const cb = U.el('input', { type: 'checkbox', value: a.name });
@@ -648,11 +663,12 @@
         this.running = body.algorithms.slice();
         const t0 = performance.now();
         let shown = 0;
-        const data = await this.transport.plan(body, (p) => {
+        const progress = (p) => {
           const a = titles.get(p.algorithm) || p.algorithm;
           if (this.app.everyday) { this.setBusy(true, I.t('planning')); return; }   // no planner names in everyday use
           this.setBusy(true, p.restarting ? I.t('restarting', { a }) : I.t('planning_algo', { a, i: p.index + 1, n: p.total }));
-        }, (partial) => {
+        };
+        const partialShown = (partial) => {
           // a long run shows its results so far (a quick one only its final answer)
           const now = performance.now();
           if (now - t0 < 1500 || now - shown < 1500 || !partial.scenario) return;
@@ -660,9 +676,18 @@
           this.note = null;
           this.held = null;
           this.app.applyPlanResponse(partial);
-        });
+        };
+        let data = await this.transport.plan(body, progress, partialShown);
+        let coarse = null;
+        const retry = this.app.everyday ? coarseRetry(body, data) : null;
+        if (retry) {
+          // a driver needs a plan: once more on a coarser charging grid, said in the note
+          const again = await this.transport.plan(retry, progress, partialShown);
+          if ((again.results || []).length) { data = again; coarse = retry; }
+        }
         this.running = null;
-        this.note = this._budgetNote(body, data);
+        this.note = coarse && data.results[0].feasible ? { coarse: coarse.charge_step_soc }
+          : this._budgetNote(coarse || body, data);
         if (data.scenario) {
           this.held = null;
           this.app.applyPlanResponse(data);
@@ -674,8 +699,9 @@
         const errs = (data.errors || []).filter((e) => !e.budget).map((e) => `${titles.get(e.algorithm) || e.algorithm}: ${e.message}`);
         this.showError(errs.length ? errs.join(' · ') : null);
         if (data.results.length) {
-          this.app.toast(this.app.everyday ? I.t('toast_plan_ready')
-            : I.t('toast_planned', { n: data.results.length, ms: I.num(performance.now() - t0, 0) }));
+          const sel = this.app.selectedRoute();
+          this.app.toast(!this.app.everyday ? I.t('toast_planned', { n: data.results.length, ms: I.num(performance.now() - t0, 0) })
+            : sel && sel.feasible ? I.t('toast_plan_ready') : I.t('toast_no_plan'));
         }
       } catch (err) {
         this.running = null;
@@ -718,6 +744,10 @@
       const n = this.note;
       box.hidden = !n;
       if (!n) { box.textContent = ''; return; }
+      if (n.coarse) {
+        U.setChildren(box, U.el('p', { text: I.t('note_coarse', { p: I.pct(n.coarse, 0) }) }));
+        return;
+      }
       const info = (a) => (this.app.payload.algorithms || []).find((x) => x.name === a) || {};
       const title = (a) => I.algoTitle(a, info(a).short_title || a);
       const cfg = this.transport.cfg || {};
@@ -876,5 +906,5 @@
     return { sub: parts.join(' · '), badge: v.chemistry || '', badgeClass: v.chemistry ? `chem-${v.chemistry}` : '' };
   }
 
-  EVR.live = { Live, DEFAULT_ALGOS, RUN_ORDER, runOrder, HttpTransport, WorkerTransport, cliCommand };
+  EVR.live = { Live, DEFAULT_ALGOS, RUN_ORDER, runOrder, HttpTransport, WorkerTransport, cliCommand, coarseRetry, EVERYDAY_COARSE_STEP };
 })(window.EVR = window.EVR || {});

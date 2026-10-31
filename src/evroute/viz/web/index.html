@@ -129,9 +129,9 @@
         <label for="in-arrive"><span data-i18n="min_arrival">Minimum varış şarjı</span><output id="out-arrive"></output></label>
         <input type="range" id="in-arrive" min="0" max="60" step="1">
       </div>
-      <div class="field range-field field-minstop" id="field-minstop">
-        <label for="in-minstop" data-research data-i18n-tip="tip_min_stop"><span data-i18n="min_stop">Durakta en az şuna kadar şarj et</span><output id="out-minstop"></output></label>
-        <span class="field-label" data-everyday data-i18n-tip="tip_min_stop" tabindex="0" data-i18n="charging_style">Şarj tarzı</span>
+      <div class="field range-field field-minstop" id="field-minstop" data-i18n-tip="tip_min_stop">
+        <label for="in-minstop" data-research><span data-i18n="min_stop">Durakta en az şuna kadar şarj et</span><output id="out-minstop"></output></label>
+        <span class="field-label" data-everyday tabindex="0" data-i18n="charging_style">Şarj tarzı</span>
         <input type="range" id="in-minstop" min="0" max="80" step="1" data-research>
         <div class="chips" role="group" id="style-chips" data-i18n-aria="charging_style">
           <button type="button" class="chip" data-style="hurry" aria-pressed="false" data-i18n="style_hurry">Acele</button>
@@ -165,7 +165,7 @@
       </div>
       <div class="toggles">
         <label class="check" data-research data-i18n-tip="tip_eco"><input type="checkbox" id="in-eco"><span data-i18n="eco_speeds">Eko hızlar (%100/90/80)</span></label>
-        <label class="check" data-research data-i18n-tip="tip_queue"><input type="checkbox" id="in-queue"><span data-i18n="queue_aware">Kuyruk farkındalığı</span></label>
+        <label class="check" data-research data-i18n-tip="tip_queue"><input type="checkbox" id="in-queue"><span data-i18n="queue_aware">Kuyrukları hesaba kat</span></label>
         <label class="check" id="field-tariff" hidden><input type="checkbox" id="in-tariff"><span data-i18n="tariff_toggle">Şarj tarifesi (%80 kuralı, puant saatleri)</span></label>
       </div>
       <fieldset class="algo-picks" data-research>
@@ -194,7 +194,7 @@
     <section class="card" id="layers-card">
       <div class="card-head"><h2 data-i18n="layers">Katmanlar</h2></div>
       <div class="toggles">
-        <label class="check"><input type="checkbox" id="layer-terrain" checked><span data-i18n="layer_terrain">Arazi gölgelendirme</span></label>
+        <label class="check"><input type="checkbox" id="layer-terrain" checked><span data-i18n="layer_terrain">Arazi gölgelendirmesi</span></label>
         <label class="check"><input type="checkbox" id="layer-stations" checked><span data-i18n="layer_stations">Şarj istasyonları</span></label>
         <label class="check"><input type="checkbox" id="layer-labels" checked><span data-i18n="layer_labels">Yer adları</span></label>
         <label class="check" data-research><input type="checkbox" id="layer-others" checked><span data-i18n="layer_others">Diğer rotalar</span></label>

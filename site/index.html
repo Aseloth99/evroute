@@ -14,7 +14,7 @@
       <span class="eyebrow">v{{version}} · <span lang="tr">saf Python · MIT</span><span lang="en">pure Python · MIT</span></span>
       <h1><span lang="tr">Elektrikli araçlar için kesin rota planlama</span><span lang="en">Exact route planning for electric vehicles</span></h1>
       <p class="lead">
-        <span lang="tr">Nerede, ne kadar ve hangi güçte şarj edileceği, ne zaman yola çıkılacağı: doğrusal olmayan şarj, kuyruklar, arazi, soğuk, batarya yıpranması ve şarj tarifeleriyle, optimalliği kanıtlanmış algoritmalarla hesaplanır ve bağımsız bir değerlendiriciyle doğrulanır.</span>
+        <span lang="tr">Nerede, ne kadar ve hangi güçte şarj edileceği, ne zaman yola çıkılacağı: doğrusal olmayan şarj, kuyruklar, arazi, soğuk, batarya yıpranması ve şarj tarifeleriyle, optimalliği ispatlanmış algoritmalarla hesaplanır ve bağımsız bir değerlendiriciyle doğrulanır.</span>
         <span lang="en">Where to charge, how much, at what speed and when to leave: with nonlinear charging, queues, terrain, cold, battery wear and charging tariffs, computed by provably optimal algorithms and checked by an independent evaluator.</span>
       </p>
       <p class="facts"><span lang="tr">Python ≥ 3.10 · çalışma zamanı bağımlılığı yok · 9 planlayıcı · Türkçe/İngilizce görüntüleyici</span><span lang="en">Python ≥ 3.10 · zero runtime dependencies · 9 planners · Turkish/English viewer</span></p>
@@ -32,12 +32,12 @@
 
     <section aria-labelledby="h-what">
       <h2 id="h-what"><span lang="tr">Ne yapar?</span><span lang="en">What it does</span></h2>
-      <p class="sub"><span lang="tr">Gerçek bir yolculuğun bütün etkileri tek bir kesin modelde: sezgiseller, öğrenilmiş modeller ve ticari planlayıcılar için bir başvuru uygulaması.</span><span lang="en">Every effect of a real trip in one exact model: a reference implementation that heuristics, learned models and commercial planners can be measured against.</span></p>
+      <p class="sub"><span lang="tr">Gerçek bir yolculuğun bütün etkileri tek bir kesin modelde: sezgisellerin, öğrenen modellerin ve ticari planlayıcıların kıyaslanabileceği bir referans uygulama.</span><span lang="en">Every effect of a real trip in one exact model: a reference implementation that heuristics, learned models and commercial planners can be measured against.</span></p>
       <div class="grid">
         <div class="card"><h3><span lang="tr">9 planlayıcı, tek arayüz</span><span lang="en">9 planners, one API</span></h3>
           <p><span lang="tr">Bataryayı görmeyen en hızlı yoldan araç içi navigasyon sezgiseline; kesin etiket belirleme (BLS, BLS-A*), sürekli şarjla kesin CFP ve CFP-A*, süre, ücret ve yıpranma üzerinde Pareto araması.</span><span lang="en">From a battery-blind fastest path and an in-car navigator heuristic to exact label setting (BLS, BLS-A*), exact continuous charging (CFP, CFP-A*) and a Pareto search over time, money and wear.</span></p></div>
         <div class="card"><h3><span lang="tr">Kesin ve doğrulanmış</span><span lang="en">Exact and verified</span></h3>
-          <p><span lang="tr">Optimallik kanıtları; her plan bağımsız bir değerlendiriciyle yeniden oynatılır, kaba kuvvet ve analitik referans çözümlerle çapraz denetlenir.</span><span lang="en">Optimality proofs; every plan is replayed by an independent evaluator and cross-checked against brute force and analytic oracles.</span></p></div>
+          <p><span lang="tr">Optimallik ispatları; her plan bağımsız bir değerlendiriciyle yeniden oynatılır, kaba kuvvet ve analitik referans çözümlerle çapraz denetlenir.</span><span lang="en">Optimality proofs; every plan is replayed by an independent evaluator and cross-checked against brute force and analytic oracles.</span></p></div>
         <div class="card"><h3><span lang="tr">Tek bir en iyi rota yok</span><span lang="en">No single best route</span></h3>
           <p><span lang="tr">%80 kuralı ve puant saatleriyle şarj tarifeleri; daha ucuz fiyatı beklemenin ne zaman kazandırdığını kesin olarak planlar.</span><span lang="en">Charging tariffs with the 80 % rule and peak hours; it plans exactly when waiting for a cheaper price pays.</span></p></div>
         <div class="card"><h3><span lang="tr">Türkiye vaka çalışmaları</span><span lang="en">Turkey case studies</span></h3>
@@ -105,7 +105,7 @@
         <a lang="en" href="{{repo}}/blob/main/docs/real-data.md">Real-data case study</a>
         <a lang="tr" href="{{repo}}/blob/main/docs/real-data.tr.md">Gerçek veri vaka çalışması</a>
         <a href="{{repo}}/blob/main/docs/model.md"><span lang="tr">Model <small>İngilizce</small></span><span lang="en">Model</span></a>
-        <a href="{{repo}}/blob/main/docs/algorithms.md"><span lang="tr">Algoritmalar ve kanıtlar <small>İngilizce</small></span><span lang="en">Algorithms &amp; proofs</span></a>
+        <a href="{{repo}}/blob/main/docs/algorithms.md"><span lang="tr">Algoritmalar ve ispatlar <small>İngilizce</small></span><span lang="en">Algorithms &amp; proofs</span></a>
         <a href="{{repo}}/blob/main/docs/index.md"><span lang="tr">Belge dizini <small>İngilizce</small></span><span lang="en">Documentation index</span></a>
       </div>
     </section>

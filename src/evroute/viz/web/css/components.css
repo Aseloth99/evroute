@@ -292,8 +292,11 @@ input[type="range"]:focus-visible::-webkit-slider-thumb { box-shadow: var(--focu
 .check-sm input { width: 15px; height: 15px; border-radius: 5px; }
 
 /* ---------------------------------------------------------- live form */
-.od-grid { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: end; gap: 6px; }
-.btn-swap { margin-bottom: 11px; width: 30px; height: 36px; }
+/* origin above destination, the swap button beside both: a picker gets the column's whole width */
+.od-grid { display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "a swap" "b swap"; align-items: center; column-gap: 6px; }
+.od-grid > .field:first-child { grid-area: a; }
+.od-grid > .field:last-child { grid-area: b; }
+.btn-swap { grid-area: swap; width: 30px; height: 36px; margin-top: 12px; }
 /* origin / destination circles: an SVG whose letter is centred by construction (EVR.util.odDot) */
 .od-dot { flex: none; display: inline-block; width: 16px; height: 16px; vertical-align: middle; }
 .od-dot circle { fill: var(--pin-a); }
@@ -506,7 +509,7 @@ details.sec > summary:hover { color: var(--text); }
 .btn-sm svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 2; }
 a.btn-sm { color: var(--text); }
 a.btn-sm:hover { text-decoration: none; }
-.itin-totals { display: grid; grid-template-columns: repeat(auto-fill, minmax(118px, 1fr)); gap: 8px; margin-bottom: 14px; }
+.itin-totals { display: grid; grid-template-columns: repeat(auto-fill, minmax(146px, 1fr)); gap: 8px; margin-bottom: 14px; }
 .itin-total { padding: 8px 10px; border-radius: 12px; background: var(--surface-2); border: 1px solid var(--border); min-width: 0; }
 .itin-total small { display: block; font-size: 11px; color: var(--text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .itin-total b { display: block; font-size: 15.5px; font-weight: 750; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -769,7 +772,8 @@ a.btn-sm:hover { text-decoration: none; }
 .hud-main { display: flex; align-items: center; gap: 12px; }
 .hud-clock { flex: 1; min-width: 0; }
 .hud-time { display: block; font-size: 26px; font-weight: 750; letter-spacing: -.02em; line-height: 1.05; }
-.hud-sub { display: block; font-size: 11.5px; color: var(--text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* a long trip's clock and distance wrap rather than being cut */
+.hud-sub { display: block; font-size: 11.5px; line-height: 1.3; color: var(--text-3); }
 .battery { display: flex; align-items: center; }
 .battery-body {
   position: relative;

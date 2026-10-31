@@ -530,7 +530,12 @@ With the switch on, the app is a trip planner:
   minimum stop SoC of section 13) and a priority (*Fastest* plans for
   time, *Cheapest* for cost).  Tariffs are on.
 - **It plans** with BLS-A\* alone (section 12); algorithm choices, value of
-  time and the technical switches stay hidden, with sensible defaults.
+  time and the technical switches stay hidden, with sensible defaults.  If
+  the search runs into its label budget without a plan (a slow-charging car
+  on a long real-data trip), it plans once more on a coarser charging grid
+  (5 % steps instead of 2 %) and says so under the Plan button: that plan is
+  optimal on the 5 % grid and may take slightly longer than the optimum on
+  the finer one.
 - **You get** a trip plan: arrival time, total, driving and charging time,
   stops, charging cost and arrival charge, then step by step: leave A, drive
   (km, duration), each stop (station, operator, AC/DC and power, connector,
