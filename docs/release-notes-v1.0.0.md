@@ -87,11 +87,11 @@ bir web uygulamasıyla birlikte.
   düğümlü OpenStreetMap ağında yaklaşık 4 sn (`docs/guide.tr.md` §12).
 - Doğrusal olmayan ve kısmi şarj, saate bağlı Erlang-C kuyrukları, arazi ve
   rejeneratif frenleme, sıcaklık, batarya yıpranması, eko hızlar ve **şarj
-  tarifeleri** için **tek bir kesin model** (%80 doluluk üstünde daha yüksek
+  tarifeleri** için **tek bir kesin model** (%80 SoC üstünde daha yüksek
   fiyat, sabit ya da istasyonun doluluğundan türetilen yoğun saatler;
   maliyet odaklı planlar ucuz dönemi bekleyebilir, baskınlık yine kesin
   kalır).
-- **"+%2"lik ara şarjlara son**: isteğe bağlı en düşük mola şarjı
+- **"+%2"lik ara şarjlara son**: isteğe bağlı asgari mola şarjı
   (`min_stop_soc`, `--min-stop-soc`), bir eşiğin altında başlayan her
   molanın o eşikte ya da üstünde bitmesini sağlar. "En az Δ ekle" yerine bir
   eşik, çünkü eşik "daha fazla enerji, daha geç değil" baskınlığını korur:
@@ -105,8 +105,8 @@ bir web uygulamasıyla birlikte.
   araç, yalnızca AC ile şarj olan bir şehir aracı ve CHAdeMO'lu eski bir
   hatchback de var (`docs/model.md` §10).
 - **Tek bir en iyi rota yok**: Gösterim tarifesiyle 14:00'te Karaman →
-  İstanbul en hızlı planla 8 sa 09 dk ve 1.309,59 TL, dengeli bir planla
-  8 sa 20 dk ve 1.111,61 TL; Pareto cephesinde 268 plan var.
+  İstanbul en hızlı planla 8 sa 09 dk ve 1 309,59 TRY, dengeli bir
+  planla 8 sa 20 dk ve 1 111,61 TRY; Pareto cephesinde 268 plan var.
 - **Paketle gelen gerçek veri** (1,5 MB): SRTM yükseklikleriyle Türkiye'nin
   OpenStreetMap yol ağı (44 673 düğüm, 75 393 km), soketleriyle birlikte
   OSM'deki 711 halka açık şarj istasyonu ve on operatörün liste fiyatları;
@@ -120,9 +120,9 @@ bir web uygulamasıyla birlikte.
   Şarj@TR platformu, OCPI, Open Charge Map, araştırma anlaşmaları)
   `docs/real-data.tr.md` anlatır.
 - **Yalnızca test edilmedi, doğrulandı**: bağımsız bir değerlendirici her
-  planı yeniden sürer; sabit tohumlu çapraz doğrulama paketi planlayıcıları
-  kaba kuvvet, dinamik programlar, metamorfik ilişkiler ve yerel aramayla,
-  rastgele tarifeler ve rastgele eşiklerle de sınar.
+  planı yeniden simüle eder; sabit tohumlu çapraz doğrulama paketi
+  planlayıcıları kaba kuvvet, dinamik programlar, metamorfik ilişkiler ve
+  yerel aramayla, rastgele tarifeler ve rastgele eşiklerle de sınar.
 - **Bir web uygulaması**: https://aseloth99.github.io/evroute/ web sitesi
   tarayıcıda planlar (Pyodide; ilk ziyarette yaklaşık 6 MB) ve hazır
   örnekler sunar. Görüntüleyici yolculukları canlandırır, planlayıcıları

@@ -570,11 +570,11 @@ is a matter of their agreements; this page does not claim to know.
 
 **Open Charge Map.**  A worldwide open registry of charging locations with a
 public API; the API refuses requests without an API key.  Data contributed
-by its users are licensed CC BY 4.0 since 1 April 2022 (CC BY-SA 4.0
-before;
-[announcement](https://community.openchargemap.org/t/announcing-our-new-simpler-data-license-for-ocm-data-cc-by-4-0-international/565)),
-while POIs imported from other data providers stay those providers' data,
-and an application that uses them must show the data provider's
+by its users are licensed CC BY 4.0 since 1 April 2022, when the earlier
+share-alike condition was dropped
+([announcement](https://community.openchargemap.org/t/announcing-our-new-simpler-data-license-for-ocm-data-cc-by-4-0-international/565)).
+POIs imported from other data providers stay those providers' data, and an
+application that uses them must show the data provider's
 attribution, licence included, to its end users
 ([terms](https://beta.openchargemap.org/about/terms)).  How much of the
 Turkish network it holds has not been measured for this page.

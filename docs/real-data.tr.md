@@ -586,9 +586,10 @@ sunduğu kendi anlaşmalarına bağlıdır; bu sayfa bunu bildiğini iddia etmez
 **Open Charge Map.** Herkese açık bir API'si olan, dünya çapında açık bir
 şarj noktası kaydı; API, anahtar (API key) içermeyen istekleri reddeder.
 Kullanıcılarının katkıda bulunduğu veriler 1 Nisan 2022'den beri CC BY 4.0
-lisanslıdır (öncesinde CC BY-SA 4.0;
-[duyuru](https://community.openchargemap.org/t/announcing-our-new-simpler-data-license-for-ocm-data-cc-by-4-0-international/565));
-başka veri sağlayıcılarından aktarılan POI'ler ise o sağlayıcıların verisi
+lisanslıdır; o tarihte önceki "aynı lisansla paylaş" (share-alike) koşulu
+kaldırıldı
+([duyuru](https://community.openchargemap.org/t/announcing-our-new-simpler-data-license-for-ocm-data-cc-by-4-0-international/565)).
+Başka veri sağlayıcılarından aktarılan POI'ler ise o sağlayıcıların verisi
 olarak kalır ve onları kullanan bir uygulama, veri sağlayıcının atfını
 lisans koşullarıyla birlikte son kullanıcılarına göstermelidir
 ([koşullar](https://beta.openchargemap.org/about/terms)). Türkiye'deki
