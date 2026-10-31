@@ -10,7 +10,7 @@ use.  It is written for newcomers; every section ends with a pointer to the
 exact statements and proofs for experts.  Every number below is produced by
 the code (the commands are in this guide, the [README](../README.md) or
 the [documentation](index.md)).  The last sections are practical: which
-planner to use, how to keep a plan from stopping for a few percent, and the
+planner to use, how to keep a plan from stopping for a few per cent, and the
 everyday mode of the web app.  The running example is the README's
 **Karaman → İstanbul** trip: 747 km, an 85 kWh C-SUV leaving at 08:00 with
 80 %, 10 % reserve on the way and on arrival, expected queues at every
