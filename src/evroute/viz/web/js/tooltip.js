@@ -173,7 +173,8 @@
 
   function tipTarget(node) {
     const el = node && node.nodeType === 1 ? node : node && node.parentElement;
-    return el && el.closest ? el.closest('[data-tip]') : null;
+    if (!el || !el.closest || el.closest('.combo-list')) return null;   // an open picker list: no tip of its field
+    return el.closest('[data-tip]');
   }
 
   /** Set (or clear) the tooltip text of `el`; returns `el`. */

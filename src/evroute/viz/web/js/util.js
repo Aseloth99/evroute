@@ -4,8 +4,8 @@
  * (never innerHTML for data), numeric helpers, colour maths, theme tokens,
  * safe storage and canvas sizing.  Every file of the viewer is one IIFE that
  * adds its part to the shared namespace `window.EVR`; export.py concatenates
- * them in a fixed order (util, i18n, model, terrain, map, charts, anim,
- * panels, live, app).
+ * them in a fixed order (util, i18n, combo, tooltip, model, terrain, map,
+ * charts, anim, panels, live, app).
  */
 (function (EVR) {
   'use strict';
