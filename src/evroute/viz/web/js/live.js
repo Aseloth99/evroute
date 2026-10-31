@@ -539,6 +539,7 @@
 
     _syncPrio() {
       const obj = this.el.objective.value;
+      EVR.tooltip.setTip(this.el.plan, I.t(this.app.everyday ? 'tip_plan_everyday' : 'tip_plan'));
       for (const b of this.el.prio.querySelectorAll('button')) {
         b.setAttribute('aria-pressed', String(b.dataset.prio === obj));
         const vot = `${I.money(+this.el.vot.value || 0, this.app.model.currency, 0)}${I.t('per_hour')}`;
