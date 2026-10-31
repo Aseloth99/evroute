@@ -158,6 +158,16 @@ def test_csv_kind_inference(net):
     assert [s.kind for s in stations_from_csv(rows, net).stations] == ["AC", "DC", "DC", "AC"]
 
 
+def test_csv_kind_follows_ac_only_connectors_above_22_kw(net):
+    # a 43 kW three-phase Type 2 point is AC: the power rule must not make it DC and then reject it
+    rows = [{"node": "1", "power_kw": "43", "connectors": "Type2"},
+            {"node": "1", "power_kw": "30", "connectors": "Type1"},
+            {"node": "1", "power_kw": "43", "connectors": "Type2;CCS2"},
+            {"node": "1", "power_kw": "50", "connectors": "NACS"},
+            {"node": "1", "power_kw": "11", "connectors": "NACS"}]
+    assert [s.kind for s in stations_from_csv(rows, net).stations] == ["AC", "AC", "DC", "DC", "AC"]
+
+
 def test_lat_lon_needs_a_network_with_coordinates():
     net = grid_scenario(seed=0).network
     assert net.lat is None

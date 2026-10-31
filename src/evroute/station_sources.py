@@ -124,7 +124,8 @@ CSV_COLUMNS: dict[str, str] = {
     "lat, lon": "WGS84 position (needs a network with coordinates), or",
     "x, y": "position in the network's frame [m], or",
     "node": "the network node id itself",
-    "kind": "AC or DC (default: DC if a connector is DC-only or power_kw > 22, else AC)",
+    "kind": "AC or DC (default: DC if a connector is DC-only, else AC if one is AC-only, "
+            "else DC if power_kw > 22, else AC)",
     "power_kw": "largest charging power [kW] (required)",
     "plugs": "vehicles served at the same time (default 1)",
     "connectors": "standards separated by ';' or '|' ('|' in a ';'-delimited file), e.g. 'CCS2;CHAdeMO' "
@@ -492,8 +493,14 @@ def stations_from_csv(
                 conns.append(std)
         kind = str(row.get("kind") or "").upper()
         if not kind:
-            dc_only = any(CONNECTORS[c] == ("DC",) for c in conns)
-            kind = "DC" if dc_only or power > 22.0 else "AC"
+            # the connectors decide where they carry one kind only, the power otherwise
+            kinds = {CONNECTORS[c] for c in conns}
+            if ("DC",) in kinds:
+                kind = "DC"
+            elif ("AC",) in kinds:
+                kind = "AC"
+            else:
+                kind = "DC" if power > 22.0 else "AC"
         if kind not in ("AC", "DC"):
             raise ValueError(f"{where}: kind must be AC or DC, got {row.get('kind')!r}")
         if conns and not any(kind in CONNECTORS[c] for c in conns):
