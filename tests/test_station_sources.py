@@ -236,8 +236,8 @@ def test_ocpi_evses_out_of_service_lend_the_station_nothing(net):
     def conn(standard, kw, tariff):
         return {"standard": standard, "power_type": "DC", "max_electric_power": kw * 1000, "tariff_ids": [tariff]}
 
-    tariffs = [{"id": "T-OK", "currency": "TRY", "elements": [{"price_components": [{"type": "ENERGY", "price": 10.0}]}]},
-               {"id": "T-DOWN", "currency": "TRY", "elements": [{"price_components": [{"type": "ENERGY", "price": 30.0}]}]}]
+    tariffs = [{"id": tid, "currency": "TRY", "elements": [{"price_components": [{"type": "ENERGY", "price": p}]}]}
+               for tid, p in (("T-OK", 10.0), ("T-DOWN", 30.0))]
     loc = {"id": "L", "coordinates": {"latitude": "37.4855", "longitude": "32.704"},
            "evses": [{"uid": "E1", "status": "AVAILABLE", "connectors": [conn("IEC_62196_T2_COMBO", 50, "T-OK")]},
                      {"uid": "E2", "status": "OUTOFORDER",
