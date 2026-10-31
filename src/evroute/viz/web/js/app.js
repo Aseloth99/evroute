@@ -443,12 +443,12 @@
       if (!site) return;
       const mark = U.$('#topbar .brand-mark');
       if (site.home && mark) {
-        const a = U.el('a', { class: 'brand-mark brand-home', href: site.home, 'data-i18n-aria': 'site_home', 'data-i18n-title': 'site_home' });
+        const a = U.el('a', { class: 'brand-mark brand-home', href: site.home, 'data-i18n-aria': 'site_home', 'data-i18n-tip': 'site_home' });
         a.append(...mark.childNodes);
         mark.replaceWith(a);
       }
       if (site.repo) {
-        const gh = U.el('a', { class: 'btn-icon site-repo', href: site.repo, 'data-i18n-aria': 'site_repo', 'data-i18n-title': 'site_repo' });
+        const gh = U.el('a', { class: 'btn-icon site-repo', href: site.repo, 'data-i18n-aria': 'site_repo', 'data-i18n-tip': 'site_repo' });
         // a constant icon (no data in this markup)
         gh.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 19c-4 1.5-4-2-6-2.5m12 5v-3.5c0-1 .1-1.4-.5-2 2.8-.3 5.5-1.4 5.5-6a4.6 4.6 0 0 0-1.3-3.2 4.2 4.2 0 0 0-.1-3.2s-1.1-.3-3.5 1.3a12 12 0 0 0-6.2 0C6.5 2.8 5.4 3.1 5.4 3.1a4.2 4.2 0 0 0-.1 3.2A4.6 4.6 0 0 0 4 9.5c0 4.6 2.7 5.7 5.5 6-.6.6-.6 1.2-.5 2V21"/></svg>';
         U.$('#topbar .topbar-actions').prepend(gh);

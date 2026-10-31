@@ -45,24 +45,24 @@
       </div>
     </div>
     <div class="topbar-actions">
-      <label class="switch switch-anim" id="anim-switch" title="A">
+      <label class="switch switch-anim" id="anim-switch" data-i18n-tip="tip_animation">
         <input type="checkbox" id="anim-toggle" role="switch" aria-checked="false">
         <span class="switch-track" aria-hidden="true"><span class="switch-thumb"></span></span>
         <span class="switch-label" data-i18n="animation">Animasyon</span>
         <span class="switch-state" id="anim-state" aria-hidden="true">OFF</span>
       </label>
-      <div class="seg" role="group" id="lang-seg" data-i18n-aria="language">
+      <div class="seg" role="group" id="lang-seg" data-i18n-aria="language" data-i18n-tip="tip_language">
         <button type="button" data-lang="tr" aria-pressed="false">TR</button>
         <button type="button" data-lang="en" aria-pressed="false">EN</button>
       </div>
       <div class="seg seg-icons" role="group" id="theme-seg" data-i18n-aria="theme">
-        <button type="button" data-theme-choice="light" data-i18n-aria="theme_light" data-i18n-title="theme_light" aria-pressed="false">
+        <button type="button" data-theme-choice="light" data-i18n-aria="theme_light" data-i18n-tip="theme_light" aria-pressed="false">
           <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
         </button>
-        <button type="button" data-theme-choice="auto" data-i18n-aria="theme_auto" data-i18n-title="theme_auto" aria-pressed="false">
+        <button type="button" data-theme-choice="auto" data-i18n-aria="theme_auto" data-i18n-tip="theme_auto" aria-pressed="false">
           <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg>
         </button>
-        <button type="button" data-theme-choice="dark" data-i18n-aria="theme_dark" data-i18n-title="theme_dark" aria-pressed="false">
+        <button type="button" data-theme-choice="dark" data-i18n-aria="theme_dark" data-i18n-tip="theme_dark" aria-pressed="false">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z"/></svg>
         </button>
       </div>
@@ -176,7 +176,7 @@
     </section>
 
     <section class="card" id="algo-card">
-      <div class="card-head"><h2 data-i18n="routes">Rotalar</h2><span class="hint" data-i18n="routes_hint">seçmek için tıklayın</span></div>
+      <div class="card-head"><h2 data-i18n="routes" data-i18n-tip="tip_routes" tabindex="0">Rotalar</h2><span class="hint" data-i18n="routes_hint">seçmek için tıklayın</span></div>
       <ul class="algo-list" id="algo-list" role="listbox" data-i18n-aria="routes"></ul>
     </section>
 
@@ -230,11 +230,11 @@
     </div>
 
     <div class="map-tools" role="toolbar" data-i18n-aria="map_tools">
-      <button type="button" class="btn-icon glass" id="btn-zoom-in" data-i18n-aria="zoom_in" data-i18n-title="zoom_in">
+      <button type="button" class="btn-icon glass" id="btn-zoom-in" data-i18n-aria="zoom_in" data-i18n-tip="zoom_in">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button>
-      <button type="button" class="btn-icon glass" id="btn-zoom-out" data-i18n-aria="zoom_out" data-i18n-title="zoom_out">
+      <button type="button" class="btn-icon glass" id="btn-zoom-out" data-i18n-aria="zoom_out" data-i18n-tip="zoom_out">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14"/></svg></button>
-      <button type="button" class="btn-icon glass" id="btn-fit" data-i18n-aria="fit_route" data-i18n-title="fit_route">
+      <button type="button" class="btn-icon glass" id="btn-fit" data-i18n-aria="fit_route" data-i18n-tip="fit_route">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9V5a1 1 0 0 1 1-1h4M15 4h4a1 1 0 0 1 1 1v4M20 15v4a1 1 0 0 1-1 1h-4M9 20H5a1 1 0 0 1-1-1v-4"/><circle cx="12" cy="12" r="2.5"/></svg></button>
     </div>
 
@@ -273,13 +273,13 @@
 
     <div class="playbar glass" id="playbar" hidden>
       <div class="playbar-buttons">
-        <button type="button" class="btn-icon btn-play" id="btn-play" data-i18n-aria="play_pause" data-i18n-title="play_pause_key">
+        <button type="button" class="btn-icon btn-play" id="btn-play" data-i18n-aria="play_pause" data-i18n-tip="tip_play">
           <svg viewBox="0 0 24 24" class="ico-play" aria-hidden="true"><path d="M8 5.5v13a1 1 0 0 0 1.5.86l10.4-6.5a1 1 0 0 0 0-1.72L9.5 4.64A1 1 0 0 0 8 5.5z"/></svg>
           <svg viewBox="0 0 24 24" class="ico-pause" aria-hidden="true"><rect x="6.5" y="5" width="4" height="14" rx="1.2"/><rect x="13.5" y="5" width="4" height="14" rx="1.2"/></svg>
         </button>
-        <button type="button" class="btn-icon" id="btn-restart" data-i18n-aria="restart" data-i18n-title="restart">
+        <button type="button" class="btn-icon" id="btn-restart" data-i18n-aria="restart" data-i18n-tip="restart">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg></button>
-        <label class="speed" data-i18n-title="speed_title">
+        <label class="speed" data-i18n-tip="tip_speed">
           <span class="sr-only" data-i18n="speed_title">Hız</span>
           <select id="sel-speed">
             <option value="2">1 h = 2 s</option>
@@ -289,9 +289,9 @@
           </select>
         </label>
         <div class="seg seg-sm mode-seg" role="group" id="mode-seg" data-i18n-aria="mode">
-          <button type="button" data-mode="trip" aria-pressed="true" data-i18n-title="mode_trip_title"><span data-i18n="mode_trip">Yolculuk</span></button>
-          <button type="button" data-mode="race" aria-pressed="false" data-i18n-title="mode_race_title"><span data-i18n="mode_race">Yarış</span><kbd>R</kbd></button>
-          <button type="button" data-mode="search" aria-pressed="false" data-i18n-title="mode_search_title"><span data-i18n="mode_search">Arama</span><kbd>S</kbd></button>
+          <button type="button" data-mode="trip" aria-pressed="true" data-i18n-tip="mode_trip_title"><span data-i18n="mode_trip">Yolculuk</span></button>
+          <button type="button" data-mode="race" aria-pressed="false" data-i18n-tip="mode_race_title"><span data-i18n="mode_race">Yarış</span><kbd>R</kbd></button>
+          <button type="button" data-mode="search" aria-pressed="false" data-i18n-tip="mode_search_title"><span data-i18n="mode_search">Arama</span><kbd>S</kbd></button>
         </div>
       </div>
       <div class="timeline" id="timeline">
@@ -318,35 +318,35 @@
   <section class="bottom" id="bottom">
     <article class="card chart-card chart-soc">
       <div class="card-head">
-        <h2 data-i18n="chart_soc">Şarj durumu ve rakım</h2>
+        <h2 data-i18n="chart_soc" data-i18n-tip="tip_chart_soc" tabindex="0">Şarj durumu ve rakım</h2>
         <div class="chart-legend" id="legend-soc"></div>
       </div>
       <div class="chart" id="chart-soc"></div>
     </article>
     <article class="card chart-card chart-wait">
       <div class="card-head">
-        <h2 data-i18n="chart_wait">Kuyruk profili (24 saat)</h2>
+        <h2 data-i18n="chart_wait" data-i18n-tip="tip_chart_wait" tabindex="0">Kuyruk profili (24 saat)</h2>
         <span class="hint" id="wait-station"></span>
       </div>
       <div class="chart" id="chart-wait"></div>
     </article>
     <article class="card chart-card chart-time">
       <div class="card-head">
-        <h2 data-i18n="chart_time">Süre dağılımı</h2>
+        <h2 data-i18n="chart_time" data-i18n-tip="tip_chart_time" tabindex="0">Süre dağılımı</h2>
         <div class="chart-legend" id="legend-time"></div>
       </div>
       <div class="chart" id="chart-time"></div>
     </article>
     <article class="card chart-card chart-pareto" id="pareto-card" hidden>
       <div class="card-head">
-        <h2 data-i18n="chart_pareto">Pareto cephesi: süre ve ücret</h2>
+        <h2 data-i18n="chart_pareto" data-i18n-tip="tip_chart_pareto" tabindex="0">Pareto cephesi: süre ve ücret</h2>
         <span class="hint" data-i18n="pareto_hint">nokta boyutu = batarya yıpranması · tıklayın</span>
       </div>
       <div class="chart" id="chart-pareto"></div>
     </article>
     <article class="card table-card">
       <div class="card-head">
-        <h2 data-i18n="comparison">Algoritma karşılaştırması</h2>
+        <h2 data-i18n="comparison" data-i18n-tip="tip_comparison" tabindex="0">Algoritma karşılaştırması</h2>
         <span class="hint" data-i18n="table_hint">sıralamak için başlığa, seçmek için satıra tıklayın</span>
       </div>
       <div class="table-wrap"><table class="cmp" id="cmp-table"></table></div>
@@ -355,7 +355,7 @@
 
   <footer class="footer" id="footer">
     <span id="footer-text"></span>
-    <span class="kbd-help" data-i18n-title="shortcuts"><kbd>Space</kbd> <kbd>A</kbd> <kbd>R</kbd> <kbd>S</kbd> <kbd>←</kbd><kbd>→</kbd> <kbd>F</kbd></span>
+    <span class="kbd-help" data-i18n-tip="shortcuts" tabindex="0"><kbd>Space</kbd> <kbd>A</kbd> <kbd>R</kbd> <kbd>S</kbd> <kbd>←</kbd><kbd>→</kbd> <kbd>F</kbd></span>
   </footer>
 </div>
 

@@ -48,9 +48,9 @@
   function guaranteeBadge(r) {
     const g = r.exact || 'heuristic';
     const wrap = U.el('span', { class: 'badges' });
-    wrap.appendChild(U.el('span', { class: `badge badge-${g}`, title: I.t(`g_${g}_title`), text: I.t(`g_${g}`) }));
-    if (r.complete === false) wrap.appendChild(U.el('span', { class: 'badge badge-partial', title: I.t('partial_front'), text: I.t('g_partial') }));
-    else if (budgetStopped(r)) wrap.appendChild(U.el('span', { class: 'badge badge-partial', title: stoppedText(r), text: I.t('g_incomplete') }));
+    wrap.appendChild(U.el('span', { class: `badge badge-${g}`, 'data-tip': I.t(`g_${g}_title`), text: I.t(`g_${g}`) }));
+    if (r.complete === false) wrap.appendChild(U.el('span', { class: 'badge badge-partial', 'data-tip': I.t('partial_front'), text: I.t('g_partial') }));
+    else if (budgetStopped(r)) wrap.appendChild(U.el('span', { class: 'badge badge-partial', 'data-tip': stoppedText(r), text: I.t('g_incomplete') }));
     return wrap;
   }
 
@@ -63,6 +63,17 @@
     return U.el('span', { class: 'arrive-soc', 'data-tip': I.t('tip_arrival_soc'), tabindex: '0' },
       `${I.t('arrival_soc')} `, U.el('b', { text: I.pct(r.arrival_soc, 0) }),
       U.isNum(min) ? U.el('small', { text: ` (${I.t('arrival_min', { p: I.pct(min, 0) })})` }) : null);
+  }
+
+  /** Tooltip of a summary metric `k` (tip_m_<k>, or the arrival-charge explanation). */
+  function metricTip(k) {
+    if (k === 'arrival_soc') return I.t('tip_arrival_soc');
+    return I.STR.en[`tip_m_${k}`] ? I.t(`tip_m_${k}`) : null;
+  }
+
+  /** Tooltip of a comparison-table header `th_<x>` (tip_th_<x>). */
+  function headTip(label) {
+    return I.STR.en[`tip_${label}`] ? I.t(`tip_${label}`) : null;
   }
 
   /** Monte Carlo probability `k` of route `r` (null when not analysed). */
@@ -114,11 +125,11 @@
   function stopTariffPills(t, s) {
     const out = [];
     if ((t.peak_hours && t.peak_hours.length) || U.isNum(t.busy_utilisation)) {
-      out.push(U.el('span', { class: `tariff-pill ${s.peak ? 'peak' : 'offpeak'}`, text: I.t(s.peak ? 'tariff_peak_short' : 'tariff_offpeak_short') }));
+      out.push(U.el('span', { class: `tariff-pill ${s.peak ? 'peak' : 'offpeak'}`, text: I.t(s.peak ? 'tariff_peak_short' : 'tariff_offpeak_short'), 'data-tip': I.t(s.peak ? 'tip_tariff_peak' : 'tip_tariff_offpeak') }));
     }
     const f = tariffFactors(t)[s.peak ? 'peak' : 'off'];
     if (f[1] !== f[0] && s.soc_out > t.high_soc + 1e-9 && s.energy_out_kwh > s.energy_in_kwh) {
-      out.push(U.el('span', { class: 'tariff-pill high', text: I.t('tariff_high_short', { p: I.pct(t.high_soc, 0) }), title: I.t('tariff_high', { p: I.pct(t.high_soc, 0), f: fmtF(f[1] / f[0]) }) }));
+      out.push(U.el('span', { class: 'tariff-pill high', text: I.t('tariff_high_short', { p: I.pct(t.high_soc, 0) }), 'data-tip': I.t('tariff_high', { p: I.pct(t.high_soc, 0), f: fmtF(f[1] / f[0]) }) }));
     }
     return out;
   }
@@ -246,7 +257,7 @@
         const li = U.el('li', {
           class: `algo-item${r.feasible ? '' : ' infeasible'}`, role: 'option', tabindex: '0',
           'aria-selected': String(sel.ri === ri), style: { '--algo': c },
-          title: I.algoDescription({ name: r.algorithm, description: (app.algoInfo(r.algorithm) || {}).description }),
+          'data-tip': algoTip(Object.assign({ name: r.algorithm, exact: r.exact }, app.algoInfo(r.algorithm) || {})),
         },
         vis,
         U.el('div', { class: 'algo-text' },
@@ -276,7 +287,8 @@
       const best = app.bestFeasibleTime();
       const kids = [];
       kids.push(U.el('div', { class: 'summary-top', style: { '--algo': app.colorOf(r) } },
-        U.el('div', { class: 'summary-algo' }, U.el('i', { class: 'swatch' }), U.el('span', { text: r.long_title || r.title })),
+        U.el('div', { class: 'summary-algo', 'data-tip': algoTip(Object.assign({ name: r.algorithm, exact: r.exact }, app.algoInfo(r.algorithm) || {})) },
+          U.el('i', { class: 'swatch' }), U.el('span', { text: r.long_title || r.title })),
         guaranteeBadge(r)));
       const q = app.currentQuery();
       const od = `${app.model.nodeLabel(q.origin)} → ${app.model.nodeLabel(q.destination)}`;
@@ -321,8 +333,8 @@
           metrics.push(['settled', r.stats ? I.num(r.stats.settled, 0) : '–']);
         }
         kids.push(U.el('div', { class: 'metrics' }, metrics.map(([k, v, cls, tip]) =>
-          U.el('div', { class: `metric${cls ? ' ' + cls : ''}`, title: tip || undefined },
-            U.el('small', { text: I.t(k) }), U.el('b', { text: v, title: tip ? undefined : v })))));
+          U.el('div', { class: `metric${cls ? ' ' + cls : ''}`, 'data-tip': tip || metricTip(k), tabindex: '0' },
+            U.el('small', { text: I.t(k) }), U.el('b', { text: v })))));
       }
       if (!r.feasible) {
         const msg = r._strand ? I.t('stranded_at', { km: I.km(r._strand.dist, 0) }) : (r.message || I.t('no_route'));
@@ -422,7 +434,7 @@
         });
       }
       const head = U.el('tr', {}, cols.map(([key, label, , , , title]) => {
-        const th = U.el('th', { scope: 'col', class: key === 'exact' || key === 'feasible' ? 'center' : '', title: title || undefined },
+        const th = U.el('th', { scope: 'col', class: key === 'exact' || key === 'feasible' ? 'center' : '', 'data-tip': title || headTip(label) },
           U.el('button', { type: 'button' }, I.t(label), U.el('span', { class: 'arrow', 'aria-hidden': 'true', text: this.sort.key === key && this.sort.dir < 0 ? '▼' : '▲' })));
         th.setAttribute('aria-sort', this.sort.key === key ? (this.sort.dir > 0 ? 'ascending' : 'descending') : 'none');
         th.querySelector('button').addEventListener('click', () => {
@@ -441,7 +453,7 @@
         for (const [key, , val, fmt] of cols) {
           let td;
           if (key === 'title') {
-            td = U.el('td', {}, U.el('span', { class: 'algo-cell' }, U.el('i'), r.title));
+            td = U.el('td', {}, U.el('span', { class: 'algo-cell', 'data-tip': algoTip(Object.assign({ name: r.algorithm, exact: r.exact }, app.algoInfo(r.algorithm) || {})) }, U.el('i'), r.title));
           } else if (key === 'exact') {
             td = U.el('td', { class: 'center' }, guaranteeBadge(r));
           } else if (key === 'feasible') {
@@ -496,7 +508,7 @@
         if (when) rows.push(['kv_tariff_peak', `${when} · ${fmtF(f.peak[0])}`]);
         if (rows.length === n0) rows.push(['kv_tariff', I.t('tariff_flat')]);
       }
-      U.setChildren(this.el.kv, rows.flatMap(([k, val, label]) => [U.el('dt', { text: label || I.t(k) }), U.el('dd', { text: val, title: val })]));
+      U.setChildren(this.el.kv, rows.flatMap(([k, val, label]) => [U.el('dt', { text: label || I.t(k) }), U.el('dd', { text: val, 'data-tip': String(val).length > 22 ? val : null })]));
       const credit = sc.meta && sc.meta.attribution;
       const licence = metaText(sc, 'licence');   // e.g. "ODbL 1.0 (data), MIT (code)" (OpenStreetMap data)
       const disc = [metaText(sc, 'disclaimer'), credit && I.t('data_credit', { c: credit }),

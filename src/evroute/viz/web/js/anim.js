@@ -373,7 +373,6 @@
       el.fill.style.background = U.socColor(soc, app.theme);
       el.battery.classList.toggle('charging', st.kind === 'charge');
       el.dist.textContent = I.km(st.dist, 0);
-      el.dist.title = `${I.km(st.dist, 0)} / ${I.km(sel._tl.dEnd, 0)}`;
       el.speedOut.textContent = st.kind === 'drive' ? `${I.num(st.speed, 0)} ${I.t('unit_kmh')}` : '–';
       el.elev.textContent = `${I.num(st.elev, 0)} m`;
       let cls = 'drive', txt = '';

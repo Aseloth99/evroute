@@ -27,7 +27,10 @@ img { max-width: 100%; height: auto; }
 /* bilingual pages: html[data-lang] shows the matching [lang] elements only */
 html[data-lang="tr"] body [lang="en"], html[data-lang="en"] body [lang="tr"] { display: none !important; }
 
-.wrap { width: min(1080px, 100%); margin: 0 auto; padding: 0 16px; }
+/* grids and cards use wide screens; paragraphs keep a readable measure (.sub, .lead, .page-head p) */
+.wrap { width: min(1180px, 100%); margin: 0 auto; padding: 0 16px; }
+@media (min-width: 1600px) { .wrap { width: min(1520px, 100%); padding: 0 24px; } }
+@media (min-width: 2400px) { .wrap { width: min(1960px, 100%); } }
 .skip-link { position: absolute; left: -999px; top: 8px; z-index: 10; padding: 8px 12px; border-radius: 8px; background: var(--surface); }
 .skip-link:focus { left: 8px; }
 
@@ -93,7 +96,7 @@ html[data-lang="tr"] body [lang="en"], html[data-lang="en"] body [lang="tr"] { d
 .btn svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 
 .demo {
-  margin: 34px auto 0; max-width: 980px;
+  margin: 34px auto 0; max-width: min(1240px, 100%);
   border-radius: var(--radius); overflow: hidden;
   border: 1px solid var(--border); background: var(--surface);
   box-shadow: var(--shadow-3);
@@ -106,6 +109,7 @@ section { padding: 34px 0; }
 h2 { font-size: clamp(22px, 3vw, 28px); letter-spacing: -.015em; margin: 0 0 6px; }
 .sub { margin: 0 0 20px; color: var(--text-2); max-width: 760px; }
 .grid { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr)); }
+@media (min-width: 1600px) { .grid, .two { gap: 18px; } .card p { max-width: 72ch; } }
 .card {
   background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
   padding: 18px; box-shadow: var(--shadow-1);

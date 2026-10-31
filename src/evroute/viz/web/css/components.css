@@ -924,10 +924,10 @@ a.site-repo { color: var(--text-2); }
 
 /* ---------------------------------------------------------------- charts */
 .chart-card { display: flex; flex-direction: column; min-height: 0; }
-.chart { position: relative; flex: 1; min-height: 220px; }
-.chart-soc .chart { min-height: 270px; }
+.chart { position: relative; flex: 1; min-height: clamp(220px, 22vh, 340px); }
+.chart-soc .chart { min-height: clamp(270px, 26vh, 420px); }
 .chart-time .chart { min-height: 0; flex: none; }
-.chart-pareto .chart { min-height: 260px; }
+.chart-pareto .chart { min-height: clamp(260px, 26vh, 420px); }
 .chart canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
 .chart-legend { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 4px 12px; font-size: 11.5px; color: var(--text-2); min-width: 0; flex: 1 1 0; }
 .chart-card .card-head h2 { flex: 0 0 auto; }
