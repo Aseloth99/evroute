@@ -271,6 +271,31 @@ def test_ocm_fixture(net):
         (900002, "not operational"), (900004, "no usable connector"), (900005, "too far from the network")]
 
 
+def test_ocm_compact_output(net):
+    """Regression: with ``compact=true`` the API gives ``StatusTypeID`` instead of ``StatusType``,
+    and removed or non-operational POIs and connections were imported; ``OperatorID`` alone names
+    no operator."""
+    def poi(ident, status, *conns):
+        return {"ID": ident, "StatusTypeID": status, "OperatorID": 3,
+                "AddressInfo": {"Title": "Fixture compact", "Latitude": 37.4858, "Longitude": 32.7048},
+                "Connections": [{"ConnectionTypeID": t, "CurrentTypeID": 30, "PowerKW": kw, "Quantity": 1,
+                                 "StatusTypeID": s} for t, kw, s in conns]}
+
+    pois = [poi(1, 50, (33, 150.0, 50), (2, 50.0, 100), (33, 300.0, 200)),  # CCS2 150 kW; CHAdeMO down; 300 kW removed
+            poi(2, 100, (33, 50.0, 50)), poi(3, 150, (33, 50.0, 0)), poi(4, 200, (33, 50.0, 50)),
+            poi(5, 210, (33, 50.0, 50)), poi(6, 0, (33, 50.0, 210))]
+    r = stations_from_ocm(pois, net)
+    (st,) = r.stations
+    assert (st.power_kw, st.plugs, st.sockets, st.operator) == (150.0, 1, ("CCS2",), "unknown")
+    assert st.price_per_kwh == DEFAULT_PRICE_TRY["DC"]
+    assert [(s["record"], s["reason"]) for s in r.skipped] == [
+        (2, "not operational"), (3, "not operational"), (4, "not operational"), (5, "not operational"),
+        (6, "no usable connector")]
+    # IsOperational of the full output wins over the ID
+    full = {**pois[1], "StatusType": {"ID": 100, "IsOperational": True}}
+    assert len(stations_from_ocm([full], net)) == 1
+
+
 # ====================================================================== files and scenarios
 def test_load_stations_detects_the_format(net, tmp_path):
     assert detect_format(DATA / "stations.csv") == "csv"

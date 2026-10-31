@@ -164,6 +164,9 @@ OCM_CONNECTION_TYPES: dict[int, str] = {
 }
 #: Open Charge Map ``CurrentTypeID``: 10 AC single phase, 20 AC three phase, 30 DC.
 _OCM_CURRENT = {10: "AC", 20: "AC", 30: "DC"}
+#: Open Charge Map ``StatusTypeID`` of POIs and connections that cannot charge: 100 not
+#: operational, 150 planned, 200 removed (decommissioned), 210 removed (duplicate listing).
+_OCM_NOT_OPERATIONAL = frozenset({100, 150, 200, 210})
 
 #: Spellings accepted for the connector standards (lower case, without spaces, ``-`` and ``_``).
 _CONNECTOR_ALIASES: dict[str, str] = {
@@ -733,9 +736,15 @@ def _ocm_standard(conn: Mapping[str, Any]) -> str | None:
 
 
 def _ocm_operational(obj: Mapping[str, Any]) -> bool | None:
+    """``StatusType.IsOperational`` of a POI or a connection, else ``False`` for a
+    ``StatusTypeID`` of :data:`_OCM_NOT_OPERATIONAL` (the compact API output has the
+    ID only); ``None`` when neither says it cannot charge."""
     st = obj.get("StatusType")
     if isinstance(st, Mapping) and isinstance(st.get("IsOperational"), bool):
         return st["IsOperational"]
+    sid = obj.get("StatusTypeID")
+    if isinstance(sid, int) and not isinstance(sid, bool) and sid in _OCM_NOT_OPERATIONAL:
+        return False
     return None
 
 
@@ -757,6 +766,15 @@ def stations_from_ocm(
     phases), ``Quantity`` (default 1) and its own ``StatusType``
     (non-operational connections are left out).  One station per kind, as
     for OCPI.  OCM has no live status: ``availability`` stays ``None``.
+
+    *Compact output.*  With ``compact=true`` the API sends IDs instead of the
+    nested reference objects.  The status then comes from ``StatusTypeID``
+    of the POI and of each connection (100 not operational, 150 planned, 200
+    and 210 removed: skipped or left out, as with ``IsOperational`` false);
+    a connection type outside :data:`OCM_CONNECTION_TYPES` has no title to
+    match and is left out; and an operator given by ``OperatorID`` alone
+    stays ``"unknown"`` (so the default price applies) -- fetch without
+    ``compact`` when the operators matter.
     Licence: CC BY 4.0, third-party POIs their provider's (module docs, :data:`OCM_ATTRIBUTION`).
     """
     snap = _Snapper(network, max_snap_m)

@@ -533,7 +533,7 @@ sc = with_stations(sc, imported)
 |---|---|
 | `stations_from_csv(path_or_rows, network)` | the generic schema `CSV_COLUMNS`: `lat`/`lon` (or `x`/`y`, or `node`), `kind`, `power_kw`, `plugs`, `connectors`, `operator`, `name`, `price_per_kwh` ... |
 | `stations_from_ocpi(locations, network, tariffs=None)` | OCPI 2.2.1 `Location` objects (or a `{"data": [...]}` response): coordinates, EVSE `status`, connector `standard`, `power_type`, `max_electric_power`; OCPI `Tariff` objects price the stations; returns a live availability snapshot per station |
-| `stations_from_ocm(pois, network)` | Open Charge Map POIs: `AddressInfo`, `Connections[]` (`ConnectionTypeID`, `PowerKW`, `Quantity`, `CurrentTypeID`, `StatusType`), `OperatorInfo` |
+| `stations_from_ocm(pois, network)` | Open Charge Map POIs: `AddressInfo`, `StatusType`, `Connections[]` (`ConnectionTypeID`, `PowerKW`, `Quantity`, `CurrentTypeID`, `StatusType`), `OperatorInfo`; the compact output (`compact=true`) works too, with the status from `StatusTypeID` but no operator names |
 
 Each record is snapped to the nearest node within `max_snap_m` (3 km);
 a site with DC and AC points becomes one station per kind; prices come from

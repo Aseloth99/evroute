@@ -637,7 +637,7 @@ erişim bilgileriyle indirilir, kaydedilir ve içe aktarılır.
 |---|---|---|
 | `stations_from_csv` | belgelenmiş genel bir tablo (`CSV_COLUMNS`) | konum (`lat`/`lon`, `x`/`y` ya da `node`), `kind`, `power_kw`, `plugs`, `connectors`, `operator`, `name`, `price_per_kwh`, kuyruk alanları |
 | `stations_from_ocpi` | OCPI 2.2.1 `Location` nesneleri, isteğe bağlı `Tariff` nesneleri | `coordinates`, `operator`, `publish`; her EVSE için `status` ve konnektörleri (`standard`, `power_type`, `max_electric_power` ya da gerilim x akım, `tariff_ids`) |
-| `stations_from_ocm` | Open Charge Map POI'leri (API'sinin JSON çıktısı) | `AddressInfo`, `OperatorInfo`, `StatusType`; her bağlantı için `ConnectionTypeID`, `CurrentTypeID`, `PowerKW`, `Quantity`, `StatusType` |
+| `stations_from_ocm` | Open Charge Map POI'leri (API'sinin JSON çıktısı) | `AddressInfo`, `OperatorInfo`, `StatusType` (ya da `StatusTypeID`); her bağlantı için `ConnectionTypeID`, `CurrentTypeID`, `PowerKW`, `Quantity`, `StatusType` (ya da `StatusTypeID`) |
 
 Kurallar üçü için de aynıdır:
 
@@ -661,6 +661,16 @@ Kurallar üçü için de aynıdır:
   14,24 TRY);
 - kuyruklar, OSM istasyonlarının EPDK verisine dayanan varsayımlarını alır
   ([Kuyruklar](#kuyruklar-varsayımlar)).
+
+**Open Charge Map, sıkıştırılmış çıktı.** `compact=true` ile API, iç içe
+başvuru nesneleri yerine yalnızca kimlik numaralarını (ID) gönderir.
+Bağdaştırıcı bu durumda durumu `StatusTypeID` alanından okur (100 çalışmıyor,
+150 planlanmış, 200 ve 210 kaldırılmış: POI ya da bağlantı dışarıda kalır);
+ancak yaygın türlerin (`OCM_CONNECTION_TYPES`) dışındaki bir bağlantı
+türünün eşleştirilecek bir adı olmadığından o bağlantı da dışarıda kalır,
+yalnızca `OperatorID` ile verilen bir operatör de "unknown" (bilinmiyor)
+olarak kalır ve varsayılan fiyat uygulanır. Operatörler ve fiyatları
+önemliyse veriyi `compact` olmadan indirin.
 
 **Canlı müsaitlik.** OCPI verisinde `imported.availability[i]`, `i`
 istasyonunun anlık görüntüsüdür: `available` EVSE'ler (durumu

@@ -618,7 +618,7 @@ provider's API and the user's own credentials, saved, and imported.
 |---|---|---|
 | `stations_from_csv` | a documented generic table (`CSV_COLUMNS`) | position (`lat`/`lon`, `x`/`y` or `node`), `kind`, `power_kw`, `plugs`, `connectors`, `operator`, `name`, `price_per_kwh`, queue fields |
 | `stations_from_ocpi` | OCPI 2.2.1 `Location` objects, optional `Tariff` objects | `coordinates`, `operator`, `publish`; per EVSE its `status` and connectors (`standard`, `power_type`, `max_electric_power` or voltage x current, `tariff_ids`) |
-| `stations_from_ocm` | Open Charge Map POIs (the JSON of its API) | `AddressInfo`, `OperatorInfo`, `StatusType`; per connection `ConnectionTypeID`, `CurrentTypeID`, `PowerKW`, `Quantity`, `StatusType` |
+| `stations_from_ocm` | Open Charge Map POIs (the JSON of its API) | `AddressInfo`, `OperatorInfo`, `StatusType` (or `StatusTypeID`); per connection `ConnectionTypeID`, `CurrentTypeID`, `PowerKW`, `Quantity`, `StatusType` (or `StatusTypeID`) |
 
 The rules are the same for all three:
 
@@ -640,6 +640,15 @@ The rules are the same for all three:
   (Zorlu Energy Solutions)"), else the default (AC 9.99 / DC 14.24 TRY);
 - the queues get the EPDK-based assumptions of the OSM stations
   ([Queues](#queues-assumptions)).
+
+**Open Charge Map, compact output.**  With `compact=true` the API sends
+IDs instead of the nested reference objects.  The adapter then reads the
+status from `StatusTypeID` (100 not operational, 150 planned, 200 and 210
+removed: the POI or the connection is left out), but a connection type
+outside the common ones (`OCM_CONNECTION_TYPES`) has no title to match and
+is left out, and an operator given by `OperatorID` alone stays "unknown",
+so the default price applies.  Fetch without `compact` when the operators
+and their prices matter.
 
 **Live availability.**  For OCPI data `imported.availability[i]` is the
 snapshot of station `i`: `available` EVSEs (status `AVAILABLE`), `total` in
