@@ -428,7 +428,12 @@
     fill() {
       const app = this.app, el = this.el, p = app.payload;
       // during a run (results so far shown) the controls keep what the visitor may be editing
-      const v = this.running ? this._controlValues() : this.held ? Object.assign({}, this.held, { tariff_on: this.held.tariff !== 'flat' }) : this._scenarioValues();
+      // a new scenario (first fill, a plan's answer, another preset) sets the controls; a re-fill for the
+      // same one (language or theme switch) keeps what the visitor has set and not planned yet
+      const fresh = this._filledFor !== app.model.scenario;
+      this._filledFor = app.model.scenario;
+      const v = this.running || !fresh ? this._controlValues() : this.held ? Object.assign({}, this.held, { tariff_on: this.held.tariff !== 'flat' }) : this._scenarioValues();
+      const ticked = !fresh && !this.running ? U.$$('input[type=checkbox]', el.algos).filter((c) => c.checked).map((c) => c.value) : null;
       // places: settlements first by importance, then the rest
       const places = app.model.places.filter((x) => x.kind === 'city' || x.kind === 'town');
       const list = (places.length ? places : app.model.places).slice().sort((a, b) => a.name.localeCompare(b.name, I.lang === 'tr' ? 'tr' : 'en'));
@@ -465,8 +470,8 @@
       this._syncPrio();
       this._renderVehicle();
       // algorithm checkboxes: those of the run under way, else those of the results shown
-      const have = new Set(this.running || app.model.results.map((r) => r.algorithm));
-      if (!this.running) for (const e of this.note ? this.note.stopped : []) have.add(e);
+      const have = new Set(this.running || ticked || app.model.results.map((r) => r.algorithm));
+      if (!this.running && !ticked) for (const e of this.note ? this.note.stopped : []) have.add(e);
       el.algos.textContent = '';
       for (const a of p.algorithms || []) {
         const cb = U.el('input', { type: 'checkbox', value: a.name });
