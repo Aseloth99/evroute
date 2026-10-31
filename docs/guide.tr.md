@@ -27,7 +27,7 @@ rezerv korunuyor, her şarj noktasında beklenen kuyruklar hesaba katılıyor.
 [10. Doğrulama](#10-yanıtların-doğru-olduğunu-nereden-biliyoruz) ·
 [11. Tarifeler](#11-tarifeler-tek-bir-en-iyi-rota-yok) ·
 [12. Hangi planlayıcı?](#12-hangi-planlayıcıyı-kullanmalıyım) ·
-[13. Taban kuralı](#13-her-molada-en-az-bir-şarj-düzeyi-taban-kuralı) ·
+[13. Taban kuralı](#13-her-molada-asgari-şarj-düzeyi-taban-kuralı) ·
 [14. Günlük kullanım modu](#14-günlük-kullanım-modu)
 
 ## 1. Düz A\* neden yetmiyor?
@@ -127,7 +127,7 @@ toplam maliyeti karşılaştırmak geçersiz (unsound) olabilir.
 ## 3. BLS: etiketli Dijkstra
 
 **BLS** (*battery-constrained label setting*, batarya kısıtlı etiket
-ayarlama), tek tek zamanlar yerine etiketlerle çalışan Dijkstra
+belirleme), tek tek zamanlar yerine etiketlerle çalışan Dijkstra
 algoritmasıdır. Bir öncelik kuyruğu etiketleri tutar, en erkeni önce:
 
 ```mermaid
@@ -246,7 +246,7 @@ kötüleşmeden iyileştirilemeyen rotalar vardır. Hepsi birlikte **Pareto
 cephesini** oluşturur.
 
 `pareto` bu cepheyi kesin olarak bulur: Martins'in çok ölçütlü etiket
-ayarlaması (etiketler artık süre, para ve yıpranma taşır) ve NAMOA\*'nın
+belirlemesi (etiketler artık süre, para ve yıpranma taşır) ve NAMOA\*'nın
 hedefe yönelik budaması; iyimser tamamlanışı daha önce bulunmuş bir rota
 tarafından zaten geçilen etiket hemen atılır. Antalya → Ankara'da cephede
 **495 rota** var; en ucuzu, en hızlıya göre 34 dakika daha uzun sürer ama
@@ -325,7 +325,7 @@ birkaç yolla denetler:
 Gerçek hatalar bu yolla bulundu. Bir örnek: kesin planlayıcıların hepsi bir
 düğüm ziyaretinde en çok bir şarj molasına izin veriyordu: "iki mola kuyruğu
 iki kez öder". Ama aynı yerde iki *farklı* şarj ünitesi varsa bu yanlış:
-soğuk bir hatta hızlı DC ünitesinde 37,4 kWh'ye kadar şarj edip ardından
+soğuk bir hatta hızlı DC ünitesinde 37,4 kWh'e kadar şarj edip ardından
 yanındaki AC ünitesine geçmek, CFP'nin "optimumundan" 16 sn daha hızlı.
 Değerlendirici bu daha hızlı planı kabul etti, çapraz doğrulama onu buldu;
 BLS, Pareto ve CFP düzeltildi (aynı istasyondaki farklı ünitelerde art arda
@@ -341,14 +341,14 @@ modeller (`Tariff`):
 
 - **%80 kuralı.** SoC yaklaşık %80'i geçince şarj yavaşlar; orada şarja
   devam eden bir araç, hızlı bir şarj ünitesini az bir enerji için meşgul
-  eder. İşletmeciler %80'in üzerindeki kWh'ye daha yüksek fiyat koyarak
+  eder. İşletmeciler %80'in üzerindeki her kWh'e daha yüksek fiyat koyarak
   bunu caydırır, kuyrukta bekleyen sürücüler de pek hoş karşılamaz.
 - **Puant saatler.** Günün yoğun saatlerinde bir puant çarpanı uygulanır;
   ya sabit saat aralıklarında ya da şarj noktasının kuyruk modelinin
   yoğunluk beklediği saatlerde.
 
 (Türkiye'de halka açık istasyonlarda Mart 2026'dan beri her operatörün bir
-AC ve bir DC fiyatı vardır, doluluk oranına göre kademe yoktur; bu yüzden
+AC ve bir DC fiyatı vardır, batarya doluluk oranına (SoC) göre kademe yoktur; bu yüzden
 %80 kuralı orada bir örnektir. Günün saatine göre fiyat ise serbesttir:
 [gerçek veriyle vaka çalışması](real-data.tr.md#fiyatlar-ve-mart-2026-yönetmeliği).)
 
@@ -427,7 +427,7 @@ bölümünde.
 sonucu veren planlayıcı. Şarj ızgarasında (SoC'nin her %2'si ve şarj
 eğrilerinin kırılma noktaları) kesindir ve modeldeki her şeyi destekler:
 süre ve maliyet amaçları, tarifeler ve daha ucuz fiyatı bekleme kararı, eko
-hızlar, zamana bağlı kuyruklar, 13. bölümdeki asgari mola şarjı ve aracın
+hızlar, zamana bağlı kuyruklar, 13. bölümdeki asgari şarj düzeyi ve aracın
 konnektörleri. Izgaranın bedeli küçüktür: 60 rastgele yolculukta sürekli
 optimumun ortalama %0,11 üzerinde (en çok %0,26, `optimality-gap` deneyi),
 gerçek veri deneyinin her yolculuğunda ise %0,4 yakınında kalır. Hızlıdır:
@@ -455,7 +455,7 @@ Başka bir planlayıcı ne zaman?
 | sürekli şarj miktarlarıyla kesin en hızlı yolculuk | `cfp-astar` | yolculuk süresi için gerçek sürekli optimum; yalnızca süre amacı (`objective="cost"` ile de en hızlı rotayı döndürür) |
 | ödünleşimi görüp kendiniz seçmek | `criteria=("time", "money")` ile `pareto` | kesin cephe; `max_labels` verin, tarifeli uzun yolculuklarda daha kaba bir `charge_step_soc` (örn. 0,05) kullanın |
 | süreyi parayla tartan tek bir plan | `objective="cost"` ve kendi `value_of_time_per_h` değerinizle `bls-astar` | cepheden tek bir nokta seçer; tarifeyle birlikte nerede bekleneceğine de karar verir |
-| bir referans ya da öğretici bir örnek | `bls`, `cfp` | Dijkstra sırasında aynı optimumlar: daha yavaş, ama arama, görüntüleyicinin arama tekrarında kolayca izlenir |
+| bir referans ya da öğretici bir örnek | `bls`, `cfp` | Dijkstra sırasıyla aynı optimumlar: daha yavaş, ama arama, görüntüleyicinin arama tekrarında kolayca izlenir |
 | geçilecek bir temel çizgi | `greedy`, `station-graph`, `genetic`, `naive` | bir navigasyon cihazının, sabit hedefli bir planlayıcının ve bir metasezgiselin ne yaptığı; optimallik garantisi yok |
 
 Komut satırından: `evroute plan SCENARIO -a bls-astar` (varsayılan),
@@ -463,7 +463,7 @@ Komut satırından: `evroute plan SCENARIO -a bls-astar` (varsayılan),
 planlayıcıyı yan yana çalıştırır, `evroute viz SCENARIO -o yolculuk.html`
 ise onları görüntüleyicide gösterir.
 
-## 13. Her molada en az bir şarj düzeyi: taban kuralı
+## 13. Her molada asgari şarj düzeyi: taban kuralı
 
 Kesin bir optimum saniyesine kadar optimaldir ve bu bazen göze batar. Gerçek
 veri ağında, OpenStreetMap istasyonlarıyla Karaman → İstanbul yolculuğu ZES
@@ -473,14 +473,14 @@ etme ve fişi takma süresini de hesaba katar, yani bu gerçek bir optimumdur;
 ama %12 için otoyoldan çıkacak sürücü azdır: bir sonraki şarj noktası dolu
 ya da arızalı olabilir, mola da sonuçta moladır.
 
-`min_stop_soc` bir **asgari mola şarjı** belirler: bu düzeyin altında
+`min_stop_soc` her mola için bir **asgari şarj düzeyi** belirler: bu düzeyin altında
 başlayan her şarj molası en az bu düzeye kadar sürer. Komut satırında
 `--min-stop-soc 0.4`, Python'da `scenario.with_preferences(min_stop_soc=0.4)`,
 web uygulamasında ise üç hızlı seçeneği (*Acele*, *Dengeli*, *Rahat*:
-rezerv + %10, %30 ya da %40) olan "Durakta en az şuna kadar şarj et"
+rezerv + 10, 30 ya da 40 puan) olan "Durakta en az şuna kadar şarj et"
 kaydırıcısı. Aynı yolculuk BLS-A\* ile:
 
-| asgari mola şarjı | yolculuk süresi | şarj maliyeti | iki mola |
+| asgari şarj düzeyi | yolculuk süresi | şarj maliyeti | iki mola |
 |---|---:|---:|---|
 | kapalı ya da %20 (*Acele*) | 9 sa 14 dk | 999,92 TRY | ZES Afyon %14,5 → %26, Kütahya %10 → %75 |
 | %40 (*Dengeli*) | 9 sa 15 dk | 1 028,17 TRY | ZES Afyon %14,5 → %40, Kütahya %24 → %75 |
@@ -539,11 +539,16 @@ Anahtar açıkken uygulama bir yolculuk planlayıcısına dönüşür:
   `Istanbul` yazsanız da "İstanbul"u bulan aranabilir listeler), araç
   (hücre kimyasını, bataryayı, DC ve AC gücünü ve konnektörleri gösteren
   bir kartla), mevcut şarj, kalkış saati, minimum varış şarjı, bir şarj
-  tarzı (*Acele* / *Dengeli* / *Rahat*: 13. bölümdeki asgari mola şarjı) ve
+  tarzı (*Acele* / *Dengeli* / *Rahat*: 13. bölümdeki asgari şarj düzeyi) ve
   bir öncelik (*En hızlı* süreye, *En ucuz* maliyete göre planlar).
   Tarifeler açıktır.
 - **Yalnızca BLS-A\* ile planlar** (12. bölüm); algoritma seçimleri,
   zamanın değeri ve teknik anahtarlar makul varsayılanlarla gizli kalır.
+  Arama plan bulamadan etiket bütçesine ulaşırsa (uzun bir gerçek veri
+  yolculuğunda yavaş şarj olan bir araç gibi), yolculuğu daha kaba bir şarj
+  ızgarasıyla (%2 yerine %5'lik adımlarla) bir kez daha planlar ve bunu Planla
+  düğmesinin altında belirtir: bu plan %5'lik ızgarada optimumdur, daha ince
+  ızgaradaki optimumdan biraz uzun sürebilir.
 - **Elinize geçen** bir yol planıdır: varış saati, toplam, sürüş ve şarj
   süresi, mola sayısı, şarj maliyeti ve varış şarjı; ardından adım adım:
   A'dan çıkış, sürüş (km, süre), her mola (istasyon, operatör, AC/DC ve
@@ -559,9 +564,9 @@ Anahtar açıkken uygulama bir yolculuk planlayıcısına dönüşür:
   adları.
 
 Araştırma görünümü ise ters yönde gider ve daha fazlasını gösterir: her
-mola için girişteki ve çıkıştaki enerji ve SoC, şarj edilen kWh'nin
+mola için girişteki ve çıkıştaki enerji ve SoC, şarj edilen kWh'in
 arkasındaki şebeke enerjisi, istasyonun ve aracın sınırlarına göre ortalama
-ve tepe şarj gücü, kuyrukta bekleme, hazırlık, gönüllü bekleme ve şarj
+ve tepe şarj gücü, kuyrukta bekleme, bağlanma, gönüllü bekleme ve şarj
 olarak ayrılmış süre, fiyat dönemi ve batarya yıpranması; her teknik terimi
 bir ipucu açıklar. Aracın bağlanamadığı istasyonlar (uyan konnektör yok) iki
 modda da içi boş ve gri çizilir; planlayıcılar oralarda hiç durmaz.

@@ -85,7 +85,7 @@ yalnızca sürüş 8 sa 37 dk tutar.
 
 | hazır senaryo | yolculuk | istasyonlar |
 |---|---|---|
-| `turkey-osm-karaman-istanbul` | OSM yollarında amiral yolculuk, 08:00'de %80 şarjla | OSM |
+| `turkey-osm-karaman-istanbul` | OSM yollarında ana örnek yolculuk, 08:00'de %80 şarjla | OSM |
 | `turkey-osm-karaman-istanbul-dc85` | aynısı, şarj %85 ile sınırlı (operatörler DC oturumunu orada bitirebilir) | OSM |
 | `turkey-osm-antalya-ankara` | Akdeniz'den Toroslar üzerinden | OSM |
 | `turkey-osm-istanbul-ankara` | en yoğun koridor, 14:30'da kalkış | OSM |
@@ -145,7 +145,7 @@ başlığı bu atfı yazar.
 | KGM (Karayolları Genel Müdürlüğü), *İller arası mesafeler* ([`ilmesafe.xlsx`](https://www.kgm.gov.tr/SiteCollectionDocuments/KGMdocuments/Root/Uzakliklar/ilmesafe.xlsx)) | 2026-03-03 tarihli tablo | yalnızca doğrulama |
 | EPDK, *Şarj Hizmeti Piyasası Aylık İstatistikleri* ([istatistik sayfası](https://www.epdk.gov.tr/Detay/Icerik/3-0-222/enerji-donusumusarj-hizmeti-piyasasi--istatistik)) | Eylül 2026, yayım 16.10.2026 | kapsam, kuyruk varsayımları |
 | operatörlerin kendi fiyat sayfaları | erişim 2026-10-27 | `prices.json` |
-| Resmî Gazete 23.03.2026, Sayı 33202: Şarj Hizmeti Yönetmeliği'nde değişiklik ([metin](https://www.resmigazete.gov.tr/eskiler/2026/03/20260323-4.htm)) | Mart 2026'dan beri yürürlükte | fiyat kuralları; işletmecilerin veri yükümlülükleri ([canlı veri](#canlı-ve-operatör-verisi)) |
+| Resmî Gazete 23.03.2026, Sayı 33202: Şarj Hizmeti Yönetmeliği'nde değişiklik ([metin](https://www.resmigazete.gov.tr/eskiler/2026/03/20260323-4.htm)) | Mart 2026'dan beri yürürlükte | fiyat kuralları; operatörlerin veri yükümlülükleri ([canlı veri](#canlı-ve-operatör-verisi)) |
 | Karayolları Trafik Yönetmeliği, Md. 100 | | varsayılan hızlar |
 
 ## Ağ nasıl oluşturuldu
@@ -390,11 +390,11 @@ Sayı 33202) bu fiyatların uyduğu kuralları koyar:
 
 | kural | EVRoute'ta |
 |---|---|
-| fiyat verilen kWh başına; bağlantı, başlatma ya da ekipman ücreti yok | kWh başına bir fiyat; molanın hazırlık süresi para değil zaman tutar |
-| halka açık istasyonlarda bir operatörün **bir AC ve bir DC fiyatı** olur: şarj gücüne ya da doluluk oranına göre kademe yok | istasyon başına tek fiyat; `DEMO_TARIFF`'in %80 kademesi yalnızca örnekleme amaçlı bir seçenektir ve `turkey-osm-*` hazır senaryoları nötr `Tariff()`'i korur |
+| fiyat verilen kWh başına; bağlantı, başlatma ya da ekipman ücreti yok | kWh başına bir fiyat; molanın bağlanma süresi para değil zaman tutar |
+| halka açık istasyonlarda bir operatörün **bir AC ve bir DC fiyatı** olur: şarj gücüne ya da batarya doluluk oranına (SoC) göre kademe yok | istasyon başına tek fiyat; `DEMO_TARIFF`'in %80 kademesi yalnızca örnekleme amaçlı bir seçenektir ve `turkey-osm-*` hazır senaryoları nötr `Tariff()`'i korur |
 | konuma ve **günün saatine** göre indirim serbest; oturumun **başladığı** saatin fiyatı uygulanır | `peak_hours` içeren bir `Tariff`'in kuyruğa giriş kuralı ([`model.md` §5](model.md#5-charging-tariffs)); EVRoute fiyatı aracın kuyruğa girdiği anda sabitler, kuyruk yoksa bu an oturumun başlangıcıdır |
 | halka açık fiyat, üyelik sözleşmeli kullanıcılara uygulanan en düşük fiyatın en çok 1,25 katı | modellenmez |
-| operatör, önceden bildirerek bir DC oturumunu **%85 doluluk oranında** bitirebilir | `max_charge_soc=0.85` (`-dc85` hazır senaryosu; basitleştirme olarak AC molalarını da sınırlar) |
+| operatör, önceden bildirerek bir DC oturumunu batarya **%85 dolduğunda** (SoC %85) bitirebilir | `max_charge_soc=0.85` (`-dc85` hazır senaryosu; basitleştirme olarak AC molalarını da sınırlar) |
 
 Karaman → İstanbul'da %85 sınırı hiçbir şeyi değiştirmez:
 `turkey-osm-karaman-istanbul-dc85` için BLS-A\* planı yukarıdakiyle
@@ -410,14 +410,14 @@ istatistiklerinden türetilmiş ulusal ortalamalarla bir Erlang-C kuyruğudur
 |---|---:|---:|
 | soket başına günlük oturum | 3,7 | 1,0 |
 | ortalama oturum | 36 dk | 159 dk |
-| hazırlık (park etme, fişi takma, ödeme) | 180 sn | 120 sn |
+| bağlanma (park etme, fişi takma, ödeme) | 180 sn | 120 sn |
 
 Gün içindeki talep, şarj edilen enerjinin saatlik profilini izler (tepe
 17:00-18:00). Bunlar **ölçüm değil, varsayımdır**: gerçek kuyruklar
 istasyondan istasyona değişir; ulusal ortalamalar da yaklaşık vaka
 çalışmasındaki en yoğun dinlenme tesislerinin ayarlanmış öğleden sonra
 kuyruklarından çok daha hafiftir (`synthetic` kümesi onları korur). Kesin
-optimumların kuyruk ve hazırlık süresi OSM istasyonlarıyla yolculuk başına
+optimumların kuyruk ve bağlanma süresi OSM istasyonlarıyla yolculuk başına
 0-6 dk, yaklaşık ağda 5,8-24,6 dk'dır.
 
 ## Sonuçlar: real-data deneyi
@@ -466,7 +466,7 @@ Sayıların söyledikleri:
   24 sa 25 dk'sı AC istasyonlarda şarjdır.
 - **OSM istasyonlarıyla optimum, ortalama %0,1 daha uzun mesafe için
   ortalama %7,0 daha uzun sürer.** Bunun neredeyse tamamı daha yavaş
-  sürüştür (ortalama +32 dk; şarj, kuyruk ve hazırlık −5,7 dk): OSM hızları
+  sürüştür (ortalama +32 dk; şarj, kuyruk ve bağlanma −5,7 dk): OSM hızları
   yasal sınırlardır. Para ortalama %11 daha azdır, ama dağılım geniştir:
   Karaman → Mersin gerçek yollarda hiç mola gerektirmez (273 km yerine
   236 km), Ankara → Adana ise yaklaşık ağdakinden %46 daha pahalıdır ve DC
@@ -544,12 +544,12 @@ yürürlüğe girdi) 30. maddeyi yeniden yazdı: EPDK, bütün şarj ağlarında
 halka açık her şarj istasyonunun konumunu, şarj ünitelerini, soket
 türlerini, sayılarını ve güçlerini, müsaitliğini, ödeme yöntemlerini ve
 fiyatlarını yayımlayan, ücretsiz erişimli bir platform kurar ve işletir;
-her şarj ağı işletmecisi de konum, ünite ve soketler, istasyon numarası ve
+her şarj ağı işletmecisi (operatör) de konum, ünite ve soketler, istasyon numarası ve
 adı, ödeme yöntemleri ve çalışma saatleri, ünite ve soket başına fiyatlar,
 planlı bakım ve arızalar, müsaitlik ve verilen enerji bilgilerini EPDK'nin
 belirlediği biçimde ve aralıklarla Kuruma sunmakla yükümlüdür (değişiklik
 yönetmeliğinin 19. maddesi). Yeni 28. maddenin birinci fıkrası ayrıca her
-işletmeciye, ağındaki tüm istasyon ve soketlerin kullanım durumlarını,
+operatöre, ağındaki tüm istasyon ve soketlerin kullanım durumlarını,
 müsaitliklerini ve fiyatlarını internet sitesinde ya da mobil
 uygulamasında anlık olarak gösterme yükümlülüğü getirir (18. madde).
 Platform bugün EPDK'nin iOS ve Android için Şarj@TR mobil uygulamasıdır:
@@ -559,13 +559,13 @@ soket gücü
 ([EPDK sayfası](https://www.epdk.gov.tr/Detay/Icerik/1-3428/enerji-donusumuserbest-erisim-platformu--sarj@tr)).
 Sayfa, üçüncü taraflar için bir API, indirme ya da web servisi anlatmaz.
 EPDK makinece okunabilir bir erişim sunduğunda Şarj@TR ideal tek kaynak
-olur (her lisanslı işletmeci ona bildirmek zorunda olduğu için eksiksiz,
+olur (her lisanslı operatör ona bildirmek zorunda olduğu için eksiksiz,
 tek biçimli ve resmî, üstelik müsaitlik bilgisiyle) ve bu vaka
 çalışmasındaki OSM istasyonlarının da fiyat anlık görüntüsünün de yerini
 alır. O zamana kadar bir programın girdisi değil, insanlar için bir
 başvuru kaynağıdır.
 
-**OCPI.** Open Charge Point Interface, şarj noktası işletmecilerinin
+**OCPI.** Open Charge Point Interface, şarj noktası operatörlerinin
 (CPO) ve e-mobilite hizmet sağlayıcılarının dolaşım (roaming) için konum,
 tarife, oturum ve şarj kaydı alışverişi yaptığı açık protokoldür. EVRoaming
 Foundation tarafından sürdürülür ve ücretsiz kullanılır; güncel sürüm
@@ -578,9 +578,9 @@ değişikliklerini ortaklarına iletir, ortaklar listenin tamamını da
 çekebilir
 ([Locations modülü, 2.2.1](https://github.com/ocpi/ocpi/blob/release-2.2.1-bugfixes/mod_locations.asciidoc));
 fiyatları Tariffs modülü taşır. Verisini bir araştırma projesiyle
-paylaşmayı kabul eden bir işletmeci, bunu dolaşım ortaklarıyla zaten
+paylaşmayı kabul eden bir operatör, bunu dolaşım ortaklarıyla zaten
 kullandığı biçimde yapabilir: Locations ve Tariffs için okuma erişimi ya da
-kaydedilmiş bir yanıt. Türkiye'deki hangi işletmecilerin kime OCPI arayüzü
+kaydedilmiş bir yanıt. Türkiye'deki hangi operatörlerin kime OCPI arayüzü
 sunduğu kendi anlaşmalarına bağlıdır; bu sayfa bunu bildiğini iddia etmez.
 
 **Open Charge Map.** Herkese açık bir API'si olan, dünya çapında açık bir
@@ -595,11 +595,11 @@ lisans koşullarıyla birlikte son kullanıcılarına göstermelidir
 ([koşullar](https://beta.openchargemap.org/about/terms)). Türkiye'deki
 ağın ne kadarını içerdiği bu sayfa için ölçülmedi.
 
-**Araştırma için veri anlaşmaları.** Bir işletmecinin eksiksiz verisine
+**Araştırma için veri anlaşmaları.** Bir operatörün eksiksiz verisine
 giden doğrudan yol, istemektir: amacı, alanları (tesisler, soketler,
 güçler, fiyatlar, durum geçmişi), dönemi, verinin nasıl saklanacağını ve
 ham verinin değil yalnızca sonuçların yayımlanacağını belirten, üniversiteden
-gelen bir talep. İstenecek şey tarihli bir anlık görüntü ya da işletmecinin
+gelen bir talep. İstenecek şey tarihli bir anlık görüntü ya da operatörün
 zaten sahip olduğu bir arayüze okuma erişimidir (OCPI Locations ve Tariffs
 ya da aşağıdaki şemada bir CSV dışa aktarımı). Öteki yol, platformun
 topladığı veriye araştırma amaçlı erişim için EPDK'ye başvurmaktır.
@@ -614,7 +614,7 @@ kaynaktan işaretlenen istasyonlar ağın bir sonraki yapımına girer.
   koşullarına aykırı biçimde **kazımayın** (scraping), uygulamalarının
   kapalı arayüzlerini çağırmayın. 28. maddenin birinci fıkrası veriyi
   sürücülere görünür kılar, toplanmaya açmaz: koşullar bunu genellikle
-  yasaklar, işletmecinin sunucularına yük bindirir ve bunun üzerine kurulan
+  yasaklar, operatörün sunucularına yük bindirir ve bunun üzerine kurulan
   bir sonuç ne yayımlanabilir ne de yeniden üretilebilir.
 - Uygulamalardan ya da tescilli haritalardan istasyon listelerini OSM'ye
   **kopyalamayın**: OpenStreetMap yalnızca kaynağı buna izin veren veriyi
@@ -708,7 +708,7 @@ Henüz yapılmamış iki sonraki adım:
   planlar ve Pyodide dışında hiçbir şey indirmez. Zamanlanmış bir GitHub
   Actions iş akışı her gece bir istasyon görüntüsü indirebilir (API
   anahtarı depo sırrı olarak saklanan Open Charge Map ya da anlaşmasıyla
-  bir işletmeci akışı), onu `evroute.station_sources` ile içe aktarıp
+  bir operatör akışı), onu `evroute.station_sources` ile içe aktarıp
   tarihli ve atıflı olarak siteyle birlikte yayımlayabilir: ziyaretçiler
   canlı istasyonlar üzerinde değil, bir önceki günün istasyonları üzerinde
   planlar.

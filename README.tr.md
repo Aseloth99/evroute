@@ -27,7 +27,7 @@ basitleştirip geçer:
 | Doğrusal olmayan şarj | şarj durumu (SoC) ~%50-80'i geçince güç keskin biçimde düşer | her araç × şarj ünitesi çifti için kesin şarj eğrileri |
 | Kısmi şarj | şarj %100'de değil, %54'te kesilir | sürekli şarj miktarları (CFP) ya da ince bir ızgara (BLS) |
 | Kısa molalar | birkaç puanlık şarj için otoyoldan çıkan sürücü azdır | her mola için isteğe bağlı bir asgari şarj düzeyi; planlayıcılar yine kesin kalır |
-| Araçlar ve soketler | LFP hücreler, 50 kW'lık bir DC sınırı, yalnızca CHAdeMO kabul eden bir araç | her araç için hücre kimyası, DC güç sınırı ve konnektörler |
+| Araçlar ve konnektörler | LFP hücreler, 50 kW'lık bir DC sınırı, yalnızca CHAdeMO kabul eden bir araç | her araç için hücre kimyası, DC güç sınırı ve konnektörler |
 | Kuyruklar | öğleden sonraları yoğun dinlenme tesislerinde 20-40 dk | saatlik talep profilli Erlang-C kuyrukları |
 | Arazi ve soğuk | inişler bataryayı yeniden doldurur; −5 °C'de kapasite küçülür, şarj yavaşlar | eğim, rüzgâr ve rejeneratif frenlemeyi içeren fizik modeli; soğukta kapasite ve şarj |
 | Batarya yıpranması | yüksek SoC'de hızlı şarj batarya paketini yaşlandırır | amaç fonksiyonunda fiyatlandırılır |
@@ -44,7 +44,7 @@ modellerin ve ticari planlayıcıların kendisiyle kıyaslanabileceği bir
 ## Öne çıkanlar
 
 - **Tek API ardında 9 planlayıcı** — bataryayı hesaba katmayan en hızlı yoldan
-  ve "araç içi navigasyon" sezgiselinden; kesin etiket ayarlamaya (BLS,
+  ve "araç içi navigasyon" sezgiselinden; kesin etiket belirlemeye (BLS,
   BLS-A\*), kesin sürekli şarja (CFP, CFP-A\*) ve süre, para ve batarya
   yıpranması üzerinde bir Pareto aramasına kadar.
 - **Kesin ve doğrulanmış** — sürekli enerjiler, kesin şarj eğrileri,
@@ -57,7 +57,7 @@ modellerin ve ticari planlayıcıların kendisiyle kıyaslanabileceği bir
   sınırı ve konnektör standartları (planlayıcı yalnızca aracın fişini
   takabildiği yerde durur); "+%2"lik ara şarjlar yerine her mola için bir
   asgari şarj düzeyi, üstelik kesin planlayıcılar bununla da kesin kalır
-  ([rehber §13](docs/guide.tr.md#13-her-molada-en-az-bir-şarj-düzeyi-taban-kuralı)).
+  ([rehber §13](docs/guide.tr.md#13-her-molada-asgari-şarj-düzeyi-taban-kuralı)).
 - **Görerek anlayın** — tarayıcınızda planlayan bir web uygulaması:
   animasyonlu bir araştırma görünümü (yolculuk, yarış ve arama tekrarı
   modları, her molanın tüm ayrıntıları) ve sürücüler için kopyalanabilen,
@@ -289,7 +289,7 @@ evroute plan turkey-osm-karaman-istanbul   # 9 sa 14 dk, 751,81 km, 2 mola, 999,
   çalışma süresi 4,0 sn ve 9,9 sn'dir ve BLS-A\*, CFP-A\*'ın %0,4 yakınında
   kalır. OSM istasyonlarıyla optimum, yaklaşık ağdakinden ortalama %7,0 daha
   uzun sürer; farkın neredeyse tamamı daha yavaş sürüşten gelir.
-- **Sezgiseller kalmaz:** OSM istasyonlarıyla greedy, yavaş AC şarj
+- **Sezgiseller ise bunu başaramaz:** OSM istasyonlarıyla greedy, yavaş AC şarj
   noktalarında saatlerce şarj ederek optimumdan ortalama %153 yavaş kalır
   (yaklaşık ağda %6,4); station graph tek bir yolculuk için 3 sa 46 dk'ya
   kadar uğraştı (hibrit küme; deney artık bir sezgiseli 10 dakika sonra
@@ -308,7 +308,7 @@ yıpranması**; üçü de farklı yönlere çeker. Şarj fiyatları bu ödünle�
 da keskinleştirir; EVRoute yaygın iki uygulamayı bir `Tariff` ile modeller:
 
 - **%80 kuralı.** SoC yaklaşık %80'i geçince şarj gücü keskin biçimde düşer;
-  bu yüzden işletmeciler `high_soc` üzerinde depolanan her kWh için daha
+  bu yüzden operatörler `high_soc` üzerinde depolanan her kWh için daha
   yüksek bir fiyat ister (Türkiye'de halka açık istasyonlarda değil: bu tür
   kademeler Mart 2026'dan beri yasak,
   [gerçek veri](docs/real-data.tr.md#fiyatlar-ve-mart-2026-yönetmeliği)).
@@ -353,11 +353,11 @@ bütün bir günün kalkışları) [dokümantasyonda](docs/index.md#worked-examp
 | `greedy` | araç içi navigasyon: batarya yetmeyecekse bir şarj noktasına sap, %80'e (DC) / %100'e (AC) kadar şarj et | sezgisel |
 | `station-graph` | istasyonlar üzerinde Dijkstra, sabit şarj hedefi | yalnızca kendi meta-grafı üzerinde optimal |
 | `genetic` | istasyonlar ve hedef SoC'ler üzerinde sabit tohumlu bir genetik algoritma | sezgisel |
-| `bls` | (düğüm, enerji) üzerinde Dijkstra sırasıyla etiket ayarlama | şarj ızgarasında **kesin** |
+| `bls` | (düğüm, enerji) üzerinde Dijkstra sırasıyla etiket belirleme | şarj ızgarasında **kesin** |
 | `bls-astar` | BLS + tutarlı bir A\* potansiyeli (varsayılan) | `bls` ile aynı optimum, çok daha az etiket |
 | `cfp` | şarj fonksiyonu yayılımı: sürekli şarj miktarları | **kesin** en hızlı rota |
 | `cfp-astar` | A\* anahtarıyla CFP | `cfp` ile aynı optimum |
-| `pareto` | süre, para ve yıpranma üzerinde çok ölçütlü etiket ayarlama | ızgara üzerinde **kesin** Pareto cephesi |
+| `pareto` | süre, para ve yıpranma üzerinde çok ölçütlü etiket belirleme | ızgara üzerinde **kesin** Pareto cephesi |
 
 Kesin planlayıcılar yolculuk süresini ya da süre, para ve yıpranmadan oluşan
 genelleştirilmiş bir maliyeti en küçükler (CFP: yalnızca süre); zamana bağlı
@@ -385,7 +385,7 @@ evroute gallery -o docs/img                        # bu README'deki seaborn graf
 | `optimality-gap` | ≥ 300 km'lik 60 rastgele yolculukta sürekli optimuma göre açık: greedy ortalama %5,2, station graph %12,8, genetic %0,75, %2'lik ızgarasında BLS-A\* %0,11 |
 | `queue-awareness` | beklenen kuyrukları hesaba katarak planlamak, kuyrukları yok sayan bir plana göre ortalama 3,4 dk, en çok 21,7 dk kazandırır |
 | `temperature` | Karaman → İstanbul: 20 °C'de 8 sa 07 dk; −15 °C'de ön ısıtmalı bataryayla 8 sa 37 dk, ön ısıtma olmadan 10 sa 24 dk |
-| `robustness` | İzmir → Erzurum: P(rezerv aşımı) güvenlik katsayısı 1,0'da %56, 1,1'de %9,7 (+21 dk), 1,2'de %0,4 (+36 dk) |
+| `robustness` | İzmir → Erzurum: P(rezerv ihlali) güvenlik katsayısı 1,0'da %56, 1,1'de %9,7 (+21 dk), 1,2'de %0,4 (+36 dk) |
 | `tariffs` | maliyet-optimal plan en hızlı plandan 6,3 dk uzun sürer ama 76,73 TRY (%7,6) daha az öder |
 | `vehicles` | on bir hazır araç profiliyle Karaman → İstanbul: 7 sa 50 dk (75 kWh'lik sedan) ile 10 sa 57 dk (27 kWh'lik şehir aracı) arası, LFP'li araçlar 8 sa 01 dk ile 8 sa 34 dk arası; yalnızca AC ile şarj olan bir araç 20 sa 35 dk |
 | `scalability` | 40 000 düğümlü sentetik ülkelerde BLS-A\* ortalama 1,7 sn'de, CFP-A\* 2,5 sn'de yanıt veriyor |

@@ -80,7 +80,7 @@ bir web uygulamasıyla birlikte.
 
 - **Tek bir arayüzde 9 planlayıcı**: karşılaştırma için bataryayı yok sayan
   en hızlı yol, açgözlü "araç içi navigasyon", istasyon grafı ve genetik
-  algoritma; kesin etiket ayarlama (BLS, BLS-A\*), kesin sürekli şarj (CFP,
+  algoritma; kesin etiket belirleme (BLS, BLS-A\*), kesin sürekli şarj (CFP,
   CFP-A\*) ve süre, para ve batarya yıpranması üzerinde Pareto araması.
   Varsayılan ve günlük kullanım için önerilen BLS-A\*: şarj ızgarasında
   kesin, sürekli optimumdan ortalama %0,11 uzakta, Türkiye'nin 44 673
@@ -91,12 +91,12 @@ bir web uygulamasıyla birlikte.
   fiyat, sabit ya da istasyonun doluluğundan türetilen yoğun saatler;
   maliyet odaklı planlar ucuz dönemi bekleyebilir, baskınlık yine kesin
   kalır).
-- **"+%2"lik ara şarjlara son**: isteğe bağlı asgari mola şarjı
-  (`min_stop_soc`, `--min-stop-soc`), bir eşiğin altında başlayan her
-  molanın o eşikte ya da üstünde bitmesini sağlar. "En az Δ ekle" yerine bir
-  eşik, çünkü eşik "daha fazla enerji, daha geç değil" baskınlığını korur:
+- **"+%2"lik ara şarjlara son**: her mola için isteğe bağlı bir asgari şarj
+  düzeyi (`min_stop_soc`, `--min-stop-soc`), bir tabanın altında başlayan her
+  molanın o tabanda ya da üstünde bitmesini sağlar. "En az Δ ekle" yerine bir
+  taban, çünkü taban "daha fazla enerji, daha geç değil" baskınlığını korur:
   bütün kesin planlayıcılar kesin kalır (`docs/algorithms.md` içinde Lemma
-  1F, Lemma 3F), sezgiseller hedeflerini eşiğe yükseltir, değerlendirici de
+  1F, Lemma 3F), sezgiseller hedeflerini tabana yükseltir, değerlendirici de
   kuralı denetler.
 - **Araçlar olduğu gibi**: kendi yıpranma ve soğuk davranışlarıyla NMC, NCA
   ve LFP hücreler, bir DC güç sınırı (`dc_max_kw`, `--dc-max-kw`) ve
@@ -121,8 +121,8 @@ bir web uygulamasıyla birlikte.
   `docs/real-data.tr.md` anlatır.
 - **Yalnızca test edilmedi, doğrulandı**: bağımsız bir değerlendirici her
   planı yeniden simüle eder; sabit tohumlu çapraz doğrulama paketi
-  planlayıcıları kaba kuvvet, dinamik programlar, metamorfik ilişkiler ve
-  yerel aramayla, rastgele tarifeler ve rastgele eşiklerle de sınar.
+  planlayıcıları kaba kuvvet, dinamik programlama, metamorfik bağıntılar ve
+  yerel aramayla, rastgele tarifeler ve rastgele tabanlarla da sınar.
 - **Bir web uygulaması**: https://aseloth99.github.io/evroute/ web sitesi
   tarayıcıda planlar (Pyodide; ilk ziyarette yaklaşık 6 MB) ve hazır
   örnekler sunar. Görüntüleyici yolculukları canlandırır, planlayıcıları
