@@ -182,11 +182,23 @@ with 20 % -- more energy at the same time would no longer dominate, and every
 label-setting argument below would fail.  With the floor, every exact planner
 keeps its guarantee: the target sets of BLS and Pareto contain $\varphi$
 (Section 2), CFP folds the mandatory part of a stop into its label (Section 4),
-and all lower bounds and A\* potentials stay valid because they bound the
-relaxation without the floor (the floor only removes transitions, so a potential
-that is consistent on every transition of the relaxation is consistent on the
-remaining ones).  With $\varphi = 0$ every planner runs its earlier code path and
-the results are bit-identical.
+and all lower bounds and A\* potentials stay valid: they are computed without
+the floor, and their consistency proofs hold for a charging stop to *any*
+target (they never use the target set), so they are admissible for every route
+that obeys the rule and consistent on every transition it allows, the stop to
+the extra target $\varphi$ included.  With $\varphi = 0$ every planner runs its
+earlier code path and the results are bit-identical.
+
+*Monotonicity in the floor.*  For CFP, which charges continuously, the floor
+is a pure restriction: the routes it allows are routes without it, so a higher
+floor never gives a faster optimum.  For BLS and Pareto it is not: they are
+exact over their target set, and the floor adds $\varphi$ to it.  A floor that
+is not a target anyway can therefore *improve* their optimum -- the stop to
+$\varphi$ may beat every stop to a grid target, and that plan is feasible
+without the floor as well (`test_an_off_grid_floor_can_improve_bls_and_pareto`:
+24 272 s without a floor, 23 256 s with a floor of 39.5 % on a 12.5 % grid).  A
+higher floor never gives a better BLS or Pareto optimum when it lies on the
+`charge_step_soc` grid, where it adds no target.
 
 ## 2. BLS — battery-constrained label setting
 
@@ -727,7 +739,9 @@ exact planners trade speed for energy.
    front; the whole battery of item 2 runs with random floors; CFP with the
    floor matches the dynamic programme of item 4 extended by the floor and a
    dense scan of departure energies, Lemma 3F is checked against a dense scan of
-   switch times, and a higher floor never gives a better optimum.
+   switch times; a higher floor never gives a better CFP optimum, nor a better
+   BLS optimum or Pareto front when it lies on the target grid (an off-grid
+   floor adds a target and can improve them, Section 1).
 
 The random instances are seeded grids, random geometric graphs, mountain
 corridors and tiny digraphs with every vehicle, −15 … 40 °C, 1-3 speed

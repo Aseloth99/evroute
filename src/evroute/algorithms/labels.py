@@ -148,13 +148,22 @@ phi`` then ``A``'s stop was forced, ``e_A >= phi`` and ``y > phi``) and the
 dominated-parent skip of :func:`_label_search` (an earlier parent with less
 energy may use every target the later one may use) stay exact.  The A*
 potentials, the completion energies and the upper bounds need no change:
-the potentials are lower bounds on a *relaxation* -- the problem without the
-floor -- and consistent on every transition of it, hence on the subset of
-transitions the floor allows; a label with enough energy to finish
-(:func:`completion_energy`) needs no further stop, and a route of the
-single-level search obeys the rule like every other route.  With ``phi =
-0`` the target sets and every comparison are those of the model without the
-rule, so the results are bit-identical.
+the potentials are built without the floor, and their consistency holds
+for a charging stop to *any* target (:class:`AStarPotential`), so they are
+admissible for every route that obeys the rule and consistent on every
+transition it allows, the stop to the extra target ``phi`` included; a
+label with enough energy to finish (:func:`completion_energy`) needs no
+further stop, and a route of the single-level search obeys the rule like
+every other route.  With ``phi = 0`` the target sets and every comparison
+are those of the model without the rule, so the results are bit-identical.
+
+The floor is *not* a pure restriction of BLS, though: ``phi`` is one more
+target, so a floor off the ``charge_step_soc`` grid can give a *better*
+optimum than no floor (the stop to ``phi`` may beat every stop to a grid
+target, and that plan is feasible without the floor too).  BLS is exact
+over its target set, ``phi`` included; it is monotone in the floor only
+for floors on the grid, which add no target.  CFP, whose targets are
+continuous, is monotone in the floor.
 
 Charging tariffs
 ================
@@ -475,10 +484,13 @@ class AStarPotential:
     than the stop costs.  Every part is non-increasing in ``e``, and
     ``h(destination, e) = 0`` for ``e >= e_goal``.
 
-    *Minimum stop SoC.*  The floor rule (module docs) only removes charging
-    transitions, so every potential here -- built without it -- bounds a
-    relaxation: it stays admissible, and consistent on every transition that
-    remains.
+    *Minimum stop SoC.*  Every potential here is built without the floor rule
+    (module docs).  The argument above holds for a charging stop to *any*
+    target (``D`` is arbitrary), so the potentials stay admissible for every
+    route that obeys the rule and consistent on every transition it allows,
+    the stop to the extra target ``phi`` included.  (The rule is not a pure
+    removal of transitions: ``phi`` is a target that the search without a
+    floor may not have.)
     """
 
     __slots__ = ("base", "e_lin", "e_stop", "inv_r", "name", "need", "rate", "stop")

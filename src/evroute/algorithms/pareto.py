@@ -63,7 +63,10 @@ minimum stop SoC (``P.e_stop_min > 0``) a stop that starts below that floor
 only goes to targets at or above it (the floor rule and its Lemma F in
 :mod:`evroute.algorithms.labels`); the lemma covers money and wear as well,
 so the dominance below stays exact, and the completion bounds, computed
-without the rule, bound a relaxation.
+without the rule and valid for any charging target, stay valid.  As in
+BLS, ``phi`` is one more target, so a floor off the ``charge_step_soc``
+grid can improve the front (the front is exact over the target set, which
+contains ``phi``).
 
 Dominance
 =========

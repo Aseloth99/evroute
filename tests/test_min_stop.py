@@ -19,8 +19,9 @@ the floor or above unless the vehicle arrives there with at least that much
   and breakpoint energies extended by the floor, against a dense scan of the
   departure energies on line networks, ``CFP(floor) <= BLS(floor)`` on every grid,
   ``CFP(floor) >= CFP(0)`` and the convergence of fine-grid BLS from above;
-* monotonicity in the floor (a higher floor never helps) for BLS, CFP and the
-  Pareto front, whose extremes equal BLS for both objectives;
+* monotonicity in the floor (a higher floor never helps) for CFP, and for BLS and
+  the Pareto front (whose extremes equal BLS for both objectives) between floors on
+  the target grid -- an off-grid floor adds a target and can improve them;
 * Monte Carlo replays keep the rule.
 
 ``@pytest.mark.slow`` runs the randomised checks on many more seeds.
@@ -226,7 +227,8 @@ def test_every_planner_obeys_the_rule_on_presets(preset, floor):
         for name in ("bls-astar", "cfp-astar"):
             assert plans[name].feasible, (preset, floor, obj, name, plans[name].message)
             p0 = _run(P0, name)
-            # a floor never helps (the routes it allows are routes without it; CFP minimises the time)
+            # a floor never helps: the routes it allows are routes without it (CFP minimises the time;
+            # for BLS the floors lie on the 2 % grid of the presets, so they add no target)
             v, v0 = ((plans[name].total_time_s, p0.total_time_s) if name == "cfp-astar"
                      else (plans[name].internal_objective, p0.internal_objective))
             assert v >= v0 - 1e-6 - 1e-9 * abs(v0), (preset, floor, obj, name)
@@ -361,8 +363,9 @@ def test_tariff_brute_force_with_a_floor_slow(block, request):
 def test_demo_tariff_with_holds_and_a_floor():
     """The tariff preset under the cost objective: without a floor the cheapest plan ends with a
     +3 % top-up; with one it does not, it still holds for the cheaper price period where that
-    pays, every plan obeys the rule, and a higher floor never makes the trip cheaper.  (BLS-A*
-    against the enumeration with holds: the tiny instances above.)"""
+    pays, every plan obeys the rule, and a higher floor never makes the trip cheaper (the floors
+    lie on the 5 % grid, so they add no target).  (BLS-A* against the enumeration with holds:
+    the tiny instances above.)"""
     sc = get_scenario("turkey-karaman-istanbul-tariff").with_preferences(objective="cost", charge_step_soc=0.05)
     last = -INF
     for floor in (0.0, 0.3, 0.5, 0.7):
@@ -627,7 +630,8 @@ def _covered(p: tuple, front: list[tuple], rel: float = 1e-7) -> bool:
 def test_pareto_front_with_a_floor(seed):
     """The front with a floor holds the BLS optima (time and cost) and every member obeys the
     rule; each member of the front with a higher floor is weakly dominated by a member of the
-    front with a lower one (a higher floor only removes routes)."""
+    front with a lower one (the floors lie on the 10 % target grid, so a higher one only removes
+    routes; an off-grid floor adds a target and can improve the front, see the next test)."""
     rng = random.Random(seed)
     sc = grid_scenario(rng.randint(4, 6), rng.randint(4, 6), seed=rng.randint(0, 999), n_stations=rng.randint(3, 6),
                        initial_soc=round(rng.uniform(0.15, 0.4), 3), charge_step_soc=0.1,
@@ -655,6 +659,28 @@ def test_pareto_front_with_a_floor(seed):
         fronts.append(crit)
     for lo, hi in pairwise(fronts):
         assert all(_covered(p, lo) for p in hi)
+
+
+def test_an_off_grid_floor_can_improve_bls_and_pareto():
+    """The floor is not a pure restriction for BLS and Pareto: it adds ``phi`` to their target set,
+    so a floor off the ``charge_step_soc`` grid can *improve* their optimum -- here the stop to the
+    floor (39.5 %) beats every stop to a target of the 12.5 % grid, and the plan is feasible without
+    the floor as well.  Both stay exact on their target set; CFP (continuous targets) stays
+    monotone in the floor and below them."""
+    sc = cv.tiny_scenario(cv.sample_tiny(404)).with_query(initial_soc=0.026)
+    assert sc.preferences.charge_step_soc == 0.125 and sc.preferences.objective == "time"
+    P0, P = sc.prepare(), sc.with_preferences(min_stop_soc=0.39496).prepare()
+    b0, b = _run(P0, "bls-astar"), _run(P, "bls-astar")
+    assert b.feasible and not _floor_breaches(P, b) and _binding(P, b)
+    assert b.total_time_s < b0.total_time_s - 900.0  # 23 256 s against 24 272 s
+    replay = evaluate(P0, b.decision)
+    assert replay.feasible and replay.total_time_s == pytest.approx(b.total_time_s, rel=1e-12)
+    assert _run(P, "bls").total_time_s == pytest.approx(b.total_time_s, rel=1e-9)
+    for PP, ref in ((P0, b0), (P, b)):
+        par = _run(PP, "pareto")
+        assert min(m.total_time_s for m in par.alternatives) == pytest.approx(ref.total_time_s, rel=1e-9)
+    c0, c = _run(P0, "cfp-astar"), _run(P, "cfp-astar")
+    assert c0.total_time_s <= c.total_time_s + 1e-6 and c.total_time_s <= b.total_time_s + 1e-6
 
 
 # =============================================================================
