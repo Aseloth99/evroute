@@ -650,6 +650,10 @@ Kurallar üçü için de aynıdır:
   istasyon** olur; böylece DC girişi olmayan bir araç AC noktalarını yine
   kullanabilir. Güç o türün en yüksek gücüdür, soket sayısı da aynı anda
   araç şarj edebilen nokta sayısıdır (OCPI'de hizmetteki EVSE'ler);
+- hizmet dışı bir şarj noktası (OCPI'de `INOPERATIVE` ya da `OUTOFORDER`,
+  Open Charge Map'te çalışmayan bir bağlantı) istasyona soket, konnektör
+  standardı, güç ya da tarife katmaz: tek CHAdeMO noktası arızalı olan bir
+  tesise CHAdeMO'lu bir araç yönlendirilmez;
 - fiyat dosyanın kendi fiyatıdır (CSV'de `price_per_kwh` ya da KDV
   eklenmiş OCPI tarifesinin temel enerji fiyatı); yoksa `prices.json`'daki
   doğrulanmış operatör liste fiyatı (operatör adı onu içerebilir, ör. "ZES
@@ -661,7 +665,8 @@ Kurallar üçü için de aynıdır:
 **Canlı müsaitlik.** OCPI verisinde `imported.availability[i]`, `i`
 istasyonunun anlık görüntüsüdür: `available` EVSE'ler (durumu
 `AVAILABLE`), hizmetteki `total`, `out_of_service` (`INOPERATIVE`,
-`OUTOFORDER`), duruma göre sayılar ve konumun `last_updated` zamanı;
+`OUTOFORDER`; bu EVSE'ler yalnızca anlık görüntüde yer alır), duruma göre
+sayılar ve konumun `last_updated` zamanı;
 `with_stations` bunu `scenario.meta["station_info"]` içinde saklar.
 Planlayıcılar bunu henüz kullanmaz: kuyruk modeli beklemeleri hâlâ
 Erlang-C varsayımlarından alır.

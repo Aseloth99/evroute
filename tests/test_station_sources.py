@@ -213,6 +213,29 @@ def test_ocpi_evse_states():
         stations_from_ocpi({"status_code": 2001}, net)
 
 
+def test_ocpi_evses_out_of_service_lend_the_station_nothing(net):
+    """Regression: an EVSE out of order added its connectors, power and tariffs to the station,
+    so a site with one working CCS2 point imported as a 300 kW station a CHAdeMO car could use."""
+    def conn(standard, kw, tariff):
+        return {"standard": standard, "power_type": "DC", "max_electric_power": kw * 1000, "tariff_ids": [tariff]}
+
+    tariffs = [{"id": "T-OK", "currency": "TRY", "elements": [{"price_components": [{"type": "ENERGY", "price": 10.0}]}]},
+               {"id": "T-DOWN", "currency": "TRY", "elements": [{"price_components": [{"type": "ENERGY", "price": 30.0}]}]}]
+    loc = {"id": "L", "coordinates": {"latitude": "37.4855", "longitude": "32.704"},
+           "evses": [{"uid": "E1", "status": "AVAILABLE", "connectors": [conn("IEC_62196_T2_COMBO", 50, "T-OK")]},
+                     {"uid": "E2", "status": "OUTOFORDER",
+                      "connectors": [conn("CHADEMO", 50, "T-DOWN"), conn("IEC_62196_T2_COMBO", 300, "T-DOWN")]}]}
+    for down in ("OUTOFORDER", "INOPERATIVE"):
+        loc["evses"][1]["status"] = down
+        r = stations_from_ocpi([loc], net, tariffs=tariffs)
+        (st,) = r.stations
+        assert (st.power_kw, st.plugs, st.sockets, st.price_per_kwh) == (50.0, 1, ("CCS2",), 10.0)
+        assert not st.usable_by(get_vehicle("hatch40_chademo").connectors)
+        # the broken EVSE stays in the live snapshot
+        assert r.availability[0]["out_of_service"] == 1 and r.availability[0]["status"] == {"AVAILABLE": 1, down: 1}
+        assert r.info[0]["evses"] == ["E1", "E2"]
+
+
 # ====================================================================== Open Charge Map
 def test_ocm_fixture(net):
     pois = json.loads((DATA / "stations_ocm.json").read_text(encoding="utf-8"))

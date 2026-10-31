@@ -43,7 +43,9 @@ the same node: a car without a DC inlet can still use the site's AC points.
 number of charge points that can serve a vehicle at the same time (OCPI:
 EVSEs in service; OCM: the ``Quantity`` of the connections) and
 ``connectors`` the standards of that kind
-(:data:`evroute.vehicle.CONNECTORS`).  A CSV row is one station.
+(:data:`evroute.vehicle.CONNECTORS`); charge points out of service (OCPI
+``INOPERATIVE``/``OUTOFORDER``, OCM not operational) add none of the three.
+A CSV row is one station.
 
 *Prices.*  An explicit price wins (CSV ``price_per_kwh``, an OCPI tariff);
 otherwise the operator's verified AC/DC list price of the Turkish price
@@ -599,8 +601,12 @@ def stations_from_ocpi(
     Each location gives one station per kind (DC, AC) that has an EVSE in
     service: ``REMOVED`` and ``PLANNED`` EVSEs are ignored, ``INOPERATIVE`` and
     ``OUTOFORDER`` ones count as out of service, all others (``AVAILABLE``,
-    ``CHARGING``, ``BLOCKED``, ``RESERVED``, ``UNKNOWN``) as plugs.  An EVSE
-    whose connectors carry both kinds counts for each kind.
+    ``CHARGING``, ``BLOCKED``, ``RESERVED``, ``UNKNOWN``) as plugs.  Only the
+    EVSEs in service shape the station -- its connector standards, its power
+    and its tariffs -- so a CHAdeMO car is never sent to a site whose only
+    CHAdeMO point is out of order; an EVSE out of service appears in the
+    availability snapshot alone.  An EVSE whose connectors carry both kinds
+    counts for each kind.
     :attr:`ImportedStations.availability` keeps the snapshot of the station:
     ``available`` EVSEs (status ``AVAILABLE``), ``total`` EVSEs in service,
     ``out_of_service``, the count per ``status`` and the location's
@@ -663,10 +669,11 @@ def stations_from_ocpi(
                 agg["status"][status] = agg["status"].get(status, 0) + 1
                 agg["evses"].append(str(evse.get("evse_id") or evse.get("uid") or ""))
                 if status in _OCPI_DOWN:
+                    # in the snapshot only: a broken EVSE lends the station no socket, power or tariff
                     agg["down"] += 1
-                else:
-                    agg["plugs"] += 1
-                    agg["available"] += status == "AVAILABLE"
+                    continue
+                agg["plugs"] += 1
+                agg["available"] += status == "AVAILABLE"
                 for std, kw, tids in conns:
                     agg["connectors"].add(std)
                     if kw is not None and (agg["power"] is None or kw > agg["power"]):

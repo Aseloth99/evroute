@@ -630,6 +630,10 @@ The rules are the same for all three:
   the same node, so a car without a DC inlet can still use the AC points;
   the power is the largest of the kind, the plugs are the charge points
   that can serve a car at the same time (OCPI: EVSEs in service);
+- a charge point out of service (OCPI `INOPERATIVE` or `OUTOFORDER`, an
+  OCM connection that is not operational) adds no plug, connector standard,
+  power or tariff to the station: a CHAdeMO car is not sent to a site whose
+  only CHAdeMO point is broken;
 - the price is the file's own (CSV `price_per_kwh`, or the base energy
   price of an OCPI tariff, VAT added), else the operator's verified list
   price in `prices.json` (the operator name may contain it, e.g. "ZES
@@ -639,8 +643,9 @@ The rules are the same for all three:
 
 **Live availability.**  For OCPI data `imported.availability[i]` is the
 snapshot of station `i`: `available` EVSEs (status `AVAILABLE`), `total` in
-service, `out_of_service` (`INOPERATIVE`, `OUTOFORDER`), the count per
-status and the location's `last_updated`; `with_stations` keeps it in
+service, `out_of_service` (`INOPERATIVE`, `OUTOFORDER`; these EVSEs appear
+in the snapshot only), the count per status and the location's
+`last_updated`; `with_stations` keeps it in
 `scenario.meta["station_info"]`.  The planners do not use it yet: the queue
 model still takes its waits from the Erlang-C assumptions.
 
