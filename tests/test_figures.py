@@ -403,6 +403,20 @@ def test_vehicle_figures(tmp_path):
     _assert_written(_written(tmp_path / "cons"))
 
 
+def test_charging_curves_tell_every_preset_apart():
+    """All presets with a DC inlet: past the eight palette colours a repeated colour is dashed,
+    so no two curves look alike (colour and dash pattern)."""
+    from evroute.vehicle import VEHICLES
+    from evroute.viz import style
+
+    fig = F.plot_charging_curves()
+    n = sum(1 for v in VEHICLES.values() if v.dc_capable)
+    assert n > len(style.CATEGORICAL)
+    for ax in fig.axes:
+        looks = [(ln.get_color(), ln.get_linestyle()) for ln in ax.lines if len(ln.get_xdata()) > 2]
+        assert len(looks) == n and len(set(looks)) == n, looks
+
+
 def test_charging_curve_minutes_are_exact():
     from evroute.vehicle import get_vehicle
 

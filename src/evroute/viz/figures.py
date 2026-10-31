@@ -2332,8 +2332,10 @@ def plot_charging_curves(
     are exact for the binned curve, ``sum(dSoC * battery / P)``; the shared
     legend below the panels reports the classic ``soc_from`` -> ``soc_to``
     charging time of each vehicle.  Both panels are
-    :func:`seaborn.lineplot` (colour = vehicle).  The curves are capped at a
-    vehicle's ``dc_max_kw``; vehicles without a DC inlet are left out.
+    :func:`seaborn.lineplot` (colour = vehicle; past the eight colours of the
+    categorical palette the colours repeat with a dashed line).  The curves
+    are capped at a vehicle's ``dc_max_kw``; vehicles without a DC inlet are
+    left out.
     """
     vehicles = _vehicles(vehicle_or_keys)
     with style.paper():
@@ -2342,6 +2344,7 @@ def plot_charging_curves(
         fig, (a1, a2) = style.subplots(1, 2, figsize=(w, max(h, 2.1)), wspace=0.24)
         names: list[str] = []
         palette: dict[str, str] = {}
+        dashes: dict[str, Any] = {}
         steps: dict[str, list[Any]] = {"x": [], "y": [], "hue": []}
         ramps: dict[str, list[Any]] = {"x": [], "y": [], "hue": []}
         dots: dict[str, list[Any]] = {"x": [], "y": [], "hue": []}
@@ -2354,6 +2357,7 @@ def plot_charging_curves(
             name = v.name + (f"  ({t_target:.0f} min)" if t_target is not None else "")
             names.append(name)
             palette[name] = style.categorical(k)
+            dashes[name] = "" if k < len(style.CATEGORICAL) else (3.2, 1.4)   # a repeated colour: dashed
             for b0, b1, p in zip(breaks, breaks[1:], powers):  # the piecewise-constant bins as stairs
                 steps["x"] += [100 * b0, 100 * b1]
                 steps["y"] += [p, p]
@@ -2365,9 +2369,10 @@ def plot_charging_curves(
                 dots["x"].append(t_target)
                 dots["y"].append(100 * soc_to)
                 dots["hue"].append(name)
-        common = {"hue_order": names, "palette": palette, "estimator": None, "sort": False, "lw": 1.2}
-        sns.lineplot(**steps, **common, legend=False, ax=a1)
-        sns.lineplot(**ramps, **common, legend=True, ax=a2)
+        common = {"hue_order": names, "palette": palette, "style_order": names, "dashes": dashes,
+                  "estimator": None, "sort": False, "lw": 1.2}
+        sns.lineplot(**steps, style=steps["hue"], **common, legend=False, ax=a1)
+        sns.lineplot(**ramps, style=ramps["hue"], **common, legend=True, ax=a2)
         if dots["x"]:
             sns.scatterplot(**dots, hue_order=names, palette=palette, s=13, edgecolor="white", linewidth=0.5, zorder=4,
                             legend=False, ax=a2)
