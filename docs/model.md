@@ -363,6 +363,16 @@ fit to any cell (`vehicle.AgingModel.for_chemistry`, the LFP presets):
 | usable-capacity loss in the cold $\lambda_T$ [1/K] | 0.004 | 0.006 |
 | cold charging derating $\lambda_c$ [1/K], floor $\phi_{\min}$ | 0.025, 0.35 | 0.035, 0.25 |
 
+`Vehicle.chemistry` itself is a label: the wear model (`Vehicle.aging`) and
+the three cold-derating fields are parameters of the vehicle, which the
+presets set to the values of their chemistry.  A custom vehicle gets them
+with `vehicle.with_chemistry("LFP")` (or with
+`aging=AgingModel.for_chemistry("LFP")` and the cold fields of the table);
+`with_(chemistry="LFP")` changes the label alone.  A vehicle read from JSON
+(`Vehicle.from_dict`, a scenario file) takes the chemistry's values for the
+wear and cold fields it leaves out, so `{"chemistry": "LFP", ...}` without
+them wears and derates like the LFP presets.
+
 The shape of the DC curve (the early taper of one LFP pack, the long flat
 plateau of another) belongs to each vehicle's curve, not to the chemistry.
 

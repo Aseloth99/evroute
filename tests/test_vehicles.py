@@ -394,6 +394,39 @@ def test_vehicle_json_round_trip():
         assert not {"chemistry", "dc_max_kw", "connectors"} & set(VEHICLES[key].to_dict())
 
 
+def test_chemistry_sets_wear_and_cold_derating():
+    """Regression: ``"chemistry": "LFP"`` in a JSON vehicle without ``"aging"`` kept the NMC wear
+    model and cold derating.  The fields a dict leaves out now take the chemistry's values, and
+    ``with_chemistry`` sets them; ``with_`` changes the label alone."""
+    cold = ("cold_capacity_loss_per_deg", "cold_charge_loss_per_deg", "min_cold_charge_factor")
+    lfp = get_vehicle("sedan60_lfp")
+    d = json.loads(json.dumps(lfp.to_dict()))
+    for key in ("aging", *cold):
+        del d[key]
+    assert Vehicle.from_dict(d) == lfp
+    # a partial wear model builds on the chemistry's; given fields win
+    d["aging"], d["min_cold_charge_factor"] = {"k_heat": 0.05}, 0.3
+    v = Vehicle.from_dict(d)
+    assert v.aging == AgingModel.for_chemistry("LFP", k_heat=0.05) and v.min_cold_charge_factor == 0.3
+    # the JSON of earlier versions (NMC, every field written) reads as before, also without the fields
+    nmc = get_vehicle("sedan75")
+    d = nmc.to_dict()
+    assert Vehicle.from_dict(d) == nmc
+    for key in ("aging", *cold):
+        del d[key]
+    assert Vehicle.from_dict(d) == nmc
+    # with_chemistry: label, wear and cold derating together, both ways
+    w = nmc.with_chemistry("LFP")
+    assert (w.chemistry, w.aging) == ("LFP", lfp.aging)
+    assert [getattr(w, k) for k in cold] == [getattr(lfp, k) for k in cold]
+    assert w.with_chemistry("NMC") == nmc and nmc.with_chemistry("NCA").aging == nmc.aging
+    assert nmc.with_(chemistry="LFP").aging == nmc.aging  # a label only
+    with pytest.raises(ValueError, match="chemistry"):
+        nmc.with_chemistry("NiMH")
+    with pytest.raises(ValueError, match="chemistry"):
+        Vehicle.from_dict({**nmc.to_dict(), "chemistry": "NiMH"})
+
+
 def test_scenario_json_round_trip_with_connectors():
     sc = _mixed_instance(2, "hatch40_chademo").with_(vehicle=get_vehicle("hatch40_chademo").with_(dc_max_kw=40.0))
     d = json.loads(json.dumps(sc.to_dict()))

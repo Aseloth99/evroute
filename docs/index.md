@@ -495,9 +495,10 @@ for name in ["naive", "bls-astar", "cfp"]:
 [cfp] 2 h 41 min | 260.43 km | 1 stop(s) | arrive 15.0% | 12.34 EUR
 ```
 
-Vehicles carry a cell chemistry, an optional DC power limit and their
-connector standards (`Vehicle(..., chemistry="LFP", dc_max_kw=80,
-connectors=("Type2", "CCS2"))`, stations their sockets
+Vehicles carry a cell chemistry (`vehicle.with_chemistry("LFP")` sets it
+together with its wear model and cold derating), an optional DC power limit
+and their connector standards (`Vehicle(..., dc_max_kw=80,
+connectors=("Type2", "CCS2"))`), stations their sockets
 (`Station(..., connectors=("CCS2", "CHAdeMO"))`); a planner only stops
 where the vehicle can plug in ([model §10](model.md#10-vehicles-cell-chemistry-dc-power-limit-connectors)).
 

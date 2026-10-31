@@ -45,6 +45,11 @@ NMC and NCA share the default model.  The LFP presets also derate harder in
 the cold (``cold_capacity_loss_per_deg``, ``cold_charge_loss_per_deg``,
 ``min_cold_charge_factor``).  None of these numbers is a fit to a specific
 cell: they encode the direction and the rough size of the effects only.
+The field ``chemistry`` is a label: the wear model and the cold derating
+are fields of their own, which the presets and :meth:`Vehicle.with_chemistry`
+set to the values of the chemistry and :meth:`Vehicle.from_dict` fills in
+where a dict leaves them out (``with_(chemistry=...)`` changes the label
+alone).
 
 Charging limits and connectors
 ------------------------------
@@ -267,7 +272,11 @@ class Vehicle:
     min_cold_charge_factor: float = 0.35
     aging: AgingModel = field(default_factory=AgingModel)
     notes: str = ""
-    #: Cell chemistry: ``"NMC"``, ``"NCA"`` or ``"LFP"``.
+    #: Cell chemistry: ``"NMC"``, ``"NCA"`` or ``"LFP"``.  A label: the wear model
+    #: (``aging``) and the cold derating (``cold_capacity_loss_per_deg``,
+    #: ``cold_charge_loss_per_deg``, ``min_cold_charge_factor``) are fields of their own,
+    #: set to the chemistry's values by the presets, :meth:`with_chemistry` and
+    #: :meth:`from_dict` (for the fields a dict leaves out), not by ``with_(chemistry=...)``.
     chemistry: str = "NMC"
     #: Highest DC charging power the vehicle accepts [kW] (``None``: the curve's peak).
     dc_max_kw: float | None = None
@@ -325,6 +334,14 @@ class Vehicle:
     def with_(self, **changes: Any) -> "Vehicle":
         return replace(self, **changes)
 
+    def with_chemistry(self, chemistry: str) -> "Vehicle":
+        """A copy with another cell chemistry *and* its wear model and cold derating:
+        :meth:`AgingModel.for_chemistry` and the cold fields of the presets of that
+        chemistry (they replace the vehicle's own, a custom ``aging`` included)."""
+        if chemistry not in CHEMISTRIES:
+            raise ValueError(f"vehicle {self.key!r}: unknown chemistry {chemistry!r}; choose from {list(CHEMISTRIES)}")
+        return replace(self, chemistry=chemistry, aging=AgingModel.for_chemistry(chemistry), **_COLD[chemistry])
+
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)
         d["dc_curve"] = self.dc_curve.to_dict()
@@ -337,9 +354,20 @@ class Vehicle:
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "Vehicle":
+        """Inverse of :meth:`to_dict`.  The wear-model and cold-derating fields a dict
+        leaves out take the values of its ``chemistry`` (:meth:`with_chemistry`), so
+        ``{"chemistry": "LFP", ...}`` without them wears and derates like the LFP
+        presets; :meth:`to_dict` writes them all, and the JSON of earlier versions
+        (always NMC) reads as before."""
         d = dict(d)
         d["dc_curve"] = ChargingCurve.from_dict(d["dc_curve"])
-        d["aging"] = AgingModel(**d.get("aging", {}))
+        chem = d.get("chemistry", "NMC")
+        if chem in CHEMISTRIES:
+            d["aging"] = AgingModel.for_chemistry(chem, **d.get("aging", {}))
+            for key, value in _COLD[chem].items():
+                d.setdefault(key, value)
+        else:  # the constructor reports the unknown chemistry
+            d["aging"] = AgingModel(**d.get("aging", {}))
         if "connectors" in d:
             d["connectors"] = tuple(d["connectors"])
         return cls(**d)
@@ -358,6 +386,12 @@ _LFP_COLD: dict[str, float] = {
     "cold_capacity_loss_per_deg": 0.006,
     "cold_charge_loss_per_deg": 0.035,
     "min_cold_charge_factor": 0.25,
+}
+#: Cold derating per chemistry (:meth:`Vehicle.with_chemistry`): NMC and NCA keep the
+#: defaults of :class:`Vehicle`, LFP derates like the LFP presets.
+_COLD: dict[str, dict[str, float]] = {
+    chem: _LFP_COLD if chem == "LFP" else {k: Vehicle.__dataclass_fields__[k].default for k in _LFP_COLD}
+    for chem in CHEMISTRIES
 }
 
 
