@@ -227,6 +227,17 @@
     setTimeout(done, 1000);
   }
 
+  /**
+   * A collapsible section (<details>) whose open state survives re-renders
+   * (panels.open, by `key`); `tip` explains the section in its title.
+   */
+  function details(panels, key, title, tip, ...body) {
+    const d = U.el('details', { class: 'sec' }, U.el('summary', {}, U.el('span', { text: title, 'data-tip': tip || null })), ...body);
+    if (panels.open.has(key)) d.open = true;
+    d.addEventListener('toggle', () => { if (d.open) panels.open.add(key); else panels.open.delete(key); });
+    return d;
+  }
+
   /** Tooltip of a summary metric `k` (tip_m_<k>, or the arrival-charge explanation). */
   function metricTip(k) {
     if (k === 'arrival_soc') return I.t('tip_arrival_soc');
@@ -390,6 +401,7 @@
     constructor(app) {
       this.app = app;
       this.sort = { key: null, dir: 1 };
+      this.open = new Set();   // keys of the detail sections the user opened
       this.el = {
         list: U.$('#algo-list'), summary: U.$('#summary-card'), stops: U.$('#stops'), stopsCount: U.$('#stops-count'),
         table: U.$('#cmp-table'), kv: U.$('#scenario-kv'), disclaimer: U.$('#disclaimer'),
@@ -574,6 +586,7 @@
         kids.push(U.el('div', { class: 'metrics' }, metrics.map(([k, v, cls, tip]) =>
           U.el('div', { class: `metric${cls ? ' ' + cls : ''}`, 'data-tip': tip || metricTip(k), tabindex: '0' },
             U.el('small', { text: I.t(k) }), U.el('b', { text: v })))));
+        kids.push(...this._routeDetails(r));
       }
       if (!r.feasible) {
         const msg = r._strand ? I.t('stranded_at', { km: I.km(r._strand.dist, 0) }) : (r.message || I.t('no_route'));
@@ -587,6 +600,66 @@
       }
       if (r.complete === false) kids.push(U.el('p', { class: 'summary-note', text: I.t('partial_front') }));
       U.setChildren(el, kids);
+    }
+
+    /**
+     * Research detail of a route (collapsed sections): energy breakdown,
+     * battery wear, the generalised cost and the search statistics.
+     */
+    _routeDetails(r) {
+      const app = this.app, cur = app.model.currency;
+      const veh = (app.model.scenario || {}).vehicle || {};
+      const p = app.currentPrefs();
+      const key = `${r._ri}:${r._ai}`;
+      const kwh = (x) => `${I.num(x, 1)} kWh`;
+      const dl = (rows) => U.el('dl', { class: 'kv kv-detail' }, rows.filter(Boolean).flatMap(([k, v, tip]) => [
+        U.el('dt', { text: k, 'data-tip': tip || null, class: tip ? 'tip-term' : null }), U.el('dd', { text: v })]));
+      const out = [];
+      // energy: driving consumption, recovery, auxiliaries, charging and its losses
+      const L = (r.node_energy_arrive || []).length;
+      const net = r.energy_consumed_kwh - r.energy_regen_kwh;
+      const aux = U.isNum(veh.aux_kw) ? veh.aux_kw * r.drive_time_s / 3600 : null;
+      out.push(details(this, `energy:${key}`, I.t('sec_energy'), I.t('tip_sec_energy'), dl([
+        [I.t('e_consumed'), kwh(r.energy_consumed_kwh)],
+        [I.t('e_regen'), `−${kwh(r.energy_regen_kwh)}`],
+        [I.t('e_net'), kwh(net), I.t('tip_m_energy')],
+        aux !== null ? [I.t('e_aux'), `≈ ${kwh(aux)}`, I.t('tip_e_aux', { kw: `${I.num(veh.aux_kw, 2)} kW` })] : null,
+        [I.t('e_charged'), kwh(r.energy_charged_kwh), I.t('tip_m_charged')],
+        U.isNum(r.grid_energy_kwh) ? [I.t('e_grid'), kwh(r.grid_energy_kwh)] : null,
+        U.isNum(r.grid_energy_kwh) ? [I.t('e_loss'), kwh(r.grid_energy_kwh - r.energy_charged_kwh), I.t('tip_e_loss')] : null,
+        L ? [I.t('e_start_end'), `${kwh(r.node_energy_depart[0])} → ${kwh(r.node_energy_arrive[L - 1])}`] : null,
+      ])));
+      // battery wear and its money value in the model
+      out.push(details(this, `wear:${key}`, I.t('sec_wear'), I.t('tip_sec_wear'), dl([
+        [I.t('w_drive'), I.soh(r.soh_drive_pct)],
+        [I.t('w_charge'), I.soh(r.soh_charge_pct)],
+        [I.t('w_total'), I.soh(r.soh_drive_pct + r.soh_charge_pct), I.t('tip_m_soh_short')],
+        U.isNum(r.degradation_money) ? [I.t('w_money'), I.money(r.degradation_money, cur), I.t('tip_d_wear', { c: U.isNum(p.soh_cost_per_pct) ? I.money(p.soh_cost_per_pct, cur, 0) : '–' })] : null,
+      ])));
+      // generalised cost: what the cost objective minimises
+      if (U.isNum(r.generalized_cost) && U.isNum(p.value_of_time_per_h)) {
+        const wm = U.isNum(p.weight_money) ? p.weight_money : 1, wd = U.isNum(p.weight_degradation) ? p.weight_degradation : 1;
+        const fmtW = (w) => I.num(w, w % 1 ? 2 : 0);
+        out.push(details(this, `cost:${key}`, I.t('sec_cost'), I.t('tip_sec_cost'), dl([
+          [I.t('c_time', { v: I.money(p.value_of_time_per_h, cur, 0) }), I.money(p.value_of_time_per_h * r.total_time_s / 3600, cur), I.t('tip_vot')],
+          [I.t('c_money', { w: fmtW(wm) }), I.money(wm * r.money, cur)],
+          U.isNum(r.degradation_money) ? [I.t('c_wear', { w: fmtW(wd) }), I.money(wd * r.degradation_money, cur)] : null,
+          [I.t('c_total'), I.money(r.generalized_cost, cur)],
+        ])));
+      }
+      // the planner's work
+      const st = r.stats;
+      if (st) {
+        out.push(details(this, `search:${key}`, I.t('sec_search'), I.t('tip_sec_search'), dl([
+          [I.t('s_settled'), I.num(st.settled, 0), I.t('tip_m_settled')],
+          [I.t('s_generated'), I.num(st.generated, 0)],
+          [I.t('s_pushes'), I.num(st.pushes, 0)],
+          [I.t('s_pruned'), I.num(st.pruned, 0)],
+          [I.t('s_peak_queue'), I.num(st.peak_queue, 0)],
+          [I.t('runtime'), `${I.num(st.runtime_s * 1000, st.runtime_s < 0.01 ? 2 : 0)} ms`, I.t('tip_m_runtime')],
+        ])));
+      }
+      return out;
     }
 
     /* ---------------------------------------------------------- stop cards */
@@ -606,9 +679,12 @@
         const cls = st.cls || (s.station_kind === 'AC' ? 'AC' : 'DC');
         const inPct = U.clamp(s.soc_in, 0, 1) * 100, outPct = U.clamp(s.soc_out, 0, 1) * 100;
         const hold = s.hold_s > 0
-          ? U.el('div', { class: 'stop-hold' }, U.el('i', { 'aria-hidden': 'true' }),
+          ? U.el('div', { class: 'stop-hold', 'data-tip': I.t('hold_title') }, U.el('i', { 'aria-hidden': 'true' }),
             U.el('span', { text: I.t(s.peak ? 'stop_hold' : 'stop_hold_offpeak', { m: I.minutes(s.hold_s), c: I.clock(app.model.departure + s.arrival_s + s.hold_s) }) }))
           : null;
+        const cell = (label, value, tip, cls2) => U.el('div', { class: cls2 || null, 'data-tip': tip },
+          U.el('small', { text: label }), U.el('b', { text: value }));
+        const queueTip = `${I.t('tip_stop_queue')} · ${I.t('setup')} ${I.minutes(s.setup_s)} (${I.t('tip_stop_setup').toLowerCase()})`;
         const li = U.el('li', { class: 'stop', tabindex: '0', style: { '--algo': app.colorOf(r) }, dataset: { k: String(k) } },
           U.el('div', { class: 'stop-num', text: String(s._num) }),
           U.el('div', { class: 'stop-body' },
@@ -616,7 +692,7 @@
               U.el('b', { text: s.station_name || st.name || `#${s.station}` }),
               U.el('span', { text: I.clock(app.model.departure + s.arrival_s) })),
             U.el('div', { class: 'stop-kind' },
-              U.el('span', { class: `kind-pill kind-${cls}`, text: cls }),
+              U.el('span', { class: `kind-pill kind-${cls}`, text: cls, 'data-tip': I.t(`tip_leg_${cls.toLowerCase()}`) }),
               U.el('span', { text: `${I.num(s.station_power_kw, 0)} kW${st.operator ? ' · ' + st.operator : ''} · ${I.pct(s.soc_in, 0)} → ${I.pct(s.soc_out, 0)}` }),
               tariff ? stopTariffPills(tariff, s) : null),
             hold,
@@ -624,15 +700,73 @@
               U.el('i', { class: 'soc-in', style: { width: `${inPct}%` } }),
               U.el('i', { class: 'soc-add', style: { left: `${inPct}%`, width: `${Math.max(0, outPct - inPct)}%` } })),
             U.el('div', { class: 'stop-grid' },
-              U.el('div', { class: 'q' }, U.el('small', { text: I.t('stop_queue') }), U.el('b', { text: I.minutes(s.wait_s) })),
-              U.el('div', {}, U.el('small', { text: I.t('stop_charge') }), U.el('b', { text: I.minutes(s.charge_s) })),
-              U.el('div', {}, U.el('small', { text: I.t('stop_energy') }), U.el('b', { text: `${I.num(s.energy_out_kwh - s.energy_in_kwh, 1)} kWh` })),
-              U.el('div', {}, U.el('small', { text: I.t('stop_money') }), U.el('b', { text: I.money(s.money, cur, 0) })))));
-        li.addEventListener('click', () => app.focusStop(k));
-        li.addEventListener('keydown', (ev) => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); app.focusStop(k); } });
+              cell(I.t('stop_queue'), I.minutes(s.wait_s), queueTip, 'q'),
+              cell(I.t('stop_charge'), I.minutes(s.charge_s), I.t('tip_stop_charge')),
+              cell(I.t('stop_energy'), `${I.num(s.energy_out_kwh - s.energy_in_kwh, 1)} kWh`, I.t('tip_stop_energy')),
+              cell(I.t('stop_money'), I.money(s.money, cur, 0), I.t('tip_stop_money'))),
+            this._stopDetails(r, s, st, tariff)));
+        li.addEventListener('click', (ev) => { if (!ev.target.closest('details')) app.focusStop(k); });
+        li.addEventListener('keydown', (ev) => {
+          if ((ev.key === 'Enter' || ev.key === ' ') && ev.target === li) { ev.preventDefault(); app.focusStop(k); }
+        });
         return li;
       });
       U.setChildren(this.el.stops, items);
+    }
+
+    /**
+     * The research detail of one stop (collapsed): charge and energy in and
+     * out, battery vs grid energy, average and peak power against the
+     * station's and the vehicle's limit, C-rate, the time split, price
+     * period and high-SoC share, money and battery wear.
+     */
+    _stopDetails(r, s, st, tariff) {
+      const app = this.app, cur = app.model.currency;
+      const veh = (app.model.scenario || {}).vehicle || {};
+      const prefs = app.currentPrefs();
+      const kwh = s.energy_out_kwh - s.energy_in_kwh;
+      const avg = s.charge_s > 0 ? kwh / s.charge_s * 3600 : 0;
+      let peak = 0;
+      const c = s.curve;
+      if (c && c.t && c.t.length > 1) {
+        for (let j = 0; j + 1 < c.t.length; j++) {
+          const dt = c.t[j + 1] - c.t[j];
+          if (dt > 0.5) peak = Math.max(peak, (c.e[j + 1] - c.e[j]) / dt * 3600);
+        }
+      }
+      peak = Math.max(peak, avg);
+      const ac = s.station_kind === 'AC';
+      const vehLim = ac ? veh.ac_max_kw : veh.dc_peak_kw;
+      const cap = veh.battery_kwh || r._cap;
+      const rows = [];
+      rows.push(['d_soc', `${I.pct(s.soc_in, 0)} → ${I.pct(s.soc_out, 0)} · ${I.num(s.energy_in_kwh, 1)} → ${I.num(s.energy_out_kwh, 1)} kWh`, I.t('tip_d_soc')]);
+      if (U.isNum(s.grid_energy_kwh)) {
+        rows.push(['d_energy', `${I.num(kwh, 1)} / ${I.num(s.grid_energy_kwh, 1)} kWh · ${I.t('d_loss', { k: `${I.num(s.grid_energy_kwh - kwh, 1)} kWh` })}`, I.t('tip_d_energy')]);
+      }
+      if (kwh > 0) {
+        rows.push(['d_power', `${I.num(avg, 0)} / ${I.num(peak, 0)} kW`, I.t('tip_d_power')]);
+        rows.push(['d_limits', `${I.num(s.station_power_kw, 0)} / ${U.isNum(vehLim) ? I.num(vehLim, 0) : '–'} kW`, I.t('tip_d_limits')]);
+        if (cap > 0) rows.push(['d_crate', `${I.num(avg / cap, 2)}C / ${I.num(peak / cap, 2)}C`, I.t('tip_d_crate')]);
+      }
+      const split = [[I.t('hold'), s.hold_s], [I.t('queue'), s.wait_s], [I.t('setup'), s.setup_s], [I.t('charge'), s.charge_s]]
+        .filter(([, v]) => v > 0).map(([k, v]) => `${k.toLowerCase()} ${I.minutes(v)}`).join(' · ');
+      rows.push(['d_split', split || '–', I.t('tip_d_split')]);
+      if (tariff) {
+        const hiE = tariff.high_soc * r._cap;
+        const share = kwh > 0 ? Math.max(0, s.energy_out_kwh - Math.max(s.energy_in_kwh, hiE)) / kwh : 0;
+        const p = I.pct(tariff.high_soc, 0);
+        rows.push(['d_period', `${I.t(s.peak ? 'tariff_peak_short' : 'tariff_offpeak_short')} · ${I.t('d_high_share', { p })} ${I.pct(share, 0)}`,
+          `${I.t('tip_d_period')} · ${I.t('tip_d_high_share', { p })}`]);
+      }
+      rows.push(['stop_money', I.money(s.money, cur), I.t('tip_stop_money')]);
+      if (U.isNum(s.soh_pct)) {
+        const per = prefs.soh_cost_per_pct;
+        rows.push(['d_wear', `${I.soh(s.soh_pct)}${U.isNum(per) ? ' · ' + I.money(s.soh_pct * per, cur) : ''}`,
+          I.t('tip_d_wear', { c: U.isNum(per) ? I.money(per, cur, 0) : '–' })]);
+      }
+      return details(this, `stop:${r._ri}:${r._ai}:${s._num}`, I.t('details'), null,
+        U.el('dl', { class: 'kv kv-detail' }, rows.flatMap(([k, v, tip]) => [
+          U.el('dt', { text: I.t(k), 'data-tip': tip, class: 'tip-term' }), U.el('dd', { text: v })])));
     }
 
     highlightStop(k) {
@@ -720,19 +854,21 @@
       const p = app.currentPrefs();
       const q = app.currentQuery();
       const net = app.model;
+      this._renderVehiclePanel(v);
       const rows = [
-        ['kv_vehicle', v.name || v.key || '–'],
         ['kv_battery', `${I.num(v.battery_kwh, 1)} kWh · ${I.t('kv_usable').toLowerCase()} ${I.num(v.capacity_kwh, 1)}`],
         ['kv_temperature', `${I.num(c.temperature_c, 0)} °C`],
         ['kv_departure', I.clock(q.departure_s)],
         ['kv_initial', I.pct(q.initial_soc, 0)],
         ['kv_reserve', `${I.pct(p.reserve_soc, 0)} / ${I.pct(p.min_arrival_soc, 0)}`],
+        p.min_stop_soc > 0 ? ['kv_min_stop', I.pct(p.min_stop_soc, 0)] : null,
         ['kv_objective', I.t(p.objective === 'cost' ? 'objective_cost' : 'objective_time')],
         ['kv_queues', I.t(p.queue_aware ? 'on' : 'off')],
         ['kv_speeds', (p.speed_factors || [1]).map((f) => I.pct(f, 0)).join(' / ')],
         ['kv_network', I.t('nodes_edges', { n: I.num(net.n, 0), m: I.num(net.m, 0) })],
         ['kv_stations', I.num(net.stations.length, 0)],
       ];
+      for (let i = rows.length - 1; i >= 0; i--) if (!rows[i]) rows.splice(i, 1);
       const t = app.tariff();
       const n0 = rows.length;
       if (t) {
@@ -754,6 +890,117 @@
         licence && I.t('data_licence', { l: licence })].filter(Boolean).join(' ');
       this.el.disclaimer.hidden = !disc;
       this.el.disclaimer.textContent = disc || '';
+    }
+
+    /** Research view: the scenario's vehicle with its details and its DC charging curve. */
+    _renderVehiclePanel(v) {
+      const box = U.$('#scenario-vehicle');
+      if (!box) return;
+      const kids = [];
+      if (v && (v.name || v.key)) kids.push(U.el('div', { class: 'veh-card' }, vehicleCard(this.app, v, { title: true })));
+      this._curve = null;
+      const c = v && v.dc_curve;
+      if (c && Array.isArray(c.soc_breaks) && Array.isArray(c.power_kw) && c.power_kw.length && v.dc_peak_kw > 0) {
+        const cv = U.el('canvas', { class: 'curve-canvas', role: 'img', 'aria-label': I.t('veh_curve') });
+        kids.push(U.el('div', { class: 'curve-box' },
+          U.el('div', { class: 'curve-head' }, U.el('span', { class: 'tip-term', text: I.t('veh_curve'), 'data-tip': I.t('tip_veh_curve'), tabindex: '0' })),
+          cv));
+        this._curve = { cv, v };
+        if (!this._curveRO) {
+          this._curveRO = new ResizeObserver(() => this._drawCurve());
+          this._curveRO.observe(box);
+        }
+      }
+      U.setChildren(box, kids);
+      requestAnimationFrame(() => this._drawCurve());
+    }
+
+    /**
+     * The vehicle's DC charging curve: power into the battery against SoC
+     * (the curve before the cap thin, the effective one filled), the
+     * effective limit dashed, and the power of the DC stations the selected
+     * route stops at dotted.
+     */
+    _drawCurve() {
+      const cur = this._curve;
+      if (!cur || !cur.cv.isConnected || cur.cv.offsetParent === null) return;
+      const app = this.app, th = app.theme, v = cur.v;
+      const { ctx, w, h } = U.fitCanvas(cur.cv);
+      ctx.clearRect(0, 0, w, h);
+      const sb = v.dc_curve.soc_breaks, pk = v.dc_curve.power_kw;
+      const lim = v.dc_peak_kw;
+      const raw = Math.max(...pk);
+      const sel = app.selectedRoute();
+      const powers = Array.from(new Set((sel && sel._stops ? sel._stops : []).filter((s) => s.station_kind !== 'AC').map((s) => s.station_power_kw))).sort((a, b) => a - b);
+      const yd = U.niceDomain(0, Math.max(raw, lim, ...powers) * 1.05, 3);
+      const pad = { l: 34, r: 8, t: 8, b: 18 };
+      const x0 = pad.l, x1 = w - pad.r, y0 = pad.t, y1 = h - pad.b;
+      if (x1 - x0 < 40 || y1 - y0 < 30) return;
+      const X = (soc) => x0 + soc * (x1 - x0), Y = (kw) => y1 - (kw / yd.hi) * (y1 - y0);
+      ctx.font = `500 10px ${th.font}`;
+      ctx.fillStyle = th.chartText;
+      ctx.textAlign = 'right';
+      ctx.textBaseline = 'middle';
+      for (const t of yd.ticks) {
+        ctx.strokeStyle = th.chartGrid;
+        ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.moveTo(x0, Math.round(Y(t)) + 0.5); ctx.lineTo(x1, Math.round(Y(t)) + 0.5); ctx.stroke();
+        ctx.fillText(I.num(t, 0), x0 - 5, Y(t));
+      }
+      ctx.textBaseline = 'top';
+      for (const f of [0, 0.5, 1]) {
+        ctx.textAlign = f === 0 ? 'left' : f === 1 ? 'right' : 'center';
+        ctx.fillText(I.pct(f, 0), X(f), y1 + 4);
+      }
+      const step = (cap) => {
+        ctx.beginPath();
+        for (let i = 0; i < pk.length; i++) {
+          const p = Math.min(pk[i], cap);
+          if (i === 0) ctx.moveTo(X(sb[0]), Y(p)); else ctx.lineTo(X(sb[i]), Y(p));
+          ctx.lineTo(X(sb[i + 1]), Y(p));
+        }
+      };
+      if (raw > lim + 0.5) {   // the part the limit cuts off
+        step(Infinity);
+        ctx.strokeStyle = U.rgba(th.text3, 0.7);
+        ctx.lineWidth = 1.2;
+        ctx.setLineDash([2, 2]);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
+      step(lim);
+      ctx.lineTo(X(sb[sb.length - 1]), y1);
+      ctx.lineTo(X(sb[0]), y1);
+      ctx.closePath();
+      ctx.fillStyle = U.rgba(th.accent, th.dark ? 0.22 : 0.14);
+      ctx.fill();
+      step(lim);
+      ctx.strokeStyle = th.accent;
+      ctx.lineWidth = 2;
+      ctx.lineJoin = 'round';
+      ctx.stroke();
+      const hline = (kw, color, dash, label, right) => {
+        ctx.save();
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 1.2;
+        ctx.setLineDash(dash);
+        ctx.beginPath(); ctx.moveTo(x0, Math.round(Y(kw)) + 0.5); ctx.lineTo(x1, Math.round(Y(kw)) + 0.5); ctx.stroke();
+        ctx.restore();
+        ctx.font = `650 9.5px ${th.font}`;
+        ctx.fillStyle = color;
+        ctx.textAlign = right ? 'right' : 'left';
+        ctx.textBaseline = 'bottom';
+        ctx.fillText(label, right ? x1 - 2 : x0 + 3, Y(kw) - 2);
+      };
+      // labels on the right, where the curve has tapered off; a label too close to the one above is left out
+      hline(lim, th.text2, [5, 3], I.t('curve_limit', { kw: `${I.num(lim, 0)} kW` }), true);
+      let lastY = Y(lim);
+      for (const p of powers.slice().reverse()) {
+        if (Math.abs(p - lim) <= 1) continue;
+        const near = Math.abs(Y(p) - lastY) < 12;
+        hline(p, th.cCharge, [1.5, 2.5], near ? '' : `${I.num(p, 0)} kW`, true);
+        if (!near) lastY = Y(p);
+      }
     }
 
     renderLegends() {
