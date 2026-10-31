@@ -11,8 +11,8 @@ ifadeleri ve ispatları arayan uzmanlar için bir bağlantıyla biter. Aşağıd
 her sayı kodun ürettiği bir sonuçtur (komutlar bu rehberde,
 [README](../README.tr.md) dosyasında ya da [dokümantasyonda](index.md)). Son
 bölümler uygulamaya dönüktür: hangi planlayıcının kullanılacağı, bir planın
-birkaç yüzde için mola vermesinin nasıl önleneceği ve web uygulamasının
-günlük kullanım modu. Baştan sona kullanılan örnek,
+yalnızca birkaç puanlık şarj için mola vermesinin nasıl önleneceği ve web
+uygulamasının günlük kullanım modu. Baştan sona kullanılan örnek,
 README'deki **Karaman → İstanbul** yolculuğu: 747 km, 85 kWh bataryalı bir
 C-SUV, saat 08:00'de %80 şarjla yola çıkıyor; yol boyunca ve varışta %10
 rezerv korunuyor, her şarj noktasında beklenen kuyruklar hesaba katılıyor.
