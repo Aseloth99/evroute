@@ -410,8 +410,10 @@ def stations_from_csv(
     :class:`csv.DictReader`).  Every row is one station; empty rows are
     ignored.  A row needs a position (``lat``/``lon``, ``x``/``y`` or
     ``node``) and ``power_kw``; ``price`` is accepted for ``price_per_kwh``.
-    Values are validated, and a bad value raises :class:`ValueError` naming
-    the row (a typo never passes silently).  Rows farther than
+    Values are validated, and a bad value -- or a row with more fields than
+    the header, such as ``5,50,9,99,2`` under ``node,power_kw,price_per_kwh,plugs``
+    (a decimal comma in a comma-separated file) -- raises :class:`ValueError`
+    naming the row (a typo never passes silently).  Rows farther than
     ``max_snap_m`` from every node are skipped.
 
     (:func:`evroute.generators.osm.stations_from_csv`, the reader of 0.x for
@@ -431,11 +433,17 @@ def stations_from_csv(
     for n, raw in enumerate(rows, start=1):
         row = {str(k).strip().lower(): (v.strip() if isinstance(v, str) else v)
                for k, v in raw.items() if k is not None}
-        if not any(v not in (None, "") for v in row.values()):
+        # csv.DictReader keeps the fields beyond the header under the key None
+        extra = raw.get(None) or []
+        if not any(v not in (None, "") for v in [*row.values(), *(str(x).strip() for x in extra)]):
             continue
+        where = f"row {n}"
+        if extra:  # e.g. a decimal comma in a comma-separated file: every later value would shift
+            n_head = sum(k is not None for k in raw)
+            raise ValueError(f"{where}: {n_head + len(extra)} fields, but the header has {n_head} "
+                             "(a decimal comma in a comma-separated file? quote the value or use ';')")
         if row.get("price_per_kwh") in (None, "") and row.get("price") not in (None, ""):
             row["price_per_kwh"] = row["price"]
-        where = f"row {n}"
 
         def num(key: str, *, required: bool = False, lo: float = -math.inf) -> float | None:
             v = row.get(key)

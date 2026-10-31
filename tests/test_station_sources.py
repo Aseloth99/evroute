@@ -9,6 +9,8 @@ that the price lookup in ``prices.json`` is exercised.
 
 from __future__ import annotations
 
+import csv
+import io
 import json
 import math
 from pathlib import Path
@@ -133,6 +135,21 @@ def test_csv_semicolons_and_decimal_commas(net, tmp_path):
     r = stations_from_csv(f, net)
     assert len(r) == 1 and r.stations[0].node == CUMRA_NODE
     assert (r.stations[0].price_per_kwh, r.stations[0].connectors) == (12.5, ("CCS2", "CHAdeMO"))
+
+
+def test_csv_row_with_more_fields_than_the_header(net, tmp_path):
+    """Regression: the fields beyond the header were dropped, so a decimal comma in a comma-separated
+    file shifted the values silently (``9,99`` became price 9 and 99 plugs)."""
+    f = tmp_path / "stations.csv"
+    f.write_text("node,power_kw,price_per_kwh,plugs\n5,50,9.99,2\n5,50,9,99,2\n", encoding="utf-8")
+    with pytest.raises(ValueError, match=r"row 2: 5 fields, but the header has 4 \(a decimal comma"):
+        stations_from_csv(f, net)
+    # the same from rows of csv.DictReader; a quoted decimal comma and a row of empty fields are fine
+    with pytest.raises(ValueError, match="row 1: 6 fields"):
+        stations_from_csv(csv.DictReader(io.StringIO("node,power_kw,price_per_kwh,plugs\n5,50,9,99,2,\n")), net)
+    f.write_text('node,power_kw,price_per_kwh,plugs\n5,50,"9,99",2\n,,,,,\n', encoding="utf-8")
+    (st,) = stations_from_csv(f, net).stations
+    assert (st.price_per_kwh, st.plugs) == (9.99, 2)
 
 
 def test_csv_kind_inference(net):
