@@ -30,6 +30,7 @@ On this page: [install](#install) · [command line](#command-line) ·
 [Turkey case study](#turkey-case-study) ·
 [real data](#real-data-case-study-openstreetmap) ·
 [your own network](#your-own-network-vehicle-and-chargers) ·
+[station data](#station-data-from-operators-and-open-data) ·
 [charging tariffs](#charging-tariffs) ·
 [robustness](#robustness) · [file formats](#file-formats) ·
 [FAQ](#faq-and-known-limitations) · [roadmap](#roadmap-and-ideas)
