@@ -54,6 +54,17 @@
     return wrap;
   }
 
+  /**
+   * The plan's actual arrival charge with the minimum it had to reach:
+   * "Arrival charge 14% (min. 10%)" -- the result, not the setting.
+   */
+  function arrivalSoc(app, r) {
+    const min = app.currentPrefs().min_arrival_soc;
+    return U.el('span', { class: 'arrive-soc', 'data-tip': I.t('tip_arrival_soc'), tabindex: '0' },
+      `${I.t('arrival_soc')} `, U.el('b', { text: I.pct(r.arrival_soc, 0) }),
+      U.isNum(min) ? U.el('small', { text: ` (${I.t('arrival_min', { p: I.pct(min, 0) })})` }) : null);
+  }
+
   /** Monte Carlo probability `k` of route `r` (null when not analysed). */
   function relP(r, k) {
     const rel = r.reliability;
@@ -110,6 +121,66 @@
       out.push(U.el('span', { class: 'tariff-pill high', text: I.t('tariff_high_short', { p: I.pct(t.high_soc, 0) }), title: I.t('tariff_high', { p: I.pct(t.high_soc, 0), f: fmtF(f[1] / f[0]) }) }));
     }
     return out;
+  }
+
+  /* ------------------------------------------------- vehicles and connectors */
+  /** Display names of the connector standards (Station.sockets / Vehicle.connectors). */
+  const CONNECTOR_LABEL = { Type2: 'Type 2', Type1: 'Type 1', CCS2: 'CCS2', CCS1: 'CCS1', CHAdeMO: 'CHAdeMO', NACS: 'NACS' };
+  /** Connectors that carry DC (fast charging). */
+  const DC_CONNECTORS = new Set(['CCS2', 'CCS1', 'CHAdeMO', 'NACS']);
+
+  /** Small chips of connector standards, each with its explanation as a tooltip. */
+  function connectorChips(list, focusable) {
+    return U.el('span', { class: 'conn-chips' }, (list || []).map((c) => U.el('span', {
+      class: `conn${DC_CONNECTORS.has(c) ? ' conn-dc' : ''}`, text: CONNECTOR_LABEL[c] || c,
+      'data-tip': I.STR.en[`tip_conn_${c}`] ? I.t(`tip_conn_${c}`) : null, tabindex: focusable ? '0' : null,
+    })));
+  }
+
+  /** Chemistry badge (LFP / NMC / NCA) with its explanation, or null without a chemistry. */
+  function chemBadge(chem, focusable) {
+    if (!chem) return null;
+    return U.el('span', { class: `chem-badge chem-${chem}`, text: chem, 'data-tip': I.STR.en[`tip_chem_${chem}`] ? I.t(`tip_chem_${chem}`) : null, tabindex: focusable ? '0' : null });
+  }
+
+  /**
+   * The vehicle details card: chemistry, battery, highest DC power (with a
+   * user limit `opts.limit`), on-board AC power and connectors.  `v` is a
+   * payload vehicle (vehicles[] or scenario.vehicle; any field may be
+   * missing in an older payload).
+   */
+  function vehicleCard(app, v, opts) {
+    const o = opts || {};
+    const peak = U.isNum(v.dc_peak_kw) ? v.dc_peak_kw : null;
+    const lim = U.isNum(o.limit) && o.limit > 0 ? o.limit : U.isNum(v.dc_max_kw) ? v.dc_max_kw : null;
+    let dc = I.t('veh_no_dc');
+    let dcTip = I.t('tip_veh_dc');
+    if (peak !== null && peak > 0) {
+      const capped = lim !== null && lim < peak;
+      dc = `${I.num(capped ? lim : peak, 0)} kW`;
+      if (capped) dcTip += ` · ${I.t('curve_limit', { kw: dc })} (${I.t('dc_limit_ph', { kw: `${I.num(peak, 0)} kW` })})`;
+    } else if (peak === null) dc = '–';
+    const usable = U.isNum(v.capacity_kwh) ? `${I.num(v.capacity_kwh, 1)} kWh` : '–';
+    const stat = (k, val, tip) => U.el('div', { class: 'veh-stat', 'data-tip': tip, tabindex: o.focusable ? '0' : null },
+      U.el('small', { text: I.t(k) }), U.el('b', { text: val }));
+    const conns = Array.isArray(v.connectors) && v.connectors.length ? connectorChips(v.connectors, true) : null;
+    const kids = [];
+    // chemistry and connectors in one line, the name when asked for (the picker shows it already)
+    kids.push(U.el('div', { class: 'veh-head' }, chemBadge(v.chemistry, true),
+      o.title ? U.el('b', { class: 'veh-name', text: v.name || v.key || '' }) : null,
+      conns ? U.el('span', { class: 'veh-conn', 'aria-label': I.t('veh_connectors') }, conns) : null));
+    kids.push(U.el('div', { class: 'veh-stats' },
+      stat('veh_battery', U.isNum(v.battery_kwh) ? `${I.num(v.battery_kwh, v.battery_kwh % 1 ? 1 : 0)} kWh` : '–', I.t('tip_veh_battery', { u: usable })),
+      stat('veh_dc', dc, dcTip),
+      stat('veh_ac', U.isNum(v.ac_max_kw) ? `${I.num(v.ac_max_kw, v.ac_max_kw % 1 ? 1 : 0)} kW` : '–', I.t('tip_veh_ac'))));
+    return kids;
+  }
+
+  /** Tooltip of an algorithm: its plain-language description and its guarantee. */
+  function algoTip(info) {
+    const g = info.exact || 'heuristic';
+    const desc = I.algoDescription(info);
+    return [desc, `${I.t(`g_${g}`)}: ${I.t(`g_${g}_title`)}`].filter(Boolean).join(' · ');
   }
 
   /** Columns of the comparison table: [key, label, value(r), format(v, r), better, title]. */
@@ -212,7 +283,8 @@
       if (r.feasible) {
         kids.push(U.el('div', { class: 'summary-hero' },
           U.el('span', { class: 'big', text: I.duration(r.total_time_s) }),
-          U.el('span', { class: 'arrive', text: `${I.t('arrival')} ${I.clock(app.model.departure + r.total_time_s)}` })));
+          U.el('span', { class: 'arrive', text: `${I.t('arrival')} ${I.clock(app.model.departure + r.total_time_s)}` }),
+          arrivalSoc(app, r)));
       } else {
         kids.push(U.el('div', { class: 'summary-hero' }, U.el('span', { class: 'big', text: '—' }),
           budgetStopped(r) ? U.el('span', { class: 'badge badge-partial', text: I.t('g_incomplete') })
@@ -435,6 +507,8 @@
 
     renderLegends() {
       const app = this.app, th = app.theme;
+      const off = U.$('#legend-off');
+      if (off) off.hidden = !app.model.stations.some((st) => st.usable === false);
       const routes = app.visibleRoutes();
       U.setChildren(this.el.legendSoc,
         routes.map((r) => U.el('span', { style: { '--algo': app.colorOf(r) } }, U.el('i'), r.title)),
@@ -460,17 +534,26 @@
       kids.push(U.el('div', { class: 'tip-sub' },
         U.el('span', { class: `kind-pill kind-${main.cls}`, text: main.cls }),
         U.el('span', { text: `${I.t('tip_operator')}: ${main.operator || '–'}` })));
+      // the vehicle of the shown plan cannot plug in here (payload "usable")
+      const off = sts.filter((st) => st.usable === false);
+      if (off.length) kids.push(U.el('div', { class: 'tip-warn', text: off.length === sts.length ? I.t('st_unusable') : `${off.map((st) => st.name || st.cls).join(', ')}: ${I.t('st_unusable')}` }));
       const grid = U.el('div', { class: 'tip-grid' });
       for (const st of sts) {
         if (sts.length > 1) {
-          grid.append(U.el('span', { text: st.name || st.cls, style: { gridColumn: '1 / 3', fontWeight: '650', color: 'var(--text)', marginTop: '4px' } }));
+          grid.append(U.el('span', { class: 'tip-grid-head', text: st.name || st.cls }));
         }
-        grid.append(
-          U.el('span', { text: I.t('tip_power') }), U.el('span', { text: `${st.kind} ${I.num(st.power_kw, 0)} kW` }),
-          U.el('span', { text: I.t('tip_plugs') }), U.el('span', { text: I.num(st.plugs, 0) }),
-          U.el('span', { text: I.t('tip_price') }), U.el('span', { text: `${I.money(st.price_per_kwh, cur)}/kWh` }),
-          ...tipTariff(st, tod, cur),
-          U.el('span', { text: I.t('tip_wait', { c: I.clock(tod, false) }) }), U.el('span', { text: I.minutes(M.waitAt(st.wait_profile, tod)) }));
+        grid.append(...kv(I.t('tip_power'), `${st.kind} ${I.num(st.power_kw, 0)} kW`), ...kv(I.t('tip_plugs'), I.num(st.plugs, 0)));
+        if (Array.isArray(st.connectors) && st.connectors.length) {
+          grid.append(...kv(I.t('tip_connectors'), connectorChips(st.connectors)));
+        }
+        grid.append(...kv(I.t('tip_price'), `${I.money(st.price_per_kwh, cur)}/kWh`), ...tipTariff(st, tod, cur));
+        if (st.peak_s && st.peak_s.length) {
+          grid.append(...kv(I.t('tip_peak_hours'), st.peak_s.map((iv) => `${I.clock(iv[0], false)}–${I.clock(iv[1], false)}`).join(', ')));
+        }
+        grid.append(...kv(I.t('tip_wait', { c: I.clock(tod, false) }), I.minutes(M.waitAt(st.wait_profile, tod))));
+        if (st.usable !== undefined && sts.length === 1) {
+          grid.append(...kv(I.t('tip_vehicle_fit'), st.usable ? `✓ ${I.t('st_usable')}` : `✕ ${I.t('st_unusable')}`, st.usable ? 'ok' : 'bad'));
+        }
       }
       kids.push(grid);
       const spark = U.el('canvas', { class: 'tip-spark', 'aria-hidden': 'true' });
@@ -480,17 +563,24 @@
     }
   }
 
+  /** One row of a key/value grid: [label, value] (value: text or a node; `cls` added to the value). */
+  function kv(label, value, cls) {
+    return [U.el('span', { class: 'k', text: label }),
+      U.el('span', { class: `v${cls ? ' ' + cls : ''}` }, value)];
+  }
+
   /** Station tooltip rows of a charging tariff: the price below the high-SoC threshold now ([] without a tariff). */
   function tipTariff(st, tod, cur) {
     const f = st.price_factors;
     if (!f || !st.peak_s) return [];
     const peak = M.isPeakAt(st, tod);
     const below = (peak ? f.peak : f.offpeak)[0];
-    return [
-      U.el('span', { text: I.t('tip_tariff', { c: I.clock(tod, false) }) }),
-      U.el('span', { text: `${I.money(st.price_per_kwh * below, cur)}/kWh · ${I.t(peak ? 'tariff_peak_short' : 'tariff_offpeak_short')}` }),
-    ];
+    return kv(I.t('tip_tariff', { c: I.clock(tod, false) }),
+      `${I.money(st.price_per_kwh * below, cur)}/kWh · ${I.t(peak ? 'tariff_peak_short' : 'tariff_offpeak_short')}`);
   }
 
-  EVR.panels = { Panels, guaranteeBadge, budgetStopped, stoppedText, tariffText, tariffFactors };
+  EVR.panels = {
+    Panels, guaranteeBadge, budgetStopped, stoppedText, tariffText, tariffFactors, arrivalSoc,
+    vehicleCard, connectorChips, chemBadge, algoTip, CONNECTOR_LABEL, DC_CONNECTORS,
+  };
 })(window.EVR = window.EVR || {});

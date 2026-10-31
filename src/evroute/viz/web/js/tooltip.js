@@ -59,6 +59,7 @@
       doc.addEventListener('focusout', () => this.hide());
       doc.addEventListener('keydown', (ev) => { if (ev.key === 'Escape' && this.target) this.hide(); }, true);
       window.addEventListener('scroll', () => this.hide(), true);
+      doc.addEventListener('input', () => this.hide(), true);   // typing into a field: out of the way
       window.addEventListener('resize', () => this.hide());
       // touch: a long press shows the tip; the click that ends the press is swallowed
       doc.addEventListener('pointerdown', (ev) => {

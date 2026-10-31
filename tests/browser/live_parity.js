@@ -41,7 +41,10 @@ async function main() {
   for (const c of cases) {
     const current = await page.evaluate(() => window.EVR.app.payload.scenario_preset);
     if (current !== c.scenario) {
-      await page.selectOption('#in-scenario', c.scenario);
+      // the searchable scenario picker, as a visitor uses it: type the name, Enter
+      await page.click('#in-scenario-combo');
+      await page.fill('#in-scenario-combo', c.scenario);
+      await page.keyboard.press('Enter');
       await page.waitForFunction((name) => window.EVR.app.payload.scenario_preset === name, c.scenario, { timeout: 120000 });
       await idle();
     }

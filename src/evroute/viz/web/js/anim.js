@@ -385,7 +385,7 @@
         case 'wait': cls = 'queue'; txt = `${I.t('st_queue')} · ${sname} · ${I.t('min_left', { m: I.minutes(st.left) })}`; break;
         case 'setup': cls = 'setup'; txt = `${I.t('st_setup')} · ${sname}`; break;
         case 'charge': cls = 'charge'; txt = `${I.t('st_charge')} · ${I.num(st.power, 0)} kW · ${I.t('min_left', { m: I.minutes(st.left) })}`; break;
-        case 'done': cls = 'done'; txt = `${I.t('st_done')} · ${I.clock(app.model.departure + sel._tl.tEnd)} · ${I.pct(st.soc, 0)}`; break;
+        case 'done': cls = 'done'; txt = `${I.t('st_done')} · ${I.clock(app.model.departure + sel._tl.tEnd)} · ${I.t('arrival_soc')} ${I.pct(st.soc, 0)}`; break;
         case 'stranded': cls = 'stranded'; txt = `${I.t('st_stranded')} · ${I.km(st.dist)}`; break;
         default: txt = '';
       }

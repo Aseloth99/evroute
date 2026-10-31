@@ -386,6 +386,11 @@
       if (Array.isArray(data.wait_profiles)) {
         data.wait_profiles.forEach((p, i) => { if (this.model.stations[i]) this.model.stations[i].wait_profile = p; });
       }
+      // the stations the planned vehicle can plug into (absent in an older answer: unchanged)
+      if (Array.isArray(data.station_usable)) {
+        data.station_usable.forEach((u, i) => { if (this.model.stations[i]) this.model.stations[i].usable = !!u; });
+        this.map._stNodes = null;
+      }
       // peak periods and price factors follow the tariff of the planned scenario (absent: no tariff)
       const tariffs = Array.isArray(data.station_tariffs) ? data.station_tariffs : null;
       this.model.stations.forEach((st, i) => {

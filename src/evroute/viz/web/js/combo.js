@@ -8,9 +8,9 @@
  *
  *   typing          filters the options (Turkish-aware, accent- and
  *                   case-insensitive: EVR.util.fold), best matches first
- *                   (the start of the text, then the start of a word, then
- *                   anywhere), the match highlighted; a "no match" row
- *                   when nothing fits
+ *                   (the whole text, the start of the text, the start of a
+ *                   word, anywhere, then the extra search text), the match
+ *                   highlighted; a "no match" row when nothing fits
  *   ArrowDown/Up    open the list / move the active option
  *   Home/End        first / last option (while the list is open)
  *   Enter           choose the active option
@@ -18,7 +18,10 @@
  *   mouse, touch    click (tap) an option; the chevron opens the list
  *
  * Choosing an option sets the <select>'s value and dispatches `change` on
- * it.  When code changes the <select> without an event, call sync().
+ * it.  When code changes the <select> without an event, call sync().  The
+ * list is positioned in the viewport (position: fixed), below the field or
+ * above it when there is more room there, so a scrolling side panel never
+ * clips it.
  */
 (function (EVR) {
   'use strict';
@@ -68,7 +71,8 @@
 
     _wire() {
       const inp = this.input;
-      inp.addEventListener('focus', () => { inp.select(); });
+      // select the text, so that typing replaces it (backwards: the start of a long name stays in view)
+      inp.addEventListener('focus', () => { try { inp.setSelectionRange(0, inp.value.length, 'backward'); } catch (e) { inp.select(); } });
       inp.addEventListener('click', () => { if (!this.open) this.openList(''); });
       inp.addEventListener('input', () => this.openList(inp.value));
       inp.addEventListener('keydown', (ev) => this._key(ev));
@@ -91,6 +95,25 @@
         if (li) this._setActive(this.shown.indexOf(+li.dataset.k), false);
       });
       this.select.addEventListener('change', () => this.sync());
+      // the list follows its field when a panel scrolls or the window resizes
+      const follow = (ev) => { if (this.open && !(ev && ev.target === this.list)) this._place(); };
+      window.addEventListener('scroll', follow, true);
+      window.addEventListener('resize', follow);
+    }
+
+    /** Put the open list under the field (or above it when there is more room above). */
+    _place() {
+      const r = this.input.getBoundingClientRect();
+      const vh = window.innerHeight;
+      const below = vh - r.bottom - 8, above = r.top - 8;
+      const up = below < 220 && above > below;
+      const room = Math.max(120, Math.min(320, up ? above : below));
+      const st = this.list.style;
+      st.left = `${Math.round(r.left)}px`;
+      st.width = `${Math.round(Math.max(r.width, Math.min(320, window.innerWidth - r.left - 8)))}px`;
+      st.maxHeight = `${Math.round(room)}px`;
+      if (up) { st.top = 'auto'; st.bottom = `${Math.round(vh - r.top + 4)}px`; } else { st.bottom = 'auto'; st.top = `${Math.round(r.bottom + 4)}px`; }
+      this.list.dataset.side = up ? 'above' : 'below';
     }
 
     _key(ev) {
@@ -154,7 +177,7 @@
         rows = [];
         for (const it of this.items) {
           const at = it.fm.f.indexOf(q);
-          if (at === 0) rows.push({ it, rank: 0, at });
+          if (at === 0) rows.push({ it, rank: it.fm.f.length === q.length ? -1 : 0, at });   // the whole text first
           else if (at > 0) {
             // a word start ("bul" does not rank "İstanbul" first, "ist" does)
             let ws = -1;
@@ -168,7 +191,7 @@
         rows.sort((a, b) => a.rank - b.rank || a.it.k - b.it.k);
       }
       this.shown = rows.map((r) => r.it.k);
-      const lis = rows.slice(0, MAX_ROWS).map((r, j) => this._row(r, q, j));
+      const lis = rows.slice(0, MAX_ROWS).map((r) => this._row(r, q));
       if (rows.length > MAX_ROWS) {
         lis.push(U.el('li', { class: 'combo-more', role: 'presentation', text: I.t('combo_more', { n: I.num(rows.length - MAX_ROWS, 0) }) }));
         this.shown.length = MAX_ROWS;
@@ -177,6 +200,7 @@
       U.setChildren(this.list, lis);
       this.list.hidden = false;
       this.open = true;
+      this._place();
       this.wrap.classList.add('open');
       this.input.setAttribute('aria-expanded', 'true');
       this._setActive(q ? (this.shown.length ? 0 : -1) : -1, false);
@@ -186,7 +210,7 @@
       }
     }
 
-    _row(r, q, j) {
+    _row(r, q) {
       const it = r.it;
       const li = U.el('li', {
         role: 'option', id: `${this.id}-opt-${it.k}`, 'data-k': String(it.k),
@@ -203,7 +227,6 @@
       if (it.info.badge) kids.push(U.el('span', { class: `chem-badge ${it.info.badgeClass || ''}`, text: it.info.badge }));
       if (it.info.sub) kids.push(U.el('span', { class: 'combo-sub', text: it.info.sub }));
       li.append(...kids);
-      if (j === undefined) return li;
       return li;
     }
 

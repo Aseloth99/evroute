@@ -381,9 +381,10 @@ def _page_request(payload: dict, algorithms: list[str]) -> dict:
         "objective": prefs["objective"], "value_of_time_per_h": prefs["value_of_time_per_h"],
         "speed_factors": [1.0, 0.9, 0.8] if len(prefs["speed_factors"]) > 1 else [1.0],
         "queue_aware": prefs["queue_aware"], "departure_s": int(dep // 3600) * 3600 + int(dep % 3600 // 60) * 60,
+        "min_stop_soc": round(prefs.get("min_stop_soc", 0.0) * 100) / 100,
     }
     if not payload["scenario"].get("tariff"):
-        body["tariff"] = "flat"  # the tariff switch is shown (demonstration tariff) and off
+        body["tariff"] = "80"  # the tariff switch starts on: the demonstration tariff
     return body
 
 
@@ -397,8 +398,14 @@ _STOP_FIELDS = ("station", "position", "arrival_s", "hold_s", "wait_s", "charge_
 
 
 def _cli_plan(preset: str, algo: str, tmp_path: Path, capsys) -> dict:
+    """`evroute plan` of the page's default trip: with the demonstration tariff, which the page's
+    tariff switch starts with (a preset with a tariff of its own keeps it)."""
+    from evroute.generators.presets import get_scenario
+    from evroute.scenario import Tariff
+
     path = tmp_path / f"{preset}-{algo}.json"
-    rc = cli_main(["plan", preset, "-a", algo, "--json", str(path)])
+    tariff = ["--tariff", "80"] if get_scenario(preset).tariff == Tariff() else []
+    rc = cli_main(["plan", preset, "-a", algo, "--json", str(path), *tariff])
     out = capsys.readouterr().out
     assert rc == 0, out
     d = json.loads(path.read_text(encoding="utf-8"))

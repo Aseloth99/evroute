@@ -253,6 +253,8 @@
       `--reserve ${pc(body.reserve_soc)}`, `--arrive ${pc(body.min_arrival_soc)}`,
       `--depart ${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`];
     if (body.vehicle) opts.push(`--vehicle ${body.vehicle}`);
+    if (body.dc_max_kw) opts.push(`--dc-max-kw ${body.dc_max_kw}`);
+    if (body.min_stop_soc > 0) opts.push(`--min-stop-soc ${pc(body.min_stop_soc)}`);
     if (body.objective && body.objective !== 'time') opts.push(`--objective ${body.objective}`);
     if ((body.speed_factors || []).length > 1) opts.push('--eco');
     if (body.queue_aware === false) opts.push('--no-queue');
@@ -298,7 +300,17 @@
         eco: U.$('#in-eco'), queue: U.$('#in-queue'), tariff: U.$('#in-tariff'), fieldTariff: U.$('#field-tariff'), algos: U.$('#algo-picks'), plan: U.$('#btn-plan'), error: U.$('#plan-error'),
         noteBox: U.$('#plan-note'), stop: U.$('#btn-stop'), planOwn: U.$('#plan-own'), pickHint: U.$('#pick-hint'),
         outSoc: U.$('#out-soc'), outTemp: U.$('#out-temp'), outReserve: U.$('#out-reserve'), outArrive: U.$('#out-arrive'),
+        minstop: U.$('#in-minstop'), outMinstop: U.$('#out-minstop'), chips: U.$('#style-chips'), prio: U.$('#prio-seg'),
+        dcmax: U.$('#in-dcmax'), vehCard: U.$('#veh-card'),
         busyText: U.$('#map-busy-text'), bootBox: U.$('#boot'),
+      };
+      // searchable pickers; the <select>s stay the source of truth
+      const Combo = EVR.combo.Combo;
+      this.combos = {
+        scenario: new Combo(this.el.scenario, { extra: (v, o) => o.title }),
+        origin: new Combo(this.el.origin),
+        destination: new Combo(this.el.destination),
+        vehicle: new Combo(this.el.vehicle, { describe: (key) => vehicleOption(this.vehicleInfo(key)), extra: (key) => key }),
       };
       this.el.card.hidden = false;
       if (this.el.planOwn) this.el.planOwn.hidden = false;   // phones: a shortcut from the map to the form
@@ -321,6 +333,7 @@
       for (const [inp, out, fmt] of [
         [el.soc, el.outSoc, (v) => I.pct(v / 100, 0)], [el.temp, el.outTemp, (v) => `${v} °C`],
         [el.reserve, el.outReserve, (v) => I.pct(v / 100, 0)], [el.arrive, el.outArrive, (v) => I.pct(v / 100, 0)],
+        [el.minstop, el.outMinstop, (v) => (v > 0 ? I.pct(v / 100, 0) : I.t('min_stop_off'))],
       ]) {
         const upd = () => {
           out.textContent = fmt(+inp.value);
@@ -330,6 +343,24 @@
         inp.addEventListener('input', upd);
         inp._upd = upd;
       }
+      // charging style chips: a minimum stop SoC relative to the reserve; the pressed one again: off
+      el.minstop.addEventListener('input', () => this._syncChips());
+      el.reserve.addEventListener('input', () => this._syncChips());
+      for (const b of el.chips.querySelectorAll('button')) {
+        b.addEventListener('click', () => {
+          const want = this._styleValue(b.dataset.style);
+          el.minstop.value = String(+el.minstop.value === want ? 0 : want);
+          el.minstop._upd();
+          this._syncChips();
+        });
+      }
+      // priority (everyday mode): the objective of the plan
+      for (const b of el.prio.querySelectorAll('button')) {
+        b.addEventListener('click', () => { el.objective.value = b.dataset.prio; this._syncPrio(); });
+      }
+      el.objective.addEventListener('change', () => this._syncPrio());
+      el.vehicle.addEventListener('change', () => this._renderVehicle());
+      el.dcmax.addEventListener('change', () => { this._dcLimit(); this._renderVehicle(); });
       el.origin.addEventListener('change', () => this.setNode('origin', +el.origin.value, false));
       el.destination.addEventListener('change', () => this.setNode('destination', +el.destination.value, false));
       el.swap.addEventListener('click', () => {
@@ -373,6 +404,8 @@
         temperature_c: (sc.conditions || {}).temperature_c ?? 20,
         reserve_soc: prefs.reserve_soc ?? 0.1,
         min_arrival_soc: prefs.min_arrival_soc ?? 0.1,
+        min_stop_soc: prefs.min_stop_soc ?? 0,
+        dc_max_kw: (sc.vehicle || {}).dc_max_kw ?? null,
         objective: prefs.objective || 'time',
         departure_s: q.departure_s || 0,
         value_of_time_per_h: prefs.value_of_time_per_h ?? 15,
@@ -403,12 +436,16 @@
       }
       this._syncOD();
       el.vehicle.textContent = '';
-      for (const veh of p.vehicles || []) el.vehicle.appendChild(U.el('option', { value: veh.key, text: `${veh.name}` }));
+      const vehicles = (p.vehicles || []).length ? p.vehicles : [(app.model.scenario || {}).vehicle || {}].filter((x) => x.key);
+      for (const veh of vehicles) el.vehicle.appendChild(U.el('option', { value: veh.key, text: `${veh.name}` }));
       el.vehicle.value = v.vehicle || '';
+      this.combos.vehicle.sync();
+      el.dcmax.value = U.isNum(v.dc_max_kw) ? String(Math.round(v.dc_max_kw)) : '';
       el.soc.value = Math.round(v.initial_soc * 100);
       el.temp.value = Math.round(v.temperature_c);
       el.reserve.value = Math.round(v.reserve_soc * 100);
       el.arrive.value = Math.round(v.min_arrival_soc * 100);
+      el.minstop.value = Math.round((v.min_stop_soc || 0) * 100);
       el.objective.value = v.objective;
       el.depart.value = I.clock(v.departure_s, false);
       el.vot.value = v.value_of_time_per_h;
@@ -420,8 +457,11 @@
       const base = (p.scenario || {}).tariff || null;
       el.fieldTariff.hidden = !(demo || base);
       el.tariff.checked = v.tariff_on;
-      el.fieldTariff.title = `${EVR.panels.tariffText(base || demo)} · ${I.t('tariff_illustrative')}`;
-      for (const inp of [el.soc, el.temp, el.reserve, el.arrive]) inp._upd();
+      EVR.tooltip.setTip(el.fieldTariff, `${I.t('tip_tariff_toggle')} ${EVR.panels.tariffText(base || demo)} · ${I.t('tariff_illustrative')}`);
+      for (const inp of [el.soc, el.temp, el.reserve, el.arrive, el.minstop]) inp._upd();
+      this._syncChips();
+      this._syncPrio();
+      this._renderVehicle();
       // algorithm checkboxes: those of the run under way, else those of the results shown
       const have = new Set(this.running || app.model.results.map((r) => r.algorithm));
       if (!this.running) for (const e of this.note ? this.note.stopped : []) have.add(e);
@@ -430,7 +470,7 @@
         const cb = U.el('input', { type: 'checkbox', value: a.name });
         // the server's defaults: without greedy and station graph on a large (real-data) network
         cb.checked = have.size ? have.has(a.name) : (p.default_algorithms || DEFAULT_ALGOS).includes(a.name);
-        el.algos.appendChild(U.el('label', { class: 'check', title: I.algoDescription(a), style: { '--algo': app.theme.dark ? a.color_dark : a.color } },
+        el.algos.appendChild(U.el('label', { class: 'check', 'data-tip': EVR.panels.algoTip(a), style: { '--algo': app.theme.dark ? a.color_dark : a.color } },
           cb, U.el('span', { text: I.algoTitle(a.name, a.short_title || a.title) })));
       }
       this._renderNote();
@@ -444,6 +484,63 @@
           sel.appendChild(U.el('option', { value: node, text: this.app.model.nodeLabel(node) }));
         }
         sel.value = String(node);
+      }
+      this.combos.origin.sync();
+      this.combos.destination.sync();
+    }
+
+    /* ------------------------------------------------- vehicle, style, priority */
+    /** The payload's entry of vehicle `key` with the scenario's vehicle data when it is that vehicle. */
+    vehicleInfo(key) {
+      const sc = (this.app.model.scenario || {}).vehicle || {};
+      const v = (this.app.payload.vehicles || []).find((x) => x.key === key) || (sc.key === key ? sc : null);
+      if (!v) return null;
+      return sc.key === key ? Object.assign({}, sc, v, { capacity_kwh: sc.capacity_kwh, dc_curve: sc.dc_curve }) : v;
+    }
+
+    /** The DC limit field: empty, or a number clamped to the range the planner accepts (3..500 kW). */
+    _dcLimit() {
+      const raw = this.el.dcmax.value.trim();
+      if (!raw) return null;
+      const x = Number(raw.replace(',', '.'));
+      if (!isFinite(x) || x <= 0) { this.el.dcmax.value = ''; return null; }
+      const v = Math.round(U.clamp(x, 3, 500));
+      if (String(v) !== raw) this.el.dcmax.value = String(v);
+      return v;
+    }
+
+    _renderVehicle() {
+      const el = this.el;
+      const v = this.vehicleInfo(el.vehicle.value);
+      const lim = this._dcLimit();
+      U.setChildren(el.vehCard, v ? EVR.panels.vehicleCard(this.app, v, { limit: lim }) : []);
+      el.dcmax.placeholder = v && v.dc_peak_kw > 0 ? I.t('dc_limit_ph', { kw: `${I.num(v.dc_peak_kw, 0)} kW` }) : '';
+      el.dcmax.disabled = !!v && !(v.dc_peak_kw > 0);
+    }
+
+    /** Minimum stop SoC [%] of a charging style: the reserve + 10 / 30 / 40 points, at most the highest charge. */
+    _styleValue(style) {
+      const add = { hurry: 10, balanced: 30, relaxed: 40 }[style] || 0;
+      const prefs = this.app.currentPrefs();
+      const top = Math.min(+this.el.minstop.max, Math.round(100 * (prefs.max_charge_soc ?? 1)));
+      return Math.min(top, +this.el.reserve.value + add);
+    }
+
+    _syncChips() {
+      const cur = +this.el.minstop.value;
+      for (const b of this.el.chips.querySelectorAll('button')) {
+        const val = this._styleValue(b.dataset.style);
+        b.setAttribute('aria-pressed', String(cur > 0 && cur === val));
+        EVR.tooltip.setTip(b, I.t(`tip_style_${b.dataset.style}`, { p: I.pct(val / 100, 0) }));
+      }
+    }
+
+    _syncPrio() {
+      const obj = this.el.objective.value;
+      for (const b of this.el.prio.querySelectorAll('button')) {
+        b.setAttribute('aria-pressed', String(b.dataset.prio === obj));
+        const vot = `${I.money(+this.el.vot.value || 0, this.app.model.currency, 0)}${I.t('per_hour')}`;
+        EVR.tooltip.setTip(b, b.dataset.prio === 'cost' ? I.t('tip_prio_cheap', { v: vot }) : I.t('tip_prio_fast'));
       }
     }
 
@@ -484,6 +581,8 @@
         temperature_c: +el.temp.value,
         reserve_soc: +el.reserve.value / 100,
         min_arrival_soc: +el.arrive.value / 100,
+        min_stop_soc: +el.minstop.value / 100,
+        dc_max_kw: this._dcLimit() || undefined,
         objective: el.objective.value,
         value_of_time_per_h: Math.max(0, +el.vot.value || 0),
         speed_factors: el.eco.checked ? [1.0, 0.9, 0.8] : [1.0],
@@ -707,6 +806,7 @@
         for (const s of data.scenarios || []) sel.appendChild(U.el('option', { value: s.name, text: s.name, title: s.description || '' }));
         const cur = this.app.payload.scenario_preset || ((this.app.model.scenario.meta || {}).preset) || this.app.model.scenario.name;
         sel.value = cur;
+        this.combos.scenario.sync();
         this.el.fieldScenario.hidden = !(data.scenarios || []).length;
       } catch (e) {
         // a worker stopped by a time limit (or by the visitor) while the list was asked for: ask again
@@ -734,6 +834,15 @@
       this.setBusy(false);
       this.plan();
     }
+  }
+
+  /** What the vehicle picker shows under a vehicle's name: battery, DC power and a chemistry badge. */
+  function vehicleOption(v) {
+    if (!v) return {};
+    const parts = [];
+    if (U.isNum(v.battery_kwh)) parts.push(`${I.num(v.battery_kwh, 0)} kWh`);
+    if (U.isNum(v.dc_peak_kw)) parts.push(v.dc_peak_kw > 0 ? `${I.num(v.dc_peak_kw, 0)} kW DC` : I.t('veh_no_dc'));
+    return { sub: parts.join(' · '), badge: v.chemistry || '', badgeClass: v.chemistry ? `chem-${v.chemistry}` : '' };
   }
 
   EVR.live = { Live, DEFAULT_ALGOS, RUN_ORDER, runOrder, HttpTransport, WorkerTransport, cliCommand };

@@ -73,80 +73,100 @@
   <aside class="panel panel-left" id="panel-left" data-i18n-aria="controls">
 
     <section class="card live-card" id="live-card" hidden>
-      <div class="card-head"><h2 data-i18n="plan_trip">Rota planla</h2><span class="badge badge-live" data-i18n="live">canlı</span></div>
-      <div class="field" id="field-scenario">
+      <div class="card-head"><h2 data-i18n="plan_trip">Rota planla</h2><span class="badge badge-live" data-i18n="live" data-i18n-tip="tip_live" tabindex="0">canlı</span></div>
+      <div class="field" id="field-scenario" data-i18n-tip="tip_scenario">
         <label for="in-scenario" data-i18n="scenario">Senaryo</label>
         <select id="in-scenario"></select>
       </div>
       <div class="od-grid">
-        <div class="field">
+        <div class="field" data-i18n-tip="tip_origin">
           <label for="in-origin"><span><span data-od="A"></span><span data-i18n="origin">Başlangıç</span></span></label>
           <select id="in-origin"></select>
         </div>
-        <button type="button" class="btn-icon btn-swap" id="btn-swap" data-i18n-aria="swap" data-i18n-title="swap">
+        <button type="button" class="btn-icon btn-swap" id="btn-swap" data-i18n-aria="swap" data-i18n-tip="swap">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4v14M7 18l-3-3M7 18l3-3M17 20V6M17 6l-3 3M17 6l3 3"/></svg>
         </button>
-        <div class="field">
+        <div class="field" data-i18n-tip="tip_destination">
           <label for="in-destination"><span><span data-od="B"></span><span data-i18n="destination">Varış</span></span></label>
           <select id="in-destination"></select>
         </div>
       </div>
       <div class="pick-row">
         <span class="hint" id="pick-hint" data-i18n="pick_hint">Haritaya tıklayın: başlangıç · Shift+tık: varış</span>
-        <div class="seg seg-sm" role="group" id="pick-seg" data-i18n-aria="map_click_sets">
+        <div class="seg seg-sm" role="group" id="pick-seg" data-i18n-aria="map_click_sets" data-i18n-tip="tip_pick">
           <button type="button" data-pick="origin" aria-pressed="true">A</button>
           <button type="button" data-pick="destination" aria-pressed="false">B</button>
         </div>
       </div>
-      <div class="field">
+      <div class="field" id="field-vehicle" data-i18n-tip="tip_vehicle">
         <label for="in-vehicle" data-i18n="vehicle">Araç</label>
         <select id="in-vehicle"></select>
       </div>
-      <div class="field range-field">
+      <div class="veh-card" id="veh-card"></div>
+      <div class="field field-dcmax" id="field-dcmax" data-research data-i18n-tip="tip_dc_limit">
+        <label for="in-dcmax"><span data-i18n="dc_limit">DC şarj gücü sınırı</span><span class="unit">kW</span></label>
+        <input type="number" id="in-dcmax" min="3" max="500" step="1" inputmode="decimal">
+      </div>
+      <div class="field range-field" data-i18n-tip="tip_initial_soc">
         <label for="in-soc"><span data-i18n="initial_soc">Başlangıç şarjı</span><output id="out-soc"></output></label>
         <input type="range" id="in-soc" min="5" max="100" step="1">
       </div>
-      <div class="field range-field">
+      <div class="field range-field" data-research data-i18n-tip="tip_temperature">
         <label for="in-temp"><span data-i18n="temperature">Sıcaklık</span><output id="out-temp"></output></label>
         <input type="range" id="in-temp" min="-20" max="40" step="1">
       </div>
-      <div class="field-row">
-        <div class="field range-field">
-          <label for="in-reserve"><span data-i18n="reserve">Rezerv</span><output id="out-reserve"></output></label>
-          <input type="range" id="in-reserve" min="0" max="30" step="1">
+      <div class="field range-field" data-research data-i18n-tip="tip_reserve">
+        <label for="in-reserve"><span data-i18n="reserve">Rezerv</span><output id="out-reserve"></output></label>
+        <input type="range" id="in-reserve" min="0" max="30" step="1">
+      </div>
+      <div class="field range-field" data-i18n-tip="tip_min_arrival">
+        <label for="in-arrive"><span data-i18n="min_arrival">Minimum varış şarjı</span><output id="out-arrive"></output></label>
+        <input type="range" id="in-arrive" min="0" max="60" step="1">
+      </div>
+      <div class="field range-field field-minstop" id="field-minstop">
+        <label for="in-minstop" data-research data-i18n-tip="tip_min_stop"><span data-i18n="min_stop">Durakta en az şuna kadar şarj et</span><output id="out-minstop"></output></label>
+        <span class="field-label" data-everyday data-i18n-tip="tip_min_stop" tabindex="0" data-i18n="charging_style">Şarj tarzı</span>
+        <input type="range" id="in-minstop" min="0" max="80" step="1" data-research>
+        <div class="chips" role="group" id="style-chips" data-i18n-aria="charging_style">
+          <button type="button" class="chip" data-style="hurry" aria-pressed="false" data-i18n="style_hurry">Acele</button>
+          <button type="button" class="chip" data-style="balanced" aria-pressed="false" data-i18n="style_balanced">Dengeli</button>
+          <button type="button" class="chip" data-style="relaxed" aria-pressed="false" data-i18n="style_relaxed">Rahat</button>
         </div>
-        <div class="field range-field">
-          <label for="in-arrive"><span data-i18n="min_arrival">Varış şarjı</span><output id="out-arrive"></output></label>
-          <input type="range" id="in-arrive" min="0" max="60" step="1">
+      </div>
+      <div class="field" data-everyday>
+        <span class="field-label" data-i18n="priority">Öncelik</span>
+        <div class="seg seg-block" role="group" id="prio-seg" data-i18n-aria="priority">
+          <button type="button" data-prio="time" aria-pressed="true" data-i18n="prio_fast">En hızlı</button>
+          <button type="button" data-prio="cost" aria-pressed="false" data-i18n="prio_cheap">En ucuz</button>
         </div>
       </div>
       <div class="field-row">
-        <div class="field">
+        <div class="field" data-research data-i18n-tip="tip_objective">
           <label for="in-objective" data-i18n="objective">Amaç</label>
           <select id="in-objective">
             <option value="time" data-i18n="objective_time">En kısa süre</option>
             <option value="cost" data-i18n="objective_cost">En düşük maliyet</option>
           </select>
         </div>
-        <div class="field">
+        <div class="field" data-i18n-tip="tip_departure">
           <label for="in-depart" data-i18n="departure">Kalkış</label>
           <input type="time" id="in-depart" step="300">
         </div>
       </div>
-      <div class="field">
+      <div class="field" data-research data-i18n-tip="tip_vot">
         <label for="in-vot"><span data-i18n="value_of_time">Zaman değeri</span> <span class="unit" id="vot-unit"></span></label>
         <input type="number" id="in-vot" min="0" max="100000" step="10" inputmode="decimal">
       </div>
       <div class="toggles">
-        <label class="check"><input type="checkbox" id="in-eco"><span data-i18n="eco_speeds">Eko hızlar (%100/90/80)</span></label>
-        <label class="check"><input type="checkbox" id="in-queue"><span data-i18n="queue_aware">Kuyruk farkındalığı</span></label>
+        <label class="check" data-research data-i18n-tip="tip_eco"><input type="checkbox" id="in-eco"><span data-i18n="eco_speeds">Eko hızlar (%100/90/80)</span></label>
+        <label class="check" data-research data-i18n-tip="tip_queue"><input type="checkbox" id="in-queue"><span data-i18n="queue_aware">Kuyruk farkındalığı</span></label>
         <label class="check" id="field-tariff" hidden><input type="checkbox" id="in-tariff"><span data-i18n="tariff_toggle">Şarj tarifesi (%80 kuralı, puant saatleri)</span></label>
       </div>
-      <fieldset class="algo-picks">
-        <legend data-i18n="algorithms">Algoritmalar</legend>
+      <fieldset class="algo-picks" data-research>
+        <legend data-i18n="algorithms" data-i18n-tip="tip_algorithms">Algoritmalar</legend>
         <div id="algo-picks"></div>
       </fieldset>
-      <button type="button" class="btn btn-primary btn-block" id="btn-plan">
+      <button type="button" class="btn btn-primary btn-block" id="btn-plan" data-i18n-tip="tip_plan">
         <span class="spinner" aria-hidden="true"></span>
         <span data-i18n="plan">Planla</span>
         <kbd>⏎</kbd>
@@ -169,9 +189,10 @@
         <label class="check"><input type="checkbox" id="layer-others" checked><span data-i18n="layer_others">Diğer rotalar</span></label>
       </div>
       <div class="legend-stations">
-        <span><i class="st-ico st-ac"></i>AC</span>
-        <span><i class="st-ico st-dc"></i>DC</span>
-        <span><i class="st-ico st-hpc"></i>HPC ≥ 250 kW</span>
+        <span data-i18n-tip="tip_leg_ac" tabindex="0"><i class="st-ico st-ac"></i>AC</span>
+        <span data-i18n-tip="tip_leg_dc" tabindex="0"><i class="st-ico st-dc"></i>DC</span>
+        <span data-i18n-tip="tip_leg_hpc" tabindex="0"><i class="st-ico st-hpc"></i>HPC ≥ 250 kW</span>
+        <span id="legend-off" data-i18n-tip="tip_leg_unusable" tabindex="0" hidden><i class="st-ico st-off"></i><span data-i18n="leg_unusable">Uyumsuz</span></span>
       </div>
     </section>
 
