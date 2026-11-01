@@ -394,6 +394,15 @@
       if (this.mode === 'race') this._updateRace();
     }
 
+    /**
+     * The race leaderboard: rank, planner, what it does now (or its trip
+     * time once it has arrived) and its battery charge -- the car's charge
+     * while it drives, its arrival charge at the finish.  A plan that
+     * charged longer arrives later but fuller, so a time alone is no fair
+     * comparison.  The rows are kept and updated in place (a tooltip on a
+     * row survives the frames); they are re-ordered only when the ranking
+     * changes.
+     */
     _updateRace() {
       const app = this.app;
       const rows = this.activeRoutes().map((r) => {
@@ -411,22 +420,62 @@
       // phones: the top four only, so the map stays visible
       const maxRows = window.innerWidth < 560 ? 4 : rows.length;
       const hidden = rows.length - maxRows;
-      const items = rows.slice(0, maxRows).map((x, k) => {
-        let txt, cls = 'st';
-        if (x.done) { txt = `✓ ${I.hm(x.end)}`; cls += ' done'; }
-        else if (x.st.kind === 'stranded') { txt = `✕ ${I.km(x.st.dist, 0)}`; cls += ' bad'; }
-        else if (x.st.kind === 'charge') txt = `⚡ ${I.pct(x.st.soc, 0)}`;
-        else if (x.st.kind === 'wait') txt = `⏳ ${I.minutes(x.st.left)}`;
-        else if (x.st.kind === 'hold') txt = `⏸ ${I.minutes(x.st.left)}`;
-        else txt = I.pct(x.prog, 0);
-        return U.el('li', { style: { '--algo': app.colorOf(x.r) } },
-          U.el('span', { class: 'rank', text: String(k + 1) }),
-          U.el('span', { class: 'who' }, U.el('i'), U.el('span', { text: x.r.title })),
-          U.el('span', { class: cls, text: txt }),
-          U.el('span', { class: 'prog' }, U.el('i', { style: { width: `${(U.clamp(x.prog, 0, 1) * 100).toFixed(1)}%` } })));
-      });
-      if (hidden > 0) items.push(U.el('li', { class: 'more', text: I.t('race_more', { n: hidden }) }));
-      U.setChildren(this.el.race, items);
+      const items = rows.slice(0, maxRows).map((x, k) => this._raceRow(x, k));
+      if (hidden > 0) {
+        if (!this._raceMore) this._raceMore = U.el('li', { class: 'more' });
+        setText(this._raceMore, I.t('race_more', { n: hidden }));
+        items.push(this._raceMore);
+      }
+      const ol = this.el.race;
+      const now = ol.children;
+      if (now.length !== items.length || items.some((li, i) => now[i] !== li)) U.setChildren(ol, items);
+    }
+
+    /** The leaderboard row of `x` (a route, its state now) at rank `k`, created once per route. */
+    _raceRow(x, k) {
+      const app = this.app, r = x.r, st = x.st;
+      if (!this._raceRows) this._raceRows = new WeakMap();
+      let row = this._raceRows.get(r);
+      if (!row) {
+        row = {
+          rank: U.el('span', { class: 'rank' }), name: U.el('span'), st: U.el('span', { class: 'st' }),
+          fill: U.el('b'), pct: U.el('span', { class: 'soc-v' }), bar: U.el('i'),
+        };
+        row.soc = U.el('span', { class: 'soc' }, U.el('i', { class: 'mini-batt', 'aria-hidden': 'true' }, row.fill), row.pct);
+        row.li = U.el('li', {}, row.rank, U.el('span', { class: 'who' }, U.el('i'), row.name), row.st, row.soc,
+          U.el('span', { class: 'prog' }, row.bar));
+        this._raceRows.set(r, row);
+      }
+      let txt, cls = 'st';
+      if (x.done) { txt = `✓ ${I.hm(x.end)}`; cls += ' done'; }
+      else if (st.kind === 'stranded') { txt = `✕ ${I.km(st.dist, 0)}`; cls += ' bad'; }
+      else if (st.kind === 'charge') txt = `⚡ ${I.minutes(st.left)}`;
+      else if (st.kind === 'wait') txt = `⏳ ${I.minutes(st.left)}`;
+      else if (st.kind === 'hold') txt = `⏸ ${I.minutes(st.left)}`;
+      else txt = I.km(st.dist, 0);
+      // the charge: the arrival charge of the plan at the finish, the car's charge before; none when stranded
+      const stranded = st.kind === 'stranded';
+      const soc = x.done && U.isNum(r.arrival_soc) ? r.arrival_soc : Math.max(0, st.soc);
+      const socTxt = stranded ? '—' : I.pct(soc, 0);
+      const arrive = r.feasible && U.isNum(r.arrival_soc) ? I.pct(r.arrival_soc, 0) : null;
+      const tip = stranded ? null : x.done ? `${I.t('tip_soc_arrived', { p: socTxt })} ${I.t('tip_soc_fair')}`
+        : arrive ? `${I.t('tip_soc_now', { a: arrive })} ${I.t('tip_soc_fair')}` : I.t('tip_soc_now_nofeas');
+      const label = `${k + 1}. ${r.title}: ${txt}${stranded ? '' : ` · ${x.done ? I.t('arrival_soc') : I.t('race_soc_now')} ${socTxt}`}`;
+      row.li.style.setProperty('--algo', app.colorOf(r));
+      if (row.li.getAttribute('aria-label') !== label) row.li.setAttribute('aria-label', label);
+      setText(row.rank, String(k + 1));
+      setText(row.name, r.title);
+      setText(row.st, txt);
+      if (row.st.className !== cls) row.st.className = cls;
+      setText(row.pct, socTxt);
+      const socCls = `soc${stranded ? ' none' : ''}${st.kind === 'charge' ? ' charging' : ''}${x.done ? ' done' : ''}`;
+      if (row.soc.className !== socCls) row.soc.className = socCls;
+      if ((row.soc.getAttribute('data-tip') || null) !== tip) EVR.tooltip.setTip(row.soc, tip);
+      const c = U.clamp(soc, 0, 1);
+      row.fill.style.width = `${(c * 100).toFixed(1)}%`;
+      row.fill.style.background = U.socColor(c, app.theme);
+      row.bar.style.width = `${(U.clamp(x.prog, 0, 1) * 100).toFixed(1)}%`;
+      return row.li;
     }
 
     _updateCounters() {
@@ -742,6 +791,11 @@
       ctx.fillText(label, x + 26, y + 15.5);
       ctx.restore();
     }
+  }
+
+  /** Set the text of `el` only when it changes (rows updated every frame). */
+  function setText(el, s) {
+    if (el.textContent !== s) el.textContent = s;
   }
 
   /** Navigation-style car puck: white disc, coloured core, heading chevron. */

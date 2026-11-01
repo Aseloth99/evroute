@@ -584,7 +584,9 @@ const out = vm.runInContext(`(function (req) {
     return { algorithm: r.algorithm, steps: it.steps.map((s) => [s.kind, s.dist || 0, s.dur || 0, s.arrive || 0, s.leave || 0, s.kwh || 0]),
       totals: it.totals, text: EVR.panels.itineraryText(app, r, it), maps: EVR.panels.mapsUrl(app, r) };
   });
-  return { folds, plans };
+  // the arrival charge of a plan against the fastest one's (percentage points)
+  const socDiffs = [[0.31, 0.10], [0.07, 0.10], [0.104, 0.10], [null, 0.10]].map(([a, b]) => EVR.panels.socDiff(a, b));
+  return { folds, plans, socDiffs };
 })`, ctx)(req);
 process.stdout.write(JSON.stringify(out));
 """
@@ -646,13 +648,52 @@ def test_itinerary_adds_up(tmp_path, payload, scenario):
         assert ("waypoints=" in it["maps"]) == any(s[0] == "stop" for s in it["steps"])
 
 
+#: Strings of the arrival charge shown next to the times (race HUD, routes list, comparison).
+ARRIVAL_CHARGE_KEYS = ("arrive_short", "race_soc_now", "soc_diff", "soc_same", "th_arrive", "tip_th_arrive",
+                       "tip_arrive_charge", "tip_soc_fair", "tip_soc_arrived", "tip_soc_now", "tip_soc_now_nofeas",
+                       "tip_vs_best")
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_arrival_charge_next_to_the_times(tmp_path, payload):
+    """A plan that charged longer arrives later but fuller, so a time alone is no fair comparison:
+    the race HUD shows each car's charge (its arrival charge at the finish), the routes list and the
+    comparison table the arrival charge, the "vs best" line the charge difference; each with a
+    tooltip that says why, in both languages."""
+    i18n = (WEB_DIR / "js" / "i18n.js").read_text(encoding="utf-8")
+    for k in ARRIVAL_CHARGE_KEYS:
+        assert len(re.findall(rf"^      {k}: '[^']+',$", i18n, re.M)) == 2, k   # TR and EN
+    assert "arrive_short: 'varış {p}'" in i18n and "arrive_short: 'arrival {p}'" in i18n
+    assert "soc_diff: '{s} şarj'" in i18n and "soc_diff: '{s} charge'" in i18n
+    assert "daha geç ama daha dolu bir bataryayla varır" in i18n and "arrives later but with a fuller battery" in i18n
+    anim = (WEB_DIR / "js" / "anim.js").read_text(encoding="utf-8")
+    # race HUD: one row per planner with a charge cell (a small battery and the value) and its tooltip
+    assert "row.soc = U.el('span', { class: 'soc' }" in anim and "class: 'mini-batt'" in anim
+    assert "x.done && U.isNum(r.arrival_soc) ? r.arrival_soc" in anim   # the arrival charge once arrived
+    for k in ("tip_soc_arrived", "tip_soc_now", "tip_soc_now_nofeas", "tip_soc_fair", "race_soc_now"):
+        assert f"I.t('{k}'" in anim, k
+    panels = (WEB_DIR / "js" / "panels.js").read_text(encoding="utf-8")
+    assert "class: 'algo-soc', 'data-tip': I.t('tip_arrive_charge')" in panels and "I.t('arrive_short'" in panels
+    assert "'aria-label': label" in panels and "['arrive', 'th_arrive'," in panels
+    assert "socDiff(r.arrival_soc, bestR.arrival_soc)" in panels and "I.t('tip_vs_best'" in panels
+    css = (WEB_DIR / "css" / "components.css").read_text(encoding="utf-8")
+    # the charge column has a fixed width: the values line up from row to row
+    assert "grid-template-columns: 18px minmax(0, 1fr) auto var(--soc-col, 58px)" in css
+    assert ".leaderboard .soc {" in css and ".algo-soc {" in css and ".mini-batt {" in css
+    assert re.search(r"\.hud \{[^}]*font-variant-numeric: tabular-nums", css)
+    # the difference in percentage points, in the viewer's percent format
+    assert _run_ui_harness(tmp_path, payload, lang="tr")["socDiffs"] == ["+%21 şarj", "−%3 şarj", "aynı şarj", ""]
+    assert _run_ui_harness(tmp_path, payload, lang="en")["socDiffs"] == ["+21% charge", "−3% charge", "same charge", ""]
+
+
 @pytest.mark.slow
 @pytest.mark.skipif(os.environ.get("EVROUTE_BROWSER_TESTS") != "1" or shutil.which("node") is None,
                     reason="set EVROUTE_BROWSER_TESTS=1 (needs Node.js with Playwright)")
 def test_viewer_ui_in_chromium(tmp_path):
     """The live viewer in Chromium, driven like a user (tests/browser/viewer_ui.js): searchable
-    pickers, tooltips, the new controls, everyday use and its trip plan, centred A/B letters
-    at DPR 1 and 2, no horizontal scroll from 390 to 3440 px, no console error."""
+    pickers, tooltips, the new controls, everyday use and its trip plan, the arrival charge next to
+    the times (routes list, "vs best", race HUD), centred A/B letters at DPR 1 and 2, no horizontal
+    scroll from 390 to 3440 px, no console error."""
     from pathlib import Path
 
     srv = make_server("turkey-karaman-istanbul", port=0, lang="tr", robustness_runs=0)
@@ -671,6 +712,37 @@ def test_viewer_ui_in_chromium(tmp_path):
     st = d["start"]
     assert st["everyday"] is False and st["view"] == "research" and st["toggle"] is False and st["tariff"] is True
     assert st["minArrivalLabel"] == "Minimum varış şarjı" and st["arrivalShown"].startswith("Varış şarjı")
+    # the arrival charge next to the times: routes list, "vs best", race HUD (mid-race and at the finish, 1400 and 390 px)
+    ch = d["charge"]
+    pct = lambda soc: f"%{int(100 * soc + 0.5)}"  # noqa: E731  (the viewer's Turkish percent)
+    assert sum(x["feasible"] for x in ch["list"]) >= 3
+    for x in ch["list"]:
+        if x["feasible"]:
+            assert x["chip"] == f"varış {pct(x['soc'])}" and x["time"] != "—", x
+            assert x["chipShown"] in (x["chip"], pct(x["soc"])), x   # a narrow list shows the value alone
+            assert x["tip"].startswith("Varış şarjı: bu plan") and "daha dolu" in x["tip"], x
+            assert f"Varış şarjı {pct(x['soc'])}" in x["label"] and x["label"].startswith(x["title"]), x
+        else:
+            assert x["chip"] is None and x["time"] == "—", x
+    vb = ch["vsBest"]
+    assert vb["soc"] > vb["bestSoc"] + 0.05 and vb["text"].startswith("en iyiye göre +"), vb
+    assert vb["text"].endswith(f" · +{pct(vb['soc'] - vb['bestSoc'])} şarj") and "daha dolu" in vb["tip"], vb
+    assert ch["mid"] and ch["finish"] and len(ch["mid"]) == len(ch["finish"])
+    for rows, done in ((ch["mid"], False), (ch["finish"], True), (ch["phone"], False)):
+        assert len({r["right"] for r in rows}) == 1, rows   # the charge column lines up
+        for r in rows:
+            assert r["fits"] and r["full"] and r["tip"] and "daha dolu" in r["tip"], r   # "%100" fits too
+            if r["state"] == "stranded":
+                assert r["soc"] == "—", r
+                continue
+            want = r["arrival"] if done else r["now"]
+            assert r["soc"] == want and re.fullmatch(r"%\d+", r["soc"]), r
+            assert r["label"].endswith(f" · {'Varış şarjı' if done else 'şarj'} {want}"), r
+            if done:
+                assert re.fullmatch(r"✓ \d+:\d\d", r["st"]) and r["tip"].startswith(f"Varış şarjı: bu plan hedefe {want}"), r
+    assert ch["hudTip"] and ch["hudTip"].startswith("Varış şarjı")   # the finish: the arrival charge's tooltip
+    assert 0 < len(ch["phone"]) <= 4 and ch["phoneHud"]["hudRight"] < ch["phoneHud"]["mapRight"] - 40, ch["phoneHud"]
+    assert ch["phoneHud"]["scroll"] <= ch["phoneHud"]["inner"] and ch["phoneHud"]["namesCut"] == [], ch["phoneHud"]
     for word, hit in d["search"].items():
         if word == "zzzqx":
             assert hit["empty"] is True
@@ -708,6 +780,9 @@ def test_viewer_ui_in_chromium(tmp_path):
     for w in d["widths"]:
         assert w["scroll"] <= w["inner"], w
         assert w["od"] and w["totals"] == [], w   # the chosen place and the trip plan's labels are not cut
+        assert w["times"] == 0 and all(c[0] in (c[1], c[2]) and c[1].startswith("varış %") for c in w["chips"]), w
+        if w["view"] == "research" and w["width"] in (390, 2560):
+            assert w["chips"] and all(c[0] == c[1] for c in w["chips"]), w   # room for "varış %47"
         if w["view"] == "everyday":
             assert w["socRow"] > 0.99, w          # the SoC chart fills the row the research charts leave
     assert len(d["centring"]) == 8

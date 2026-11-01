@@ -419,7 +419,13 @@
       ctx.font = `650 12px ${th.font}`;
       let lw = 60;
       for (const r of res) lw = Math.max(lw, ctx.measureText(r.title).width);
-      const pad = { l: Math.min(150, lw + 30), r: 70, t: 8, b: 30 };
+      // right of the bars: the trip time and the arrival charge ("8:07  %10"), as wide as the widest
+      ctx.font = `700 12px ${th.font}`;
+      let tw = 0, sw = 0;
+      for (const r of res) if (r.feasible) tw = Math.max(tw, ctx.measureText(I.hm(r.total_time_s)).width);
+      ctx.font = `600 11px ${th.font}`;
+      for (const r of res) if (r.feasible && U.isNum(r.arrival_soc)) sw = Math.max(sw, ctx.measureText(I.pct(r.arrival_soc, 0)).width);
+      const pad = { l: Math.min(150, lw + 30), r: Math.max(70, Math.ceil(8 + tw + (sw ? 8 + sw : 0) + 10)), t: 8, b: 30 };
       const x0 = pad.l, x1 = w - pad.r;
       let tmax = 0;
       for (const r of res) if (r._ok) tmax = Math.max(tmax, (r._strand ? r._strand.t : r.total_time_s) || 0);
@@ -481,7 +487,15 @@
         ctx.fillStyle = r.feasible ? th.text : th.bad;
         ctx.textAlign = 'left';
         const label = !r._ok ? `✕ ${I.t('infeasible')}` : r.feasible ? I.hm(r.total_time_s) : `✕ ${I.t('infeasible')}`;
-        ctx.fillText(label, (r._ok ? X(acc) : x0) + 8, y + rowH / 2);
+        const lx = (r._ok ? X(acc) : x0) + 8;
+        ctx.fillText(label, lx, y + rowH / 2);
+        if (r.feasible && U.isNum(r.arrival_soc)) {
+          // a plan that charged longer arrives later but fuller: its arrival charge next to its time
+          const sx = lx + ctx.measureText(label).width + 8;
+          ctx.font = `600 11px ${th.font}`;
+          ctx.fillStyle = th.text3;
+          ctx.fillText(I.pct(r.arrival_soc, 0), sx, y + rowH / 2);
+        }
         if (m && m.y >= y - 4 && m.y <= y + rowH + 4) hover = { r, segs, y };
       });
       ctx.globalAlpha = 1;
@@ -494,6 +508,7 @@
           [th.cSetup, I.t('setup'), I.duration(r.setup_time_s)],
           [th.cCharge, I.t('charge'), I.duration(r.charge_time_s)],
           [null, I.t('total_time'), r.feasible ? I.duration(r.total_time_s) : I.t('infeasible')],
+          ...(r.feasible && U.isNum(r.arrival_soc) ? [[null, I.t('arrival_soc'), I.pct(r.arrival_soc, 0)]] : []),
         ];
         this.setTip(r.title, rows, m.x, hover.y + rowH / 2);
       }
@@ -758,6 +773,7 @@
               [color, I.t('total_time'), I.duration(v[0])],
               [color, I.t('money'), I.money(v[1], cur)],
               [color, I.t('soh_short'), I.soh(v[2])],
+              ...(alt && U.isNum(alt.arrival_soc) ? [[color, I.t('arrival_soc'), I.pct(alt.arrival_soc, 0)]] : []),
             ], p.x, p.y);
           } else {
             const r = p.r;
@@ -765,6 +781,7 @@
               [app.colorOf(r), I.t('total_time'), I.duration(r.total_time_s)],
               [app.colorOf(r), I.t('money'), I.money(r.money, cur)],
               [app.colorOf(r), I.t('soh_short'), I.soh(r.soh_drive_pct + r.soh_charge_pct)],
+              ...(U.isNum(r.arrival_soc) ? [[app.colorOf(r), I.t('arrival_soc'), I.pct(r.arrival_soc, 0)]] : []),
             ], p.x, p.y);
           }
           this.canvas.style.cursor = 'pointer';

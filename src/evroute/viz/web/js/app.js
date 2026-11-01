@@ -205,9 +205,10 @@
       return this.model.departure + t;
     }
 
-    bestFeasibleTime() {
+    /** The fastest feasible result (the first of equally fast ones), or null. */
+    bestFeasibleRoute() {
       let b = null;
-      for (const r of this.model.results) if (r.feasible && (b === null || r.total_time_s < b)) b = r.total_time_s;
+      for (const r of this.model.results) if (r.feasible && (b === null || r.total_time_s < b.total_time_s)) b = r;
       return b;
     }
 

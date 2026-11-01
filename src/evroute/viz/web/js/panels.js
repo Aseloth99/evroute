@@ -65,6 +65,18 @@
       U.isNum(min) ? U.el('small', { text: ` (${I.t('arrival_min', { p: I.pct(min, 0) })})` }) : null);
   }
 
+  /**
+   * Arrival charge of a plan against another's, in percentage points:
+   * "+%21 şarj" / "+21% charge", "−%3 şarj", or "aynı şarj" / "same charge"
+   * when they differ by less than half a point.
+   */
+  function socDiff(soc, ref) {
+    if (!U.isNum(soc) || !U.isNum(ref)) return '';
+    const d = soc - ref;
+    if (Math.abs(d) < 0.005) return I.t('soc_same');
+    return I.t('soc_diff', { s: `${d > 0 ? '+' : '−'}${I.pct(Math.abs(d), 0)}` });
+  }
+
   /* ------------------------------------------------------------ itinerary */
   /** Connector a stop uses: one the station has and the vehicle takes (a DC one at a DC station). */
   function stopConnector(app, s) {
@@ -370,7 +382,7 @@
     return [desc, `${I.t(`g_${g}`)}: ${I.t(`g_${g}_title`)}`].filter(Boolean).join(' · ');
   }
 
-  /** Columns of the comparison table: [key, label, value(r), format(v, r), better, title]. */
+  /** Columns of the comparison table: [key, label, value(r), format(v, r), better ('min' / 'max'), title]. */
   function columns(app) {
     const cur = app.model.currency;
     const T = (r) => (r.feasible ? r.total_time_s : null);
@@ -381,6 +393,8 @@
       ['exact', 'th_guarantee', (r) => ({ exact: 0, grid: 1, heuristic: 2 }[r.exact] ?? 3), null, null],
       ['feasible', 'th_feasible', (r) => (r.feasible ? 1 : 0), null, null],
       ['total', 'th_total', T, (v) => I.hms(v), 'min'],
+      // next to the time: a plan that charged longer arrives later but fuller
+      ['arrive', 'th_arrive', (r) => (r.feasible && U.isNum(r.arrival_soc) ? r.arrival_soc : null), (v) => I.pct(v, 0), 'max'],
       ['drive', 'th_drive', (r) => (r._ok ? r.drive_time_s : null), (v) => I.hms(v), 'min'],
       ['charge', 'th_charge', (r) => (r._ok ? r.charge_time_s : null), (v) => I.hms(v), 'min'],
       ['wait', 'th_wait', (r) => (r._ok ? r.wait_time_s + r.setup_time_s : null), (v) => I.hms(v), 'min'],
@@ -509,16 +523,29 @@
         const meta = r._ok
           ? `${I.stops((r.stops || []).length)} · ${I.km(r.distance_m, 0)} · ${I.num(r.stats ? r.stats.runtime_s * 1000 : NaN, 0)} ms`
           : (r.message || I.t('no_route'));
+        const metaText = r.feasible ? meta : budgetStopped(r) ? `⚠ ${stoppedText(r)}` : `✕ ${r._strand ? I.t('stranded_at', { km: I.km(r._strand.dist, 0) }) : I.t('infeasible')}`;
+        // the trip time and, under it, the arrival charge: a plan that charged longer arrives later but fuller
+        const soc = r.feasible && U.isNum(r.arrival_soc) ? r.arrival_soc : null;
+        const time = U.el('span', { class: 'algo-time', text: r.feasible ? I.hm(r.total_time_s) : '—' });
+        const chip = soc !== null ? U.el('small', { class: 'algo-soc', 'data-tip': I.t('tip_arrive_charge') },
+          U.el('i', { class: 'mini-batt', 'aria-hidden': 'true' }, U.el('b', { style: { width: `${(U.clamp(soc, 0, 1) * 100).toFixed(1)}%`, background: U.socColor(U.clamp(soc, 0, 1), app.theme) } })),
+          // "varış %47" / "arrival 47%"; in a narrow list the value alone (the word in the tooltip and the label)
+          U.el('span', { class: 'algo-soc-long', text: I.t('arrive_short', { p: I.pct(soc, 0) }) }),
+          U.el('span', { class: 'algo-soc-short', text: I.pct(soc, 0) })) : null;
+        const badges = guaranteeBadge(r);
+        // the accessible name: planner, guarantee, time, arrival charge, details
+        const label = [r.title, ...Array.from(badges.children, (x) => x.textContent), r.feasible ? I.duration(r.total_time_s) : null,
+          soc !== null ? `${I.t('arrival_soc')} ${I.pct(soc, 0)}` : null, metaText].filter(Boolean).join(', ');
         const li = U.el('li', {
           class: `algo-item${r.feasible ? '' : ' infeasible'}`, role: 'option', tabindex: '0',
-          'aria-selected': String(sel.ri === ri), style: { '--algo': c },
+          'aria-selected': String(sel.ri === ri), 'aria-label': label, style: { '--algo': c },
           'data-tip': algoTip(Object.assign({ name: r.algorithm, exact: r.exact }, app.algoInfo(r.algorithm) || {})),
         },
         vis,
+        // two lines, each with its value on the right: the name and the time, the details and the arrival charge
         U.el('div', { class: 'algo-text' },
-          U.el('div', { class: 'algo-name' }, U.el('span', { text: r.title }), guaranteeBadge(r)),
-          U.el('div', { class: 'algo-meta', text: r.feasible ? meta : budgetStopped(r) ? `⚠ ${stoppedText(r)}` : `✕ ${r._strand ? I.t('stranded_at', { km: I.km(r._strand.dist, 0) }) : I.t('infeasible')}` })),
-        U.el('div', { class: 'algo-time', text: r.feasible ? I.hm(r.total_time_s) : '—' }));
+          U.el('div', { class: 'algo-line' }, U.el('div', { class: 'algo-name' }, U.el('span', { text: r.title }), badges), time),
+          U.el('div', { class: 'algo-line' }, U.el('div', { class: 'algo-meta', text: metaText }), chip)));
         li.addEventListener('click', () => app.select(ri, -1));
         li.addEventListener('keydown', (ev) => {
           if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); app.select(ri, -1); }
@@ -539,7 +566,8 @@
       const r = app.selectedRoute();
       if (!r) { U.setChildren(el, U.el('p', { class: 'muted', text: noRouteText(app) })); return; }
       const cur = app.model.currency;
-      const best = app.bestFeasibleTime();
+      const bestR = app.bestFeasibleRoute();
+      const best = bestR ? bestR.total_time_s : null;
       const kids = [];
       kids.push(U.el('div', { class: 'summary-top', style: { '--algo': app.colorOf(r) } },
         U.el('div', { class: 'summary-algo', 'data-tip': algoTip(Object.assign({ name: r.algorithm, exact: r.exact }, app.algoInfo(r.algorithm) || {})) },
@@ -597,7 +625,10 @@
           : budgetStopped(r) ? `${I.t('no_route')}: ${stoppedText(r)}` : (r.message || I.t('no_route'));
         kids.push(U.el('div', { class: 'summary-warn', role: 'note', text: msg }));
       } else if (best !== null && r.total_time_s > best + 30) {
-        kids.push(U.el('p', { class: 'summary-note', text: I.t('vs_best', { d: `+${I.duration(r.total_time_s - best)}` }) }));
+        // later, but maybe fuller: the arrival charge against the fastest plan's
+        const sd = socDiff(r.arrival_soc, bestR.arrival_soc);
+        kids.push(U.el('p', { class: 'summary-note vs-best', tabindex: '0', 'data-tip': `${I.t('tip_vs_best', { a: bestR.title })} ${I.t('tip_soc_fair')}` },
+          I.t('vs_best', { d: `+${I.duration(r.total_time_s - best)}${sd ? ` · ${sd}` : ''}` })));
       }
       if (app.selection.ai >= 0) {
         const parent = app.model.results[app.selection.ri];
@@ -785,20 +816,21 @@
       const anyHold = app.model.results.some((r) => r.hold_time_s > 0);
       const cols = columns(app).filter((c) => (anyRel || (c[0] !== 'pstrand' && c[0] !== 'pshort')) && (anyHold || c[0] !== 'hold'));
       const res = app.model.results.slice();
-      // best values among feasible results
+      // best values among feasible results (the smallest, or the largest for 'max' columns)
       const best = {};
       for (const [key, , val, , better] of cols) {
         if (!better) continue;
-        let b = null, worst = null;
+        let lo = null, hi = null;
         for (const r of res) {
           if (!r.feasible) continue;
           const v = val(r);
           if (v === null || !isFinite(v)) continue;
-          if (b === null || v < b) b = v;
-          if (worst === null || v > worst) worst = v;
+          if (lo === null || v < lo) lo = v;
+          if (hi === null || v > hi) hi = v;
         }
+        const b = better === 'max' ? hi : lo;
         // highlight only when the column actually discriminates
-        best[key] = b !== null && worst - b > Math.max(1e-6, Math.abs(b) * 1e-6) ? b : null;
+        best[key] = b !== null && hi - lo > Math.max(1e-6, Math.abs(b) * 1e-6) ? b : null;
       }
       if (this.sort.key) {
         const col = cols.find((c) => c[0] === this.sort.key);
@@ -1084,7 +1116,7 @@
   }
 
   EVR.panels = {
-    Panels, guaranteeBadge, budgetStopped, stoppedText, tariffText, tariffFactors, arrivalSoc, itinerary, itineraryText, mapsUrl, GMAPS_DIR,
+    Panels, guaranteeBadge, budgetStopped, stoppedText, tariffText, tariffFactors, arrivalSoc, socDiff, itinerary, itineraryText, mapsUrl, GMAPS_DIR,
     vehicleCard, connectorChips, chemBadge, algoTip, CONNECTOR_LABEL, DC_CONNECTORS,
   };
 })(window.EVR = window.EVR || {});

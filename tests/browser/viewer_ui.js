@@ -8,7 +8,13 @@
  * names, real coordinates).  Checked here, asserted by the Python test:
  *
  *   start      the research view (the everyday switch off), no console error
- *   search     the origin picker filters Turkish-aware and accent-insensitive
+ *   charge     the arrival charge next to the times: under each plan's time
+ *              in the routes list (with its tooltip and in the item's
+ *              accessible name), the charge difference in the "vs best" line,
+ *              and in the race HUD each car's charge mid-race and its arrival
+ *              charge at the finish, in a column that lines up, with a
+ *              tooltip that hovering shows, also at 390 px
+ *   search    the origin picker filters Turkish-aware and accent-insensitive
  *              (İstanbul / istanbul / ISTANBUL / Istanbul / ıstanbul), shows
  *              a "no match" row, keys choose an option (the <select> and the
  *              trip follow), Escape restores
@@ -160,6 +166,66 @@ async function main() {
     arrivalShown: (document.querySelector('#summary-card .arrive-soc') || {}).textContent || '',
     algorithms: EVR.app.model.results.map((r) => r.algorithm),
   }));
+
+  // ------------------------------------------------------------- arrival charge next to the times
+  // the routes list: the arrival charge under each feasible plan's time, with its tooltip
+  res.charge = { list: await page.evaluate(() => Array.from(document.querySelectorAll('#algo-list li')).map((li, i) => {
+    const r = EVR.app.model.results[i], chip = li.querySelector('.algo-soc');
+    return { title: r.title, feasible: r.feasible, soc: r.arrival_soc, time: li.querySelector('.algo-time').textContent,
+      chip: chip ? chip.querySelector('.algo-soc-long').textContent : null, chipShown: chip ? chip.innerText.trim() : null,
+      tip: chip ? chip.getAttribute('data-tip') : null, label: li.getAttribute('aria-label') };
+  })) };
+  // the summary of the plan that arrives fullest (slower than the fastest): "+24 dk · +%37 şarj"
+  res.charge.vsBest = await page.evaluate(() => {
+    const app = EVR.app, res = app.model.results;
+    let k = -1;
+    res.forEach((r, i) => { if (r.feasible && (k < 0 || r.arrival_soc > res[k].arrival_soc)) k = i; });
+    app.select(k, -1);
+    const best = app.bestFeasibleRoute(), p = document.querySelector('#summary-card .vs-best');
+    return { soc: res[k].arrival_soc, bestSoc: best.arrival_soc, text: p ? p.textContent : null, tip: p ? p.getAttribute('data-tip') : null };
+  });
+  // the race HUD: every row has the car's charge (its arrival charge at the finish), the values line up;
+  // the battery and the value stay inside their column (it is right-aligned: an overflow would go
+  // left, over the status), also for a full battery ("100%")
+  const raceRows = (f) => page.evaluate((f) => {
+    const app = EVR.app, a = app.anim;
+    a.pause();
+    a.seek(f * a.tMax());
+    a.frame();
+    return Array.from(document.querySelectorAll('#hud-race li:not(.more)')).map((li) => {
+      const r = app.model.results.find((x) => x.title === li.querySelector('.who span').textContent);
+      const st = EVR.model.stateAt(app.model, r, a.t), soc = li.querySelector('.soc'), b = soc.getBoundingClientRect();
+      const batt = soc.querySelector('.mini-batt'), v = soc.querySelector('.soc-v'), stEl = li.querySelector('.st');
+      const inside = () => batt.getBoundingClientRect().left >= b.left - 0.5 && v.getBoundingClientRect().right <= b.right + 0.5
+        && batt.getBoundingClientRect().left - stEl.getBoundingClientRect().right >= 4;
+      const fits = inside() && soc.scrollWidth <= soc.clientWidth + 0.5;
+      const was = v.textContent;
+      v.textContent = EVR.i18n.pct(1, 0);
+      const full = inside();
+      v.textContent = was;
+      return { title: r.title, state: st.kind, now: EVR.i18n.pct(Math.max(0, st.soc), 0), arrival: EVR.i18n.pct(r.arrival_soc, 0),
+        st: stEl.textContent, soc: soc.textContent, tip: soc.getAttribute('data-tip'), label: li.getAttribute('aria-label'),
+        right: Math.round(b.right * 10) / 10, width: b.width, fits, full };
+    });
+  }, f);
+  await page.evaluate(() => { const a = EVR.app.anim; a.setEnabled(true, false); a.setMode('race', false); });
+  res.charge.mid = await raceRows(0.6);
+  res.charge.finish = await raceRows(1);
+  // the charge cell takes the pointer (the HUD lets it through to the map): hovering shows its tooltip
+  await page.hover('#hud-race li:first-child .soc');
+  await page.waitForTimeout(700);
+  res.charge.hudTip = await page.evaluate(() => { const t = document.getElementById('ui-tip'); return t.hidden ? null : t.textContent; });
+  await page.mouse.move(1, 1);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.waitForTimeout(250);
+  res.charge.phone = await raceRows(0.6);
+  res.charge.phoneHud = await page.evaluate(() => {
+    const h = document.getElementById('hud').getBoundingClientRect(), m = document.getElementById('map-wrap').getBoundingClientRect();
+    return { hudRight: h.right, mapRight: m.right, scroll: document.documentElement.scrollWidth, inner: window.innerWidth,
+      namesCut: Array.from(document.querySelectorAll('#hud-race .who span')).filter((s) => s.scrollWidth > s.clientWidth + 0.5).map((s) => s.textContent) };
+  });
+  await page.setViewportSize({ width: 1400, height: 900 });
+  await page.evaluate(() => { EVR.app.anim.setMode('trip', false); EVR.app.select(EVR.app._defaultSelection(), -1); });
 
   // ------------------------------------------------------------- search
   const combo = '#in-origin-combo';
@@ -324,6 +390,8 @@ async function main() {
         return { width: w, view: v, scroll: document.documentElement.scrollWidth, inner: window.innerWidth,
           od: shown('#in-origin-combo, #in-destination-combo, #hud-elapsed').every(fits),
           totals: shown('.itin-total small').filter((el) => !fits(el)).map((el) => el.textContent),
+          chips: shown('#algo-list .algo-soc').map((el) => [el.innerText.trim(), el.querySelector('.algo-soc-long').textContent, el.querySelector('.algo-soc-short').textContent]),
+          times: shown('#algo-list .algo-time').filter((el) => !fits(el)).length,
           socRow: (soc.right - bottom.left) / bottom.width };
       }, { w, v: view }));
     }
