@@ -202,16 +202,21 @@ and JavaScript with no third-party code.
   page is a static report.  `Space` plays / pauses, `←` / `→` scrub (`Shift`
   for larger steps).
 - **Race mode** (`R`): every visible algorithm drives at once on the same
-  clock, with a live leaderboard.
+  clock, with a live leaderboard: each car's progress and charge, and at the
+  finish its trip time and arrival charge (a plan that charged longer arrives
+  later but fuller, so the times alone are no fair comparison).
 - **Search replay** (`S`): the order in which a planner settled nodes;
   *Compare* shows BLS and BLS-A\* (or any two planners) side by side.
 - **Panels**: route list with guarantees (`HEURISTIC`, `GRID`, `EXACT`,
-  `PARTIAL` for an incomplete Pareto front), trip summary (time breakdown,
-  energy, money, SoH loss, Monte Carlo P(strand) and P(arrive short),
-  settled labels), charging stops, layers, scenario.
-- **Charts**: SoC over distance with the elevation profile, time breakdown,
-  queue profile, time-vs-money Pareto front (click a point to show that
-  route) and a sortable comparison table.
+  `PARTIAL` for an incomplete Pareto front) and each plan's trip time and
+  arrival charge, trip summary (time breakdown, the difference in time and
+  arrival charge to the fastest plan, energy, money, SoH loss, Monte Carlo
+  P(strand) and P(arrive short), settled labels), charging stops, layers,
+  scenario.
+- **Charts**: SoC over distance with the elevation profile, time breakdown
+  (each bar ends with the trip time and the arrival charge), queue profile,
+  time-vs-money Pareto front (click a point to show that route) and a
+  sortable comparison table (the arrival charge next to the total time).
 - **Two levels of detail.**  The default is the *research* view described
   above, with the details of every quantity the model computes: per stop the
   SoC and energy in and out, the energy charged and the grid energy behind
