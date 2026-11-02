@@ -63,6 +63,7 @@
 
       this.applyLang();
       const animate = !!payload.animate && !U.prefersReducedMotion();
+      this.anim.mode = this.anim.autoMode();   // the research view races the planners
       this.anim.setEnabled(animate, false);
       this.map.fitDefault(false);
       if (animate && this.model.results.length) this.anim.play();
@@ -348,6 +349,9 @@
         if (this.anim.mode !== 'trip') {
           if (this.anim.enabled) this.anim.setMode('trip', false); else this.anim.mode = 'trip';
         }
+      } else {
+        // back in the research view: the race of all planners again (or the user's own mode)
+        this.anim.applyAutoMode();
       }
       this.panels.renderAll();
       if (this.liveCtl) this.liveCtl.onViewChanged();
@@ -457,6 +461,8 @@
       this.waitPinned = -1;
       this.applyLang();
       this.map.fitDefault(true);
+      // new results: a race when several planners answered (unless the user chose a mode)
+      this.anim.applyAutoMode();
       if (this.anim.enabled) {
         if (this.anim.mode === 'search' && !(this.selectedRoute() && this.selectedRoute()._trace)) this.anim.setMode('trip', false);
         this.anim.restart();

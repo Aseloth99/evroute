@@ -544,6 +544,10 @@ With the switch on, the app is a trip planner:
   as text, *Print* prints it, and on maps with real coordinates (the Turkey
   presets) *Open in Google Maps* opens the route with the stops as
   waypoints - a link that you follow; the app itself sends nothing anywhere.
+  The last line says where the data comes from: on the presets an example
+  network or OpenStreetMap, queues estimated per time of day, and no live
+  availability or prices ([live and operator data](real-data.md#live-and-operator-data)
+  explains how to plan with a real station list).
 - **It leaves out** what only researchers need: battery wear and its money
   value, the generalised cost, search statistics, C-rates, charging losses
   and algorithm names.

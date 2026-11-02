@@ -455,7 +455,8 @@ def _scenario_block(scenario: Scenario, P: PreparedScenario) -> dict[str, Any]:
             "preferences": prefs,
             **({"tariff": scenario.tariff.to_dict()} if scenario.tariff != Tariff() else {}),
             "meta": {k: v for k, v in meta.items() if k in (
-                "generator", "preset", "data_version", "seed", "disclaimer", "attribution", "licence")},
+                "generator", "preset", "data_version", "seed", "disclaimer", "attribution", "licence",
+                "stations")},
             "prepared": P.summary(),
         }
     )

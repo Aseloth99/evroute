@@ -31,6 +31,7 @@
       this.app = app;
       this.enabled = false;
       this.mode = 'trip';
+      this.userMode = null;       // the mode the user last chose (buttons, R / S keys), else null
       this.playing = false;
       this.t = 0;                 // trip seconds
       this.sp = 0;                // search replay: settled events shown
@@ -104,6 +105,7 @@
       if (!['trip', 'race', 'search'].includes(mode)) return;
       if (this.app.everyday && mode !== 'trip') return;   // everyday use: one route, no race or search replay
       if (mode === 'search' && !this._hasTrace()) { this.app.toast(I.t('toast_no_trace')); return; }
+      if (user) this.userMode = mode;
       if (!this.enabled) this.setEnabled(true, false);
       const prev = this.mode;
       this.mode = mode;
@@ -123,6 +125,27 @@
       // fit after the HUD shows its final content (the race leaderboard is tall)
       if (prev !== mode && !this.app.map.userMoved) this.app.map.fitDefault(true);
       this.app.onAnimationChanged();
+    }
+
+    /**
+     * The mode a page, a new set of results or the research view starts in:
+     * the user's last choice; else, in the research view, a race when there
+     * is more than one route to race (the planners are compared side by
+     * side, the cars on one clock) and a trip otherwise.  Everyday use is
+     * always a trip.
+     */
+    autoMode() {
+      if (this.app.everyday) return 'trip';
+      if (this.userMode === 'search') return this._hasTrace() ? 'search' : 'trip';
+      if (this.userMode) return this.userMode;
+      return this.app.visibleRoutes().filter((r) => r._ok).length > 1 ? 'race' : 'trip';
+    }
+
+    /** Switch to autoMode() (without a toast; the clock is left to the caller). */
+    applyAutoMode() {
+      const m = this.autoMode();
+      if (m === this.mode) return;
+      if (this.enabled) this.setMode(m, false); else this.mode = m;
     }
 
     _applyModeUI() {

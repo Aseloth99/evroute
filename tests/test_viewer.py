@@ -141,6 +141,13 @@ def test_payload_contract(payload, scenario, plans):
             assert len(r["trace"]["nodes"]) == len(r["trace"]["keys"]) > 0
 
 
+def test_payload_names_the_data_source(payload, scenario, plans):
+    """The trip plan's data line: the generator of a preset and, for imported stations, their source."""
+    assert payload["scenario"]["meta"]["generator"] == "grid" and "stations" not in payload["scenario"]["meta"]
+    sc = scenario.with_(meta={**scenario.meta, "stations": "ocm"})
+    assert viewer_payload(sc, plans, animate=False)["scenario"]["meta"]["stations"] == "ocm"
+
+
 def test_payload_is_strict_json(payload):
     text = json.dumps(payload, allow_nan=False)  # raises on NaN/inf
     assert json.loads(text)["format"] == FORMAT
@@ -712,6 +719,13 @@ def test_viewer_ui_in_chromium(tmp_path):
     st = d["start"]
     assert st["everyday"] is False and st["view"] == "research" and st["toggle"] is False and st["tariff"] is True
     assert st["minArrivalLabel"] == "Minimum varış şarjı" and st["arrivalShown"].startswith("Varış şarjı")
+    # the research view races the planners: every feasible plan a car on one clock, the leaderboard shown
+    an = st["anim"]
+    assert an["enabled"] and an["mode"] == "race" and an["pressed"] == "race" and an["raceShown"], an
+    assert an["cars"] == an["leaderboard"] == sum(1 for x in d["charge"]["list"] if x["time"] != "—") >= 3, an
+    ra = d["raceAgain"]   # leaving everyday use: planned again with the picks of the research view, racing
+    assert ra["mode"] == "race" and ra["cars"] >= 3 and sorted(ra["algorithms"]) == sorted(st["algorithms"]) == sorted(ra["picks"]), ra
+    assert d["userTrip"] == {"mode": "trip", "cars": 1}, d["userTrip"]   # the user's choice survives a new plan
     # the arrival charge next to the times: routes list, "vs best", race HUD (mid-race and at the finish, 1400 and 390 px)
     ch = d["charge"]
     pct = lambda soc: f"%{int(100 * soc + 0.5)}"  # noqa: E731  (the viewer's Turkish percent)
@@ -769,6 +783,9 @@ def test_viewer_ui_in_chromium(tmp_path):
     assert plan["arrival"] == pytest.approx(plan["total"]) and plan["drive"] == pytest.approx(plan["distance"], abs=0.1)
     assert plan["link"]["href"].startswith(GMAPS_LINK) and plan["link"]["rel"] == "noopener noreferrer"
     assert plan["research"] is False and d["everydayOff"] == "research"
+    # the data behind the plan: the example network, nothing live, with a tooltip on real and live data
+    assert plan["data"].startswith("Veri: Örnek bir demo ağı") and "Canlı doluluk ve fiyat verisi kullanılmıyor" in plan["data"], plan["data"]
+    assert "--stations-file" in plan["dataTip"] and "OCPI" in plan["dataTip"] and plan["mode"] == "trip"
     assert "BLS" not in plan["legend"] and plan["legend"].startswith("Rota")   # no planner name in everyday use
     # a search stopped by its label budget: once more on a 5 % grid, said in the note
     co = d["coarse"]

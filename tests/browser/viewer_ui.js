@@ -7,7 +7,10 @@
  * URL is the live viewer of a server planning a Turkey preset (Turkish place
  * names, real coordinates).  Checked here, asserted by the Python test:
  *
- *   start      the research view (the everyday switch off), no console error
+ *   start      the research view (the everyday switch off), no console error,
+ *              the animation racing every planner (the leaderboard shown);
+ *              after everyday use the race again, a mode the user picks kept
+ *              through a new plan
  *   charge     the arrival charge next to the times: under each plan's time
  *              in the routes list (with its tooltip and in the item's
  *              accessible name), the charge difference in the "vs best" line,
@@ -24,7 +27,8 @@
  *   controls   a charging-style chip sets the minimum stop charge, the DC
  *              limit is sent, both reach the request body
  *   everyday   the switch plans with BLS-A* only and shows the trip plan
- *              (steps, totals, a Google Maps link opened only by the user),
+ *              (steps, totals, a Google Maps link opened only by the user,
+ *              the data line: example network, nothing live),
  *              names no planner in the SoC chart's legend, and plans once
  *              more on a coarser grid when the search hit its label budget
  *              (else: a translated reason and no "plan ready" toast)
@@ -165,6 +169,10 @@ async function main() {
     minArrivalLabel: document.querySelector('label[for="in-arrive"] [data-i18n]').textContent,
     arrivalShown: (document.querySelector('#summary-card .arrive-soc') || {}).textContent || '',
     algorithms: EVR.app.model.results.map((r) => r.algorithm),
+    // the animation races every planner on one clock (the user has chosen no mode yet)
+    anim: { enabled: EVR.app.anim.enabled, mode: EVR.app.anim.mode, cars: EVR.app.anim.activeRoutes().length,
+      leaderboard: document.querySelectorAll('#hud-race li:not(.more)').length, raceShown: !document.getElementById('hud-race').hidden,
+      pressed: document.querySelector('#mode-seg [aria-pressed="true"]').dataset.mode },
   }));
 
   // ------------------------------------------------------------- arrival charge next to the times
@@ -334,6 +342,9 @@ async function main() {
       drive: it.steps.filter((s) => s.kind === 'drive').reduce((x, s) => x + s.dist, 0), distance: r.distance_m,
       text: EVR.panels.itineraryText(app, r, it), link: a ? { href: a.getAttribute('href'), rel: a.getAttribute('rel'), target: a.getAttribute('target') } : null,
       cardText: card.textContent, research: /SoH|BLS|Etiket|Label|C oran|C-rate/.test(card.textContent),
+      data: (card.querySelector('.itin-data') || {}).textContent || null,
+      dataTip: card.querySelector('.itin-data') ? card.querySelector('.itin-data').getAttribute('data-tip') : null,
+      mode: app.anim.mode,
     };
   });
   res.everydayPlan.legend = await page.evaluate(() => document.getElementById('legend-soc').textContent);
@@ -375,6 +386,16 @@ async function main() {
 
   await page.click('#everyday-switch');
   res.everydayOff = await page.evaluate(() => document.getElementById('app').dataset.view);
+  // back in the research view: planned again by itself with the research picks (kept through everyday
+  // use), the planners race again; a mode the user picks stays through a new plan
+  await page.waitForFunction(() => !EVR.app.liveCtl.busy && EVR.app.model.results.length > 1, null, { timeout: 120000 });
+  res.raceAgain = await page.evaluate(() => ({ mode: EVR.app.anim.mode, cars: EVR.app.anim.activeRoutes().length,
+    algorithms: EVR.app.model.results.map((r) => r.algorithm),
+    picks: Array.from(document.querySelectorAll('#algo-picks input:checked')).map((c) => c.value) }));
+  await page.click('#mode-seg [data-mode="trip"]');
+  await page.click('#btn-plan');
+  await page.waitForFunction(() => !EVR.app.liveCtl.busy && EVR.app.model.results.length > 1, null, { timeout: 120000 });
+  res.userTrip = await page.evaluate(() => ({ mode: EVR.app.anim.mode, cars: EVR.app.anim.activeRoutes().length }));
 
   // ------------------------------------------------------------- widths
   res.widths = [];

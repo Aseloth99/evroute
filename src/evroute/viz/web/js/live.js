@@ -309,6 +309,7 @@
       this.note = null;
       this.running = null;   // the algorithms of the run under way (their checkboxes stay ticked)
       this.held = null;      // the request of a run without any answer: the controls keep showing it
+      this.everydayRun = false;   // the last run was everyday use's (one planner): the picks kept, not shown
       this.el = {
         card: U.$('#live-card'), scenario: U.$('#in-scenario'), fieldScenario: U.$('#field-scenario'),
         origin: U.$('#in-origin'), destination: U.$('#in-destination'), swap: U.$('#btn-swap'), pickSeg: U.$('#pick-seg'),
@@ -448,7 +449,8 @@
       const fresh = this._filledFor !== app.model.scenario;
       this._filledFor = app.model.scenario;
       const v = this.running || !fresh ? this._controlValues() : this.held ? Object.assign({}, this.held, { tariff_on: this.held.tariff !== 'flat' }) : this._scenarioValues();
-      const ticked = !fresh && !this.running ? U.$$('input[type=checkbox]', el.algos).filter((c) => c.checked).map((c) => c.value) : null;
+      const current = U.$$('input[type=checkbox]', el.algos).filter((c) => c.checked).map((c) => c.value);
+      const ticked = !fresh && !this.running ? current : null;
       // places: settlements first by importance, then the rest
       const places = app.model.places.filter((x) => x.kind === 'city' || x.kind === 'town');
       const list = (places.length ? places : app.model.places).slice().sort((a, b) => a.name.localeCompare(b.name, I.lang === 'tr' ? 'tr' : 'en'));
@@ -484,9 +486,10 @@
       this._syncChips();
       this._syncPrio();
       this._renderVehicle();
-      // algorithm checkboxes: those of the run under way, else those of the results shown
-      const have = new Set(this.running || ticked || app.model.results.map((r) => r.algorithm));
-      if (!this.running && !ticked) for (const e of (this.note && this.note.stopped) || []) have.add(e);
+      // algorithm checkboxes: those of the run under way, else those of the results shown; a plan of
+      // everyday use (one planner, the picks hidden) leaves the research view's picks as they were
+      const have = new Set(this.everydayRun ? current : this.running || ticked || app.model.results.map((r) => r.algorithm));
+      if (!this.everydayRun && !this.running && !ticked) for (const e of (this.note && this.note.stopped) || []) have.add(e);
       el.algos.textContent = '';
       for (const a of p.algorithms || []) {
         const cb = U.el('input', { type: 'checkbox', value: a.name });
@@ -595,10 +598,15 @@
       return EVERYDAY_ALGOS.find((a) => offered.includes(a)) || offered[0];
     }
 
-    /** The research view and everyday use show different parts of the form and the note. */
+    /**
+     * The research view and everyday use show different parts of the form and the note.  Back in
+     * the research view after a plan of everyday use (one planner), the trip is planned again with
+     * the research view's planners, so they can be compared (and race) at once.
+     */
     onViewChanged() {
       this._syncPrio();
       this._renderNote();
+      if (!this.app.everyday && this.everydayRun && !this.busy && this.app.model.results.length) this.plan();
     }
 
     request() {
@@ -657,6 +665,7 @@
       if (!body.algorithms.length) { this.showError(I.t('err_no_algo')); return; }
       this.showError(null);
       this.setBusy(true);
+      this.everydayRun = !!this.app.everyday;   // this run and its answer: everyday use (one planner)
       const titles = new Map((this.app.payload.algorithms || []).map((a) => [a.name, I.algoTitle(a.name, a.short_title || a.title)]));
       try {
         await this.transport.start();

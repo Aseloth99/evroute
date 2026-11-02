@@ -201,7 +201,9 @@ and JavaScript with no third-party code.
   elevation), the timeline and the charts follow it.  With animation off the
   page is a static report.  `Space` plays / pauses, `←` / `→` scrub (`Shift`
   for larger steps).
-- **Race mode** (`R`): every visible algorithm drives at once on the same
+- **Race mode** (`R`, where the research view starts whenever more than one
+  planner has a route; *Trip* follows one car, and a mode you pick stays
+  through new plans): every visible algorithm drives at once on the same
   clock, with a live leaderboard: each car's progress and charge, and at the
   finish its trip time and arrival charge (a plan that charged longer arrives
   later but fuller, so the times alone are no fair comparison).

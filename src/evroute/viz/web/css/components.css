@@ -541,6 +541,8 @@ a.btn-sm:hover { text-decoration: none; }
 .itin-notes { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 5px; }
 .itin-warn { padding: 2px 7px; border-radius: 6px; background: var(--warn-soft); color: var(--warn); font-size: 11.5px; font-weight: 650; }
 .itin-note { margin-top: 4px; font-size: 11.5px; color: var(--text-3); }
+.itin-data { line-height: 1.45; cursor: help; }
+.itin-data b { color: var(--text-2); font-weight: 650; }
 .trip-veh { font-size: 13px; margin-bottom: 8px; }
 #trip-card .veh-card { margin: 0 0 10px; }
 .app[data-view="everyday"] .field-row { grid-template-columns: minmax(0, 1fr); }

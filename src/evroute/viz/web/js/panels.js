@@ -45,6 +45,40 @@
     return I.STR.en[k] === text ? I.t(k) : text;
   }
 
+  /** Generators of example networks (no real roads or stations). */
+  const SYNTHETIC_GENERATORS = ['turkey', 'country', 'grid', 'random_geometric', 'corridor'];
+  /** Names of the station sources of evroute.station_sources (meta.stations; a label of the user's as it is). */
+  const STATION_SOURCES = { ocpi: 'OCPI', ocm: 'Open Charge Map', csv: 'CSV' };
+
+  /**
+   * Where the trip plan's data comes from: 'demo' (an example network),
+   * 'osm' (OpenStreetMap roads and stations), 'import' (stations imported
+   * from a file: OCPI, Open Charge Map, CSV) or 'scenario' (anything else).
+   * No kind is live: queues are modelled per time of day, and prices are
+   * the scenario's (list) prices.
+   */
+  function dataSource(sc) {
+    const meta = (sc && sc.meta) || {};
+    if (meta.stations) return { kind: 'import', src: STATION_SOURCES[meta.stations] || String(meta.stations) };
+    if (meta.generator === 'osm' || meta.generator === 'osm_turkey') return { kind: 'osm' };
+    if (SYNTHETIC_GENERATORS.includes(meta.generator)) return { kind: 'demo' };
+    return { kind: 'scenario' };
+  }
+
+  /** The data behind a trip plan, that none of it is live, and "not for navigation" (one sentence each). */
+  function dataText(sc) {
+    const d = dataSource(sc);
+    const what = I.t(`data_${d.kind}`, { src: d.src || '' });
+    const live = d.kind === 'import' ? I.t('data_snapshot') : I.t('data_not_live');
+    return `${what} ${live} ${I.t('it_note')}`;
+  }
+
+  /** The trip plan's last line: dataText() with a tooltip on real and live data. */
+  function dataNote(sc) {
+    return U.el('p', { class: 'itin-note itin-data', 'data-tip': I.t('tip_it_data'), tabindex: '0' },
+      U.el('b', { text: `${I.t('it_data')}: ` }), dataText(sc));
+  }
+
   function guaranteeBadge(r) {
     const g = r.exact || 'heuristic';
     const wrap = U.el('span', { class: 'badges' });
@@ -209,7 +243,7 @@
     out.push('');
     out.push(`${I.t('total_time')} ${I.duration(t.total)} · ${I.t('it_drive')} ${I.duration(t.drive)} · ${I.t('it_charging')} ${I.duration(t.charging)} · ${I.km(t.dist, 0)}`);
     out.push(`${I.t('it_cost')} ${I.money(t.money, cur)} · ${I.t('arrival_soc')} ${I.pct(t.arrivalSoc, 0)} (${I.t('arrival_min', { p: I.pct(t.minArrival, 0) })})`);
-    out.push(I.t('it_note'));
+    out.push(`${I.t('it_data')}: ${dataText(app.model.scenario)}`);
     return out.join('\n');
   }
 
@@ -489,7 +523,7 @@
       const steps = U.el('ol', { class: 'itin-steps' }, it.steps.map((st) => itinStep(app, st)));
       const veh = I.vehicleName((app.model.scenario || {}).vehicle);
       const od = U.el('p', { class: 'itin-od', text: [`${it.steps[0].place} → ${it.steps[it.steps.length - 1].place}`, veh, `${I.km(t.dist, 0)}`].filter(Boolean).join(' · ') });
-      U.setChildren(box, head, od, totals, steps, U.el('p', { class: 'itin-note', text: I.t('it_note') }));
+      U.setChildren(box, head, od, totals, steps, dataNote(app.model.scenario));
     }
 
     /** Static pages in everyday mode: the trip's assumptions (vehicle, departure, charge). */
@@ -1117,6 +1151,7 @@
 
   EVR.panels = {
     Panels, guaranteeBadge, budgetStopped, stoppedText, tariffText, tariffFactors, arrivalSoc, socDiff, itinerary, itineraryText, mapsUrl, GMAPS_DIR,
+    dataSource, dataText,
     vehicleCard, connectorChips, chemBadge, algoTip, CONNECTOR_LABEL, DC_CONNECTORS,
   };
 })(window.EVR = window.EVR || {});

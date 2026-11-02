@@ -558,6 +558,10 @@ Anahtar açıkken uygulama bir yolculuk planlayıcısına dönüşür:
   hazır senaryoları) *Google Haritalar'da aç* rotayı, molalar ara nokta
   olacak şekilde açar. Bu sizin tıklayıp izlediğiniz bir bağlantıdır;
   uygulamanın kendisi hiçbir yere bir şey göndermez.
+  Son satır verinin nereden geldiğini söyler: hazır senaryolarda örnek bir
+  ağ ya da OpenStreetMap, saate göre tahmini kuyruklar; canlı doluluk ya da
+  fiyat verisi yoktur (gerçek bir istasyon listesiyle planlamayı
+  [canlı ve operatör verisi](real-data.tr.md#canlı-ve-operatör-verisi) anlatır).
 - **Dışarıda bıraktıkları** yalnızca araştırmacıların ihtiyaç duyduğu
   şeylerdir: batarya yıpranması ve parasal karşılığı, genelleştirilmiş
   maliyet, arama istatistikleri, C oranları, şarj kayıpları ve algoritma
